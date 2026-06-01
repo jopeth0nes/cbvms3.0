@@ -1,0 +1,4 @@
+# Face recognition (requires dlib). Install via scripts/install_face_deps.sh on macOS.
+-r requirements.txt
+dlib==19.24.6
+face-recognition==1.3.0

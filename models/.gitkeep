@@ -1,0 +1,3 @@
+# This directory stores model weights for CBVMS
+# Models are downloaded automatically during installation
+# See .gitignore for patterns

@@ -1,0 +1,38 @@
+# Python virtual environments (never commit — includes large torch binaries)
+.venv/
+venv/
+env/
+cbvms/.venv/
+
+# Nested duplicate project folder (local copy with its own .git / venv)
+cbvms/
+
+# Bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local SQLite database
+data/
+*.db
+
+
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Environment secrets
+.env
+.env.*
+
+# YOLO / model weights (download via install scripts)
+models/*.pt
+models/*.pth
+!models/.gitkeep

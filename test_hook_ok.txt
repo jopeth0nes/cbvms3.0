@@ -1,0 +1,1 @@
+CBVMS hook test OK — agent file writes are working.
