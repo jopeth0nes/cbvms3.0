@@ -124,24 +124,46 @@ class ViolationTrainer:
     # ------------------------------------------------------------------
 
     def _prepare_split(self, module: str) -> Path:
-        """Build a YOLOv8-cls train/val directory from the flat sample folders."""
+        """Build a YOLOv8-cls train/val directory from the flat sample folders.
+
+        The TRAIN split is class-balanced by oversampling the minority class(es) up to
+        the largest train-class size — otherwise a lopsided dataset (e.g. 563 vs 11)
+        trains a degenerate model that always predicts the majority class. YOLOv8's
+        built-in augmentation varies the duplicated images during training.
+        """
         prepared = PREPARED_DIR / module
         if prepared.exists():
             shutil.rmtree(prepared, ignore_errors=True)
 
+        # First pass: split each class into train/val file lists.
+        train_by_label: dict[str, list[Path]] = {}
+        val_by_label: dict[str, list[Path]] = {}
         for label in MODULES[module]["labels"]:
             files = sorted(self.label_dir(module, label).glob("*.jpg"))
             if not files:
                 continue
             n_val = max(1, int(len(files) * 0.2))
-            val_files = files[:n_val]
-            train_files = files[n_val:] or files  # never leave train empty
+            val_by_label[label] = files[:n_val]
+            train_by_label[label] = files[n_val:] or files  # never leave train empty
 
-            for split, group in (("train", train_files), ("val", val_files)):
-                dest = prepared / split / label
-                dest.mkdir(parents=True, exist_ok=True)
-                for f in group:
-                    shutil.copy(f, dest / f.name)
+        # Balance the train split by oversampling the smaller class(es) to the max size.
+        target = max((len(f) for f in train_by_label.values()), default=0)
+
+        for label, files in train_by_label.items():
+            dest = prepared / "train" / label
+            dest.mkdir(parents=True, exist_ok=True)
+            for i in range(target):
+                src = files[i % len(files)]
+                # Duplicate copies get a unique name so none are overwritten.
+                name = src.name if i < len(files) else f"{src.stem}_dup{i}{src.suffix}"
+                shutil.copy(src, dest / name)
+
+        for label, files in val_by_label.items():
+            dest = prepared / "val" / label
+            dest.mkdir(parents=True, exist_ok=True)
+            for f in files:
+                shutil.copy(f, dest / f.name)
+
         return prepared
 
     def train(self, module: str, on_progress: Callable[[str], None]) -> tuple[bool, str]:

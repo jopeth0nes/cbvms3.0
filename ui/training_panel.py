@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 import threading
 from datetime import datetime
+from pathlib import Path
 from tkinter import filedialog
 from typing import Callable
 
@@ -11,6 +15,8 @@ import cv2
 import customtkinter as ctk
 import numpy as np
 from PIL import Image
+
+_IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".bmp", ".webp")
 
 from core.trainer import MIN_SAMPLES_PER_CLASS, MODULES, ViolationTrainer
 from ui.components import (
@@ -56,6 +62,17 @@ _HELP_TEXT = (
 
 def _pretty(label: str) -> str:
     return label.replace("_", " ").title()
+
+
+def _gather_images(folder: str) -> list[str]:
+    """Recursively collect image files (case-insensitive) under a folder."""
+    root = Path(folder)
+    if not root.is_dir():
+        return []
+    return sorted(
+        str(p) for p in root.rglob("*")
+        if p.is_file() and p.suffix.lower() in _IMAGE_EXTS
+    )
 
 
 class TrainingPanel(ctk.CTkFrame):
@@ -170,29 +187,44 @@ class TrainingPanel(ctk.CTkFrame):
         )
         upload_btn.grid(row=0, column=0, sticky="ew", pady=2)
 
+        folder_btn = ctk.CTkButton(
+            btns, text="📂  Import Folder", height=34, corner_radius=CORNER_RADIUS,
+            fg_color=COLOR_BORDER, hover_color=COLOR_ACCENT_HOVER, font=body_small_font(),
+            command=lambda: self._import_folder(module, label),
+        )
+        folder_btn.grid(row=1, column=0, sticky="ew", pady=2)
+
         capture_btn = ctk.CTkButton(
             btns, text="📷  Capture from Camera", height=34, corner_radius=CORNER_RADIUS,
             fg_color=COLOR_BORDER, hover_color=COLOR_ACCENT_HOVER, font=body_small_font(),
-            command=lambda: self._capture(module, label),
+            command=lambda: self._open_capture_modal(module, label),
         )
-        capture_btn.grid(row=1, column=0, sticky="ew", pady=2)
+        capture_btn.grid(row=2, column=0, sticky="ew", pady=2)
+
+        # Read-only navigation — opens the on-disk save folder for this class.
+        open_btn = ctk.CTkButton(
+            btns, text="🗂  Open Save Folder", height=34, corner_radius=CORNER_RADIUS,
+            fg_color=COLOR_BORDER, hover_color=COLOR_ACCENT_HOVER, font=body_small_font(),
+            command=lambda: self._open_save_folder(module, label),
+        )
+        open_btn.grid(row=3, column=0, sticky="ew", pady=2)
 
         clear_btn = ctk.CTkButton(
             btns, text="🗑  Clear All", height=34, corner_radius=CORNER_RADIUS,
             fg_color=COLOR_DANGER, hover_color="#DC2626", font=body_small_font(),
             command=lambda: self._clear(module, label),
         )
-        clear_btn.grid(row=2, column=0, sticky="ew", pady=2)
+        clear_btn.grid(row=4, column=0, sticky="ew", pady=2)
 
         ctk.CTkLabel(
             frame, text=f"Min. {MIN_SAMPLES_PER_CLASS} photos required to train",
             font=body_small_font(), text_color=COLOR_TEXT_MUTED,
-        ).grid(row=3, column=0, sticky="w", padx=PADDING, pady=(6, PADDING))
+        ).grid(row=5, column=0, sticky="w", padx=PADDING, pady=(6, PADDING))
 
         self._ui[module][label] = {
             "count_badge": count_badge,
             "thumbs": thumbs,
-            "buttons": [upload_btn, capture_btn, clear_btn],
+            "buttons": [upload_btn, folder_btn, capture_btn, clear_btn],
         }
         self._refresh_thumbnails(module, label)
 
@@ -324,9 +356,21 @@ class TrainingPanel(ctk.CTkFrame):
             self._ui[module][label]["count_badge"].configure(text=f"{count} photos")
 
         controls = self._ui[module]["controls"]
-        controls["counts_label"].configure(
-            text="   ".join(f"{_pretty(l)}: {c}" for l, c in counts.items())
-        )
+        base = "   ".join(f"{_pretty(l)}: {c}" for l, c in counts.items())
+        # Warn on class imbalance — a lopsided dataset (e.g. 563 vs 11) trains a model
+        # that always predicts the majority class. Recommend balancing.
+        vals = list(counts.values())
+        hi, lo = (max(vals), min(vals)) if vals else (0, 0)
+        imbalanced = lo >= 1 and hi >= lo * 3
+        if imbalanced:
+            minority = min(counts, key=counts.get)
+            controls["counts_label"].configure(
+                text=f"{base}\n⚠ Unbalanced — add more “{_pretty(minority)}” photos "
+                     f"(aim for similar counts) for accurate detection.",
+                text_color=COLOR_WARNING,
+            )
+        else:
+            controls["counts_label"].configure(text=base, text_color=COLOR_TEXT_MUTED)
 
         trained = self.trainer.is_trained(module)
         if trained:
@@ -345,39 +389,248 @@ class TrainingPanel(ctk.CTkFrame):
     # ------------------------------------------------------------------
 
     def _upload(self, module: str, label: str) -> None:
-        paths = filedialog.askopenfilenames(
-            title="Select photos",
-            filetypes=[("Images", "*.jpg *.jpeg *.png *.bmp")],
+        # Per-extension filters + an All-files fallback — the macOS native panel is
+        # unreliable with a single space-separated multi-extension pattern.
+        raw = filedialog.askopenfilenames(
+            title="Select photos (Cmd/Shift-click for multiple)",
+            filetypes=[
+                ("JPEG image", "*.jpg"), ("JPEG image", "*.jpeg"),
+                ("PNG image", "*.png"), ("BMP image", "*.bmp"),
+                ("WebP image", "*.webp"), ("All files", "*"),
+            ],
         )
+        # askopenfilenames may return a tuple or a Tcl-list string — splitlist handles both.
+        paths = [p for p in self.tk.splitlist(raw) if str(p).lower().endswith(_IMAGE_EXTS)]
         if not paths:
             return
-        added = 0
-        for p in paths:
-            img = cv2.imread(p)
-            if img is None:
-                continue
-            try:
-                self.trainer.add_sample(module, label, img)
-                added += 1
-            except Exception:
-                continue
-        self._refresh_thumbnails(module, label)
-        self._refresh_counts(module)
-        show_toast(self, f"Added {added} photo(s) to {_pretty(label)}.", type="success")
+        self._add_paths_bg(module, label, paths)
 
-    def _capture(self, module: str, label: str) -> None:
-        frame = self.get_frame()
-        if frame is None:
-            show_toast(self, "Camera not available. Open Live Monitor first.", type="error")
+    def _import_folder(self, module: str, label: str) -> None:
+        folder = filedialog.askdirectory(title="Select a folder of photos")
+        if not folder:
             return
+        paths = _gather_images(folder)
+        if not paths:
+            show_toast(self, "No images found in that folder.", type="warning")
+            return
+        self._add_paths_bg(module, label, paths)
+
+    def _open_save_folder(self, module: str, label: str) -> None:
+        """Open this class's on-disk save folder in the OS file manager."""
+        folder = self.trainer.label_dir(module, label)
         try:
-            self.trainer.add_sample(module, label, frame)
+            folder.mkdir(parents=True, exist_ok=True)  # may not exist until first photo
+            path = str(folder)
+            if sys.platform == "darwin":
+                subprocess.Popen(["open", path])
+            elif os.name == "nt":
+                os.startfile(path)  # type: ignore[attr-defined]
+            else:
+                subprocess.Popen(["xdg-open", path])
         except Exception as exc:
-            show_toast(self, f"Capture failed: {exc}", type="error")
-            return
+            show_toast(self, f"Could not open folder: {exc}", type="error")
+
+    def _add_paths_bg(self, module: str, label: str, paths: list[str]) -> None:
+        """Read + add many image files on a worker thread so the UI stays responsive."""
+        total = len(paths)
+        self._set_buttons_state(module, False)
+        show_toast(self, f"Importing {total} photo(s) to {_pretty(label)}…", type="info")
+
+        def _safe_after(func, *args) -> None:
+            try:
+                if self.winfo_exists():
+                    self.after(0, func, *args)
+            except Exception:
+                pass
+
+        def _work() -> None:
+            added = 0
+            for p in paths:
+                try:
+                    img = cv2.imread(str(p))
+                    if img is None:
+                        continue
+                    self.trainer.add_sample(module, label, img)
+                    added += 1
+                except Exception:
+                    continue
+            _safe_after(self._on_import_done, module, label, added, total)
+
+        threading.Thread(target=_work, daemon=True).start()
+
+    def _on_import_done(self, module: str, label: str, added: int, total: int) -> None:
+        self._set_buttons_state(module, True)
         self._refresh_thumbnails(module, label)
         self._refresh_counts(module)
-        show_toast(self, f"Captured 1 photo for {_pretty(label)}.", type="success")
+        skipped = total - added
+        msg = f"Added {added} photo(s) to {_pretty(label)}."
+        if skipped:
+            msg += f" Skipped {skipped} unreadable."
+        show_toast(self, msg, type="success", duration=4000)
+
+    # ------------------------------------------------------------------
+    # Capture-from-camera modal (live preview + single / timed burst)
+    # ------------------------------------------------------------------
+
+    def _open_capture_modal(self, module: str, label: str) -> None:
+        modal = ctk.CTkToplevel(self)
+        modal.title(f"Capture — {_pretty(label)}")
+        modal.configure(fg_color=COLOR_BG)
+        modal.geometry("560x620")
+        modal.resizable(False, False)
+        modal.transient(self.winfo_toplevel())
+
+        state = {"preview_job": None, "auto_job": None, "added": 0, "auto_n": 0,
+                 "auto_target": 0, "img": None}
+
+        body = ctk.CTkFrame(modal, fg_color="transparent")
+        body.pack(fill="both", expand=True, padx=16, pady=14)
+
+        ctk.CTkLabel(body, text=f"Capture for “{_pretty(label)}”", font=panel_title_font(),
+                     text_color=COLOR_TEXT).pack(anchor="w")
+
+        preview = ctk.CTkLabel(body, text="Starting camera…", width=512, height=288,
+                               fg_color=COLOR_BG, text_color=COLOR_TEXT_MUTED, corner_radius=8)
+        preview.pack(pady=(10, 8))
+
+        session_lbl = ctk.CTkLabel(body, text="Added this session: 0", font=body_small_font(),
+                                   text_color=COLOR_SAFE)
+        session_lbl.pack(anchor="w")
+
+        # Single shot
+        shoot_btn = ctk.CTkButton(
+            body, text="📸  Capture Photo", height=40, corner_radius=CORNER_RADIUS,
+            fg_color=COLOR_ACCENT, hover_color=COLOR_ACCENT_HOVER, font=body_font(14),
+        )
+        shoot_btn.pack(fill="x", pady=(10, 8))
+
+        # Timed burst controls
+        auto = ctk.CTkFrame(body, fg_color=COLOR_SURFACE, corner_radius=CORNER_RADIUS,
+                            border_width=1, border_color=COLOR_BORDER)
+        auto.pack(fill="x", pady=(4, 8))
+        ctk.CTkLabel(auto, text="Auto-capture", font=body_font(13), text_color=COLOR_TEXT).pack(
+            anchor="w", padx=12, pady=(10, 2))
+        row = ctk.CTkFrame(auto, fg_color="transparent")
+        row.pack(fill="x", padx=12, pady=(0, 6))
+        ctk.CTkLabel(row, text="Every", font=body_small_font(), text_color=COLOR_TEXT_MUTED).pack(side="left")
+        interval_entry = ctk.CTkEntry(row, width=56)
+        interval_entry.insert(0, "1.0")
+        interval_entry.pack(side="left", padx=6)
+        ctk.CTkLabel(row, text="sec, up to", font=body_small_font(), text_color=COLOR_TEXT_MUTED).pack(side="left")
+        limit_entry = ctk.CTkEntry(row, width=56)
+        limit_entry.insert(0, "20")
+        limit_entry.pack(side="left", padx=6)
+        ctk.CTkLabel(row, text="photos", font=body_small_font(), text_color=COLOR_TEXT_MUTED).pack(side="left")
+        auto_status = ctk.CTkLabel(auto, text="", font=body_small_font(), text_color=COLOR_ACCENT)
+        auto_status.pack(anchor="w", padx=12, pady=(0, 2))
+        start_btn = ctk.CTkButton(auto, text="Start Auto-Capture", height=34, corner_radius=CORNER_RADIUS,
+                                  fg_color=COLOR_BORDER, hover_color=COLOR_ACCENT_HOVER, font=body_small_font())
+        start_btn.pack(fill="x", padx=12, pady=(0, 12))
+
+        ctk.CTkButton(body, text="Done", height=34, corner_radius=CORNER_RADIUS,
+                      fg_color="transparent", border_width=1, border_color=COLOR_BORDER,
+                      hover_color=COLOR_BORDER, command=lambda: _close()).pack(fill="x")
+
+        # --- helpers ---
+        def _capture_one() -> bool:
+            frame = self.get_frame()
+            if frame is None:
+                return False
+            try:
+                self.trainer.add_sample(module, label, frame)
+            except Exception:
+                return False
+            state["added"] += 1
+            session_lbl.configure(text=f"Added this session: {state['added']}")
+            return True
+
+        def _on_shoot() -> None:
+            if not _capture_one():
+                auto_status.configure(text="Camera unavailable.", text_color=COLOR_DANGER)
+
+        def _tick_preview() -> None:
+            if not modal.winfo_exists():
+                return
+            frame = self.get_frame()
+            if frame is not None:
+                disp = cv2.resize(frame, (512, 288))
+                rgb = cv2.cvtColor(disp, cv2.COLOR_BGR2RGB)
+                img = ctk.CTkImage(light_image=Image.fromarray(rgb),
+                                   dark_image=Image.fromarray(rgb), size=(512, 288))
+                state["img"] = img  # keep ref alive
+                preview.configure(image=img, text="")
+            else:
+                preview.configure(image=None, text="Camera unavailable — open Live Monitor first")
+            state["preview_job"] = modal.after(66, _tick_preview)
+
+        def _stop_auto() -> None:
+            if state["auto_job"] is not None:
+                try:
+                    modal.after_cancel(state["auto_job"])
+                except Exception:
+                    pass
+                state["auto_job"] = None
+            start_btn.configure(text="Start Auto-Capture", fg_color=COLOR_BORDER)
+
+        def _auto_tick() -> None:
+            if not modal.winfo_exists() or state["auto_job"] is None:
+                return
+            if state["auto_n"] >= state["auto_target"]:
+                auto_status.configure(text=f"Done — captured {state['auto_n']}.", text_color=COLOR_SAFE)
+                _stop_auto()
+                return
+            if _capture_one():
+                state["auto_n"] += 1
+            auto_status.configure(text=f"Auto-capture: {state['auto_n']} / {state['auto_target']}",
+                                  text_color=COLOR_ACCENT)
+            if state["auto_n"] >= state["auto_target"]:
+                auto_status.configure(text=f"Done — captured {state['auto_n']}.", text_color=COLOR_SAFE)
+                _stop_auto()
+                return
+            interval_ms = state.get("interval_ms", 1000)
+            state["auto_job"] = modal.after(interval_ms, _auto_tick)
+
+        def _toggle_auto() -> None:
+            if state["auto_job"] is not None:
+                _stop_auto()
+                auto_status.configure(text="Stopped.", text_color=COLOR_TEXT_MUTED)
+                return
+            try:
+                interval = max(0.2, float(interval_entry.get()))
+                target = max(1, int(float(limit_entry.get())))
+            except ValueError:
+                auto_status.configure(text="Enter a valid interval and limit.", text_color=COLOR_DANGER)
+                return
+            if self.get_frame() is None:
+                auto_status.configure(text="Camera unavailable.", text_color=COLOR_DANGER)
+                return
+            state["auto_n"] = 0
+            state["auto_target"] = target
+            state["interval_ms"] = int(interval * 1000)
+            start_btn.configure(text="Stop", fg_color=COLOR_DANGER)
+            state["auto_job"] = modal.after(0, _auto_tick)
+
+        def _close() -> None:
+            _stop_auto()
+            if state["preview_job"] is not None:
+                try:
+                    modal.after_cancel(state["preview_job"])
+                except Exception:
+                    pass
+                state["preview_job"] = None
+            try:
+                modal.grab_release()
+            except Exception:
+                pass
+            self._refresh_thumbnails(module, label)
+            self._refresh_counts(module)
+            modal.destroy()
+
+        shoot_btn.configure(command=_on_shoot)
+        start_btn.configure(command=_toggle_auto)
+        modal.protocol("WM_DELETE_WINDOW", _close)
+        _tick_preview()
+        modal.after(120, lambda: (modal.lift(), modal.grab_set()))
 
     def _clear(self, module: str, label: str) -> None:
         dialog = ctk.CTkInputDialog(

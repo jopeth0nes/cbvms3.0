@@ -105,3 +105,46 @@ class PersonDetector:
         if (tx2 - tx1) < _MIN_CROP_PX or (ty2 - ty1) < _MIN_CROP_PX:
             return None
         return frame_bgr[ty1:ty2, tx1:tx2]
+
+    # ------------------------------------------------------------------
+    # Face-anchored uniform region (robust to framing)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def get_uniform_region(
+        face_box: list[int],
+        frame_shape: tuple[int, ...],
+        person_box: list[int] | None = None,
+        *,
+        down: float = 2.6,
+        width_pad: float = 0.6,
+    ) -> list[int] | None:
+        """Chest/shirt box anchored to the detected face — the torso is directly below it.
+
+        Unlike a fixed fraction of the person box (which lands on the face in a close-up
+        shot where the body is cropped), anchoring to the face works for both close-up
+        and full-body framing. Width comes from the matched person box (shoulders) when
+        available, else from the face width. Returns [x1,y1,x2,y2] or None if too small.
+        """
+        fx1, fy1, fx2, fy2 = [int(v) for v in face_box]
+        fw, fh = fx2 - fx1, fy2 - fy1
+        if fw <= 0 or fh <= 0:
+            return None
+        H, W = int(frame_shape[0]), int(frame_shape[1])
+        cx = (fx1 + fx2) // 2
+
+        top = fy2                              # start at the chin
+        bottom = int(fy2 + down * fh)          # down through the shirt
+        if person_box is not None:
+            px1, py1, px2, py2 = [int(v) for v in person_box]
+            left, right = px1, px2
+            bottom = min(bottom, py2)           # never past the body
+        else:
+            half = int(fw * (1.0 + width_pad))
+            left, right = cx - half, cx + half
+
+        left, top = max(0, left), max(0, top)
+        right, bottom = min(W, right), min(H, bottom)
+        if (right - left) < _MIN_CROP_PX or (bottom - top) < _MIN_CROP_PX:
+            return None
+        return [left, top, right, bottom]

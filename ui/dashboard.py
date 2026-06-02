@@ -58,6 +58,7 @@ MAX_ALERTS = 50
 PRESENCE_TIMEOUT_SECS = 30   # seconds absent from frame before re-appearance triggers UI alert
 DB_LOG_COOLDOWN_SECS   = 300 # 5-minute minimum between DB log entries per person
 
+UNIFORM_MIN_CONF = 0.60      # below this the uniform verdict is treated as uncertain (no OK/violation)
 DETECT_EVERY_N_FRAMES = 3    # offer every Nth feed frame to the fast detect worker (~10 FPS)
 REID_INTERVAL_SECS = 2.0     # periodic identity refresh even when all tracks are identified
 REID_MIN_GAP_SECS = 0.5      # min spacing between recognition offers (recognition takes ~0.5s)
@@ -877,22 +878,28 @@ class CBVMSDashboard(ctk.CTk):
             parts: list[str] = []
             person_box = None
 
-            # --- Uniform check (torso crop from person box) ---
+            # --- Uniform check (chest region anchored to the face, not person-box %) ---
             if uniform_on and person_boxes:
                 person_box = self._match_face_to_person([x1, y1, x2, y2], person_boxes)
                 if person_box is not None:
-                    torso_crop = self._person_detector.get_torso_crop(frame, person_box)
-                    if torso_crop is not None:
+                    region = self._person_detector.get_uniform_region(
+                        [x1, y1, x2, y2], frame.shape, person_box
+                    )
+                    if region is not None:
+                        ux1, uy1, ux2, uy2 = region
+                        uniform_crop = frame[uy1:uy2, ux1:ux2]
                         try:
-                            label, conf = self._trainer.predict("uniform", torso_crop)
+                            label, conf = self._trainer.predict("uniform", uniform_crop)
                         except Exception as exc:
                             print(f"[CBVMS] uniform predict error: {exc}")
                             label, conf = None, 0.0
-                        if label is not None:
+                        # Only trust a confident verdict; a low-confidence prediction is
+                        # treated as "uncertain" (shown neutrally) rather than a false OK.
+                        if label is not None and conf >= UNIFORM_MIN_CONF:
                             det["uniform_label"] = label
                             det["uniform_conf"] = conf
-                            det["torso_box"] = self._person_detector.get_torso_box(person_box)
-                            if label == "wrong_uniform" and conf >= 0.65:
+                            det["torso_box"] = region
+                            if label == "wrong_uniform":
                                 parts.append(f"Wrong uniform ({conf:.0%})")
 
             # --- Earring check (face crop, male only) ---
