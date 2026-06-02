@@ -6,3 +6,13 @@ Pillow==10.2.0
 numpy==1.26.4
 scikit-learn==1.5.2
 facenet-pytorch==2.6.0
+# ArcFace face recognition (SCRFD detector + w600k_r50 embedder, buffalo_l pack).
+# Far more discriminative than VGGFace2 — reliably separates unknown faces.
+insightface==0.7.3
+onnxruntime==1.19.2
+# Pin InsightFace's heavier transitive deps (via albumentations) to numpy<2
+# builds — their latest releases require numpy>=2, which would break the
+# numpy==1.26.4 that ultralytics/facenet-pytorch depend on.
+opencv-python-headless==4.10.0.84
+scikit-image==0.24.0
+tifffile==2024.8.30

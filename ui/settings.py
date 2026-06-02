@@ -147,13 +147,18 @@ class SettingsPanel(ctk.CTkFrame):
 
     @staticmethod
     def _sens_effect_for(t: float) -> dict:
-        """Map a threshold to (text, color) for False Positives / Accuracy / False Negatives."""
-        if t <= 0.45:
-            return {"fp": ("Very Low", COLOR_SAFE), "acc": ("High", COLOR_SAFE), "fn": ("High", COLOR_DANGER)}
-        if t <= 0.55:
-            return {"fp": ("Low", COLOR_SAFE), "acc": ("Very High", COLOR_SAFE), "fn": ("Medium", COLOR_WARNING)}
-        if t <= 0.65:
-            return {"fp": ("Medium", COLOR_WARNING), "acc": ("High", COLOR_SAFE), "fn": ("Low", COLOR_SAFE)}
+        """Map a threshold to (text, color) for False Positives / Accuracy / False Negatives.
+
+        Bands tuned for ArcFace (buffalo_l): genuine pairs sit <= ~0.5 and unknowns
+        >= ~0.85, so accuracy stays high and false positives low even at strict
+        settings — false positives only climb once the threshold gets lenient.
+        """
+        if t <= 0.40:
+            return {"fp": ("Very Low", COLOR_SAFE), "acc": ("High", COLOR_SAFE), "fn": ("Medium", COLOR_WARNING)}
+        if t <= 0.50:
+            return {"fp": ("Very Low", COLOR_SAFE), "acc": ("Very High", COLOR_SAFE), "fn": ("Low", COLOR_SAFE)}
+        if t <= 0.60:
+            return {"fp": ("Low", COLOR_SAFE), "acc": ("High", COLOR_SAFE), "fn": ("Low", COLOR_SAFE)}
         return {"fp": ("High", COLOR_DANGER), "acc": ("Medium", COLOR_WARNING), "fn": ("Very Low", COLOR_SAFE)}
 
     def _recognition_section(self, master, *, row: int) -> int:

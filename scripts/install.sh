@@ -44,6 +44,26 @@ if ! python -c "import tkinter; import customtkinter" 2>/dev/null; then
   exit 1
 fi
 
+if ! python -c "import insightface, onnxruntime" 2>/dev/null; then
+  echo "Error: insightface/onnxruntime not available in venv (ArcFace recognition)."
+  exit 1
+fi
+
+# Pre-download the InsightFace buffalo_l model pack (~280 MB) so the first app
+# launch works offline. Cached under ~/.insightface/models/.
+echo "Checking for InsightFace buffalo_l model..."
+python -c "
+import sys
+try:
+    from insightface.app import FaceAnalysis
+    app = FaceAnalysis(name='buffalo_l', providers=['CPUExecutionProvider'])
+    app.prepare(ctx_id=-1, det_size=(640, 640))
+    print('buffalo_l ready')
+except Exception as e:
+    print(f'Warning: could not pre-download buffalo_l ({e}). It will download on first run.')
+    sys.exit(0)
+"
+
 # Download YOLO model if not present
 echo "Checking for YOLO model..."
 models_dir="$ROOT/models"

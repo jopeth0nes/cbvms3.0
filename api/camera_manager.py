@@ -10,6 +10,7 @@ import cv2
 
 from api.camera_store import get_camera_preference, get_saved_ip_cameras, save_camera_preference
 from core.camera import CameraCapture
+from core.ip_camera import open_stream, probe_camera
 
 _USB_SCAN_MAX = 10
 
@@ -21,11 +22,12 @@ def _backend() -> int | None:
 
 
 def test_ip_camera(url: str, *, timeout_frames: int = 15) -> bool:
+    """Timeout-hardened reachability check for a known stream URL."""
     url = url.strip()
     if not url:
         return False
-    cap = cv2.VideoCapture(url)
-    if not cap.isOpened():
+    cap = open_stream(url)
+    if cap is None:
         return False
     ok = False
     for _ in range(timeout_frames):
@@ -35,6 +37,12 @@ def test_ip_camera(url: str, *, timeout_frames: int = 15) -> bool:
             break
     cap.release()
     return ok
+
+
+def probe_ip_camera(address: str, username: str = "", password: str = "",
+                    *, path: str | None = None, on_progress=None) -> str | None:
+    """Auto-detect a working stream URL from IP + credentials (None if not found)."""
+    return probe_camera(address, username, password, path=path, on_progress=on_progress)
 
 
 def scan_usb_cameras() -> list[dict[str, Any]]:

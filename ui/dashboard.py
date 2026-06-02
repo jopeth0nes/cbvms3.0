@@ -18,6 +18,7 @@ from core.camera import CameraCapture
 from core.notifier import Notifier
 from core.person_detector import PersonDetector
 from core.recognizer import FaceRecognizer
+from core.tracker import FaceTracker
 from core.trainer import ViolationTrainer
 from core.violation_engine import LiveViolationChecker
 from database.db_manager import CBVMSDatabase
@@ -57,6 +58,30 @@ MAX_ALERTS = 50
 PRESENCE_TIMEOUT_SECS = 30   # seconds absent from frame before re-appearance triggers UI alert
 DB_LOG_COOLDOWN_SECS   = 300 # 5-minute minimum between DB log entries per person
 
+DETECT_EVERY_N_FRAMES = 3    # offer every Nth feed frame to the fast detect worker (~10 FPS)
+REID_INTERVAL_SECS = 2.0     # periodic identity refresh even when all tracks are identified
+REID_MIN_GAP_SECS = 0.5      # min spacing between recognition offers (recognition takes ~0.5s)
+
+
+def _put_latest(q: "queue.Queue", item) -> None:
+    """Replace whatever is in a maxsize-1 queue with the freshest item (drop-old)."""
+    try:
+        q.get_nowait()
+    except queue.Empty:
+        pass
+    try:
+        q.put_nowait(item)
+    except queue.Full:
+        pass
+
+
+def _drain(q: "queue.Queue"):
+    """Return the latest item from a queue, or None if empty (non-blocking)."""
+    try:
+        return q.get_nowait()
+    except queue.Empty:
+        return None
+
 ORANGE_BGR = (0, 165, 255)   # torso box color (distinct from green/red/blue face box)
 
 
@@ -83,7 +108,7 @@ class CBVMSDashboard(ctk.CTk):
         self._database = CBVMSDatabase()
         self._database.initialize()
 
-        # Face recognizer (MTCNN + InceptionResnetV1) — lazy model load inside
+        # Face recognizer (InsightFace buffalo_l: SCRFD + ArcFace) — lazy model load inside
         self._recognizer = FaceRecognizer(self._database)
 
         # Real-time notification broker (sound + toast + bell badge + log panel)
@@ -99,26 +124,36 @@ class CBVMSDashboard(ctk.CTk):
             print(f"[CBVMS] PersonDetector init failed: {exc}")
             self._person_detector = None
 
-        # Background face detection state
-        self._face_detections: list[dict] = []
+        # Detect-and-track pipeline. Two background workers feed a UI-owned tracker:
+        #   • detect worker — fast SCRFD-only boxes (~52ms) every couple of frames,
+        #     so squares follow motion smoothly with no lag.
+        #   • recognize worker — slow ArcFace identity (~520ms) only when a track is
+        #     unidentified or on a periodic refresh, keeping CPU low.
+        # The tracker binds identity to a persistent track by IoU, so two people can
+        # never merge onto one label. Tracker is mutated only on the UI thread (workers
+        # post via after(0)), so it needs no lock.
+        self._tracker = FaceTracker()
         self._face_frame_counter: int = 0
-        self._face_queue: queue.Queue = queue.Queue(maxsize=1)
-        self._face_worker = threading.Thread(target=self._face_worker_loop, daemon=True)
-        self._face_worker.start()
-
-        # Fast real-time face detector (Haar) — runs on the UI thread every frame to
-        # reposition the recognized boxes live, so the on-screen square tracks head
-        # motion with no delay while the slow MTCNN recognizer handles identity.
-        self._live_face_boxes: list[list[int]] = []
+        self._last_recog_offer: float = 0.0
+        self._face_queue: queue.Queue = queue.Queue(maxsize=1)    # detect worker input
+        self._recog_queue: queue.Queue = queue.Queue(maxsize=1)   # recognize worker input
+        # Worker → UI result hand-off. Tk/Tcl is NOT thread-safe (esp. on macOS): the
+        # workers must never call self.after()/winfo_exists(). They drop results in these
+        # maxsize-1 queues and the UI thread drains them in _update_feed.
+        self._boxes_out: queue.Queue = queue.Queue(maxsize=1)     # detect → tracker.update
+        self._ident_out: queue.Queue = queue.Queue(maxsize=1)     # recog → identities + alerts
+        self._violen_out: queue.Queue = queue.Queue(maxsize=1)    # recog → violation overlay
+        self._violation_dirty = False                              # set by worker, read by UI
+        # Cap OpenCV's thread pool so continuous background detection can't peg every core
+        # and starve the Tk main thread (keeps the UI snappy).
         try:
-            self._fast_face = cv2.CascadeClassifier(
-                cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
-            )
-            if self._fast_face.empty():
-                self._fast_face = None
-        except Exception as exc:
-            print(f"[CBVMS] fast face detector unavailable: {exc}")
-            self._fast_face = None
+            cv2.setNumThreads(2)
+        except Exception:
+            pass
+        self._detect_worker = threading.Thread(target=self._detect_worker_loop, daemon=True)
+        self._recognize_worker = threading.Thread(target=self._recognize_worker_loop, daemon=True)
+        self._detect_worker.start()
+        self._recognize_worker.start()
 
         # Separate DB-write cooldown (much longer than UI presence timeout)
         # Prevents rapid re-logging of the same person making deletes appear to do nothing
@@ -145,6 +180,7 @@ class CBVMSDashboard(ctk.CTk):
         self._load_camera_preference()
 
         self._build_ui()
+        self._refresh_camera_switcher()   # populate quick source dropdown
         # Deliver notifications to the UI thread (toast + bell badge).
         self._notifier.subscribe(lambda n: self.after(0, self._on_notification, n))
         self._build_menubar()
@@ -267,6 +303,21 @@ class CBVMSDashboard(ctk.CTk):
             title_row, text="", font=body_small_font(), text_color=COLOR_TEXT_MUTED,
         )
         self._datetime_label.pack(side="right")
+
+        # Quick camera source switcher — flip between the MacBook camera and any saved
+        # IP camera instantly, without opening Settings. Persists the choice.
+        self._cam_sources: dict[str, dict] = {}
+        self._cam_source_var = ctk.StringVar(value="MacBook Camera")
+        self._cam_switcher = ctk.CTkOptionMenu(
+            title_row, variable=self._cam_source_var, values=["MacBook Camera"],
+            width=190, height=30, command=self._on_switch_camera,
+            fg_color=COLOR_SURFACE, button_color=COLOR_BORDER,
+            button_hover_color=COLOR_ACCENT_HOVER, font=body_small_font(),
+        )
+        self._cam_switcher.pack(side="right", padx=(0, 12))
+        ctk.CTkLabel(
+            title_row, text="📷 Source", font=body_small_font(), text_color=COLOR_TEXT_MUTED,
+        ).pack(side="right", padx=(0, 6))
 
         self._content_stack = ctk.CTkFrame(center, fg_color="transparent")
         self._content_stack.grid(row=1, column=0, sticky="nsew")
@@ -583,7 +634,57 @@ class CBVMSDashboard(ctk.CTk):
         elif cam_type in ("rj45", "ip"):
             self._camera_source_url = str(pref.get("url", "")).strip() or None
         self._camera_retry_count = 0
+        self._refresh_camera_switcher()
         self._deferred_start_camera()
+
+    def _refresh_camera_switcher(self) -> None:
+        """Repopulate the quick source dropdown from the MacBook cam + saved IP cameras."""
+        try:
+            from api.camera_store import get_saved_ip_cameras
+            saved = get_saved_ip_cameras()
+        except Exception:
+            saved = []
+        sources: dict[str, dict] = {
+            "MacBook Camera": {"id": "usb_0", "type": "usb", "index": 0,
+                               "label": "MacBook Camera", "status": "connected"},
+        }
+        for cam in saved:
+            label = str(cam.get("label", "IP Camera"))
+            key = label if label not in sources else f"{label} ({str(cam.get('id',''))[:4]})"
+            sources[key] = {"id": f"ip_{cam['id']}", "type": "rj45",
+                            "label": label, "url": cam["url"]}
+        self._cam_sources = sources
+        values = list(sources.keys())
+        try:
+            self._cam_switcher.configure(values=values)
+        except Exception:
+            return
+        # Reflect the currently-active source in the dropdown without re-triggering it.
+        current = "MacBook Camera"
+        if self._camera_source_url:
+            for k, v in sources.items():
+                if v.get("url") == self._camera_source_url:
+                    current = k
+                    break
+        self._cam_source_var.set(current)
+
+    def _on_switch_camera(self, choice: str) -> None:
+        """Quick-switch the live source from the dropdown (persists the choice)."""
+        pref = self._cam_sources.get(choice)
+        if not pref:
+            return
+        # No-op if it's already the active source.
+        same_usb = pref["type"] == "usb" and self._camera_source_url is None
+        same_ip = pref["type"] == "rj45" and pref.get("url") == self._camera_source_url
+        if same_usb or same_ip:
+            return
+        try:
+            from api.camera_store import save_camera_preference
+            save_camera_preference(pref)
+        except Exception:
+            pass
+        show_toast(self, f"Switching to {choice}…", type="info", duration=1500)
+        self._on_camera_source_connected(pref)
 
     def _apply_camera_settings(
         self, camera_index: int, resolution: tuple[int, int], fps_cap: int
@@ -677,28 +778,45 @@ class CBVMSDashboard(ctk.CTk):
     # Background face detection worker
     # ------------------------------------------------------------------
 
-    def _face_worker_loop(self) -> None:
-        """Background thread: picks frames from queue, runs face recognition.
-        Uses after(0, ...) to deliver results to the UI thread safely.
+    def _detect_worker_loop(self) -> None:
+        """Background thread: fast SCRFD-only detection → fresh boxes for the tracker.
+
+        Cheap (~52ms) so it runs often, giving each square a near-real-time position
+        that follows head motion. Identity is handled separately by the recognize worker.
         """
         while True:
             try:
                 frame = self._face_queue.get(timeout=1.0)
-                detections = self._recognizer.recognize_faces(frame)
-                # Deliver identities to the UI immediately so labels appear without
-                # waiting for the (much slower) violation classifiers below.
-                try:
-                    if self.winfo_exists():
-                        self.after(0, self._on_detections_ready, detections, frame)
-                except Exception:
-                    pass
-                # Run uniform/earring classifiers; mutates the same det dicts in place,
-                # so the torso/violation overlay appears on the next render tick.
-                self._check_violations(detections, frame)
+                boxes = [d["box"] for d in self._recognizer.detect_faces(frame)]
+                # Hand off to the UI thread via a queue — never call Tk from here.
+                _put_latest(self._boxes_out, boxes)
             except queue.Empty:
                 pass
             except Exception as exc:
-                print(f"[CBVMS] face worker error: {exc}")
+                print(f"[CBVMS] detect worker error: {exc}")
+
+    def _recognize_worker_loop(self) -> None:
+        """Background thread: slow ArcFace identity (~520ms), run only when needed.
+
+        Delivers identities to the UI tracker first (labels appear fast), then runs the
+        uniform/earring classifiers and re-binds the enriched results so the torso/
+        violation overlay follows on a later tick.
+        """
+        while True:
+            try:
+                frame = self._recog_queue.get(timeout=1.0)
+                detections = self._recognizer.recognize_faces(frame)
+                # Identity + alerts first (fast label), then enrich with violations.
+                # All applied on the UI thread — never call Tk from here.
+                _put_latest(self._ident_out, detections)
+                # Uniform/earring classifiers mutate the det dicts in place; re-bind so
+                # the tracks pick up violation/torso fields on the next render tick.
+                self._check_violations(detections, frame)
+                _put_latest(self._violen_out, detections)
+            except queue.Empty:
+                pass
+            except Exception as exc:
+                print(f"[CBVMS] recognize worker error: {exc}")
 
     @staticmethod
     def _match_face_to_person(face_box, person_boxes):
@@ -834,17 +952,18 @@ class CBVMSDashboard(ctk.CTk):
         display_violation = "Unidentified person detected" if violation_type == "unknown_person" else violation_type
         self._notifier.notify(display_name, display_violation)
 
-        if self._active_nav == "violations" and self._violation_panel is not None:
-            self.after(0, self._violation_panel.refresh)
+        # Flag for the UI thread to refresh the violations panel — never touch Tk here
+        # (this runs on the recognize worker thread).
+        self._violation_dirty = True
 
-    def _on_detections_ready(self, detections: list[dict], frame: np.ndarray | None = None) -> None:
-        """UI-thread callback: update annotation state and fire presence-based alerts.
+    def _on_identities_ready(self, detections: list[dict]) -> None:
+        """UI-thread callback: bind identities to tracks and fire presence-based alerts.
 
         One alert fires when a face first appears. While the face stays in frame,
         last_seen is refreshed and no duplicate alert is emitted. After PRESENCE_TIMEOUT_SECS
         without a detection the entry is purged — the next appearance fires a new alert.
         """
-        self._face_detections = detections
+        self._tracker.assign_identities(detections)
         now = time.time()
 
         current_keys: set[str] = set()
@@ -858,7 +977,7 @@ class CBVMSDashboard(ctk.CTk):
             self._face_presence[key] = now   # always refresh last-seen timestamp
 
             if is_new_appearance:
-                self._push_alert(det, frame)
+                self._push_alert(det)
 
         # Remove identities that have left the frame long enough
         stale = [
@@ -892,77 +1011,28 @@ class CBVMSDashboard(ctk.CTk):
         cv2.putText(out, text, (x + 3, y_baseline - 4),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1, cv2.LINE_AA)
 
-    def _detect_live_faces(self, frame: np.ndarray) -> list[list[int]]:
-        """Fast Haar face detection (UI thread) → boxes [x1,y1,x2,y2] in full-frame coords.
-
-        Cheap (~4-7 ms downscaled) so it can run every feed frame, giving the on-screen
-        square a real-time position that tracks head movement with no delay.
-        """
-        if self._fast_face is None or frame is None or frame.size == 0:
-            return []
-        try:
-            h, w = frame.shape[:2]
-            scale = w / 480.0 if w > 480 else 1.0
-            if scale != 1.0:
-                small = cv2.resize(frame, (int(w / scale), int(h / scale)))
-            else:
-                small = frame
-            gray = cv2.equalizeHist(cv2.cvtColor(small, cv2.COLOR_BGR2GRAY))
-            faces = self._fast_face.detectMultiScale(
-                gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30)
-            )
-            return [
-                [int(x * scale), int(y * scale), int((x + fw) * scale), int((y + fh) * scale)]
-                for (x, y, fw, fh) in faces
-            ]
-        except Exception:
-            return []
-
-    @staticmethod
-    def _pick_live_box(det_box, live_boxes, used) -> list[int] | None:
-        """Greedily assign the nearest unused live (Haar) box to a recognized det.
-
-        Returns the live box (real-time position) or None to fall back to the
-        recognizer's own (laggier) box. The match is capped at ~2.5× the face size so
-        a far-away false-positive box can never relabel the wrong location — only a
-        plausibly-same-person box is accepted (covers natural head movement between
-        the slower recognition updates).
-        """
-        dw = max(1, det_box[2] - det_box[0])
-        dh = max(1, det_box[3] - det_box[1])
-        max_dist_sq = (2.5 * max(dw, dh)) ** 2
-        dcx = (det_box[0] + det_box[2]) * 0.5
-        dcy = (det_box[1] + det_box[3]) * 0.5
-        best_j, best_d = None, None
-        for j, lb in enumerate(live_boxes):
-            if used[j]:
-                continue
-            lcx = (lb[0] + lb[2]) * 0.5
-            lcy = (lb[1] + lb[3]) * 0.5
-            d = (lcx - dcx) ** 2 + (lcy - dcy) ** 2
-            if best_d is None or d < best_d:
-                best_d, best_j = d, j
-        if best_j is None or best_d > max_dist_sq:
-            return None
-        used[best_j] = True
-        return live_boxes[best_j]
-
     def _annotate_frame(self, frame: np.ndarray) -> np.ndarray:
-        """Draw face boxes + names, plus orange torso boxes with uniform labels.
+        """Draw a square + label per tracked face, plus orange torso/uniform overlays.
 
-        The face square is positioned from the live Haar detector (no delay); identity,
-        color and torso/violation overlays come from the background recognizer.
+        Boxes come from the tracker (fast SCRFD positions, IoU-locked to one face each);
+        identity/color/violation come from the recognizer once it has identified the track.
         """
-        if not self._face_detections:
+        tracks = self._tracker.renderable()
+        if not tracks:
             return frame
         out = frame.copy()
-        live = list(self._live_face_boxes)
-        used = [False] * len(live)
-        for det in self._face_detections:
-            live_box = self._pick_live_box([int(v) for v in det["box"]], live, used)
-            x1, y1, x2, y2 = live_box if live_box is not None else [int(v) for v in det["box"]]
-            matched = det["matched"]
-            has_violation = bool(det.get("violation"))
+        for tr in tracks:
+            x1, y1, x2, y2 = tr.box_int()
+
+            # Not yet identified by the (slower) recognizer — neutral box, no premature label.
+            if not tr.identified:
+                gray = (148, 163, 184)
+                cv2.rectangle(out, (x1, y1), (x2, y2), gray, 2)
+                self._draw_pill(out, x1, y1, "Scanning…", gray)
+                continue
+
+            matched = tr.matched
+            has_violation = bool(tr.violation)
 
             # Face box: green (OK) / red (violation) / blue (unknown)
             if not matched:
@@ -972,23 +1042,16 @@ class CBVMSDashboard(ctk.CTk):
             else:
                 face_color = (16, 185, 129)        # BGR green
             cv2.rectangle(out, (x1, y1), (x2, y2), face_color, 2)
-            self._draw_pill(out, x1, y1, det["name"] if matched else "Unknown", face_color)
-
-            # Mark faces found by the OpenCV profile/frontal cascade fallback (MTCNN missed),
-            # so the admin can see the side-view recovery is working.
-            if det.get("detector_type") == "cascade":
-                cv2.putText(out, "profile", (x1, min(y2 + 16, out.shape[0] - 2)),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, ORANGE_BGR, 1, cv2.LINE_AA)
+            self._draw_pill(out, x1, y1, tr.name if matched else "Unknown", face_color)
 
             # Torso box: orange + uniform prediction label
-            torso_box = det.get("torso_box")
+            torso_box = tr.torso_box
             if torso_box is not None:
                 tx1, ty1, tx2, ty2 = [int(v) for v in torso_box]
                 cv2.rectangle(out, (tx1, ty1), (tx2, ty2), ORANGE_BGR, 2)
-                u_label = det.get("uniform_label")
-                if u_label is not None:
-                    conf = det.get("uniform_conf", 0.0)
-                    if u_label == "wrong_uniform":
+                if tr.uniform_label is not None:
+                    conf = tr.uniform_conf
+                    if tr.uniform_label == "wrong_uniform":
                         tag = f"X Wrong uniform {conf:.0%}"
                     else:
                         tag = f"OK Uniform {conf:.0%}"
@@ -1006,29 +1069,56 @@ class CBVMSDashboard(ctk.CTk):
         if not self.winfo_exists():
             return
         try:
+            # A worker logged a violation — refresh the panel here, on the UI thread.
+            if self._violation_dirty:
+                self._violation_dirty = False
+                if self._active_nav == "violations" and self._violation_panel is not None:
+                    self._violation_panel.refresh()
             if self._camera and self._camera.is_open:
                 frame = self._camera.read()
                 if frame is not None:
                     if self._active_nav == "live":
-                        # Keep presence timestamps alive for currently-visible identities.
-                        # This prevents the inference gap (CPU can take 5-15s per frame)
-                        # from falsely resetting a person's presence and re-firing an alert.
                         _now = time.time()
-                        for _det in self._face_detections:
-                            _key = _det["student_id"] if _det["matched"] else "unknown"
+                        # Drain worker results on the UI thread (workers never call Tk).
+                        _boxes = _drain(self._boxes_out)
+                        if _boxes is not None:
+                            self._tracker.update(_boxes)
+                        _ident = _drain(self._ident_out)
+                        if _ident is not None:
+                            self._on_identities_ready(_ident)        # assign + presence alerts
+                        _vio = _drain(self._violen_out)
+                        if _vio is not None:
+                            self._tracker.assign_identities(_vio)     # overlay enrich only
+
+                        # Keep presence timestamps alive for currently-tracked identities so
+                        # the recognition gap can't falsely reset presence and re-fire alerts.
+                        for _tr in self._tracker.renderable():
+                            if not _tr.identified:
+                                continue
+                            _key = _tr.student_id if _tr.matched else "unknown"
                             if _key in self._face_presence:
                                 self._face_presence[_key] = _now
 
-                        # Offer every 5th frame to the face detection worker
                         self._face_frame_counter += 1
-                        if self._face_frame_counter % 5 == 0:
+                        # Fast detection: offer every Nth frame for smooth box tracking.
+                        if self._face_frame_counter % DETECT_EVERY_N_FRAMES == 0:
                             try:
                                 self._face_queue.put_nowait(frame.copy())
                             except queue.Full:
                                 pass
-                        # Real-time face positions (cheap Haar) so the square has no lag
-                        self._live_face_boxes = self._detect_live_faces(frame)
-                        # Annotate with latest detection results and render
+                        # Slow recognition: only when a track needs an identity, or on a
+                        # periodic refresh — and never more often than REID_MIN_GAP_SECS.
+                        need_reid = (
+                            self._tracker.has_unidentified()
+                            or (_now - self._last_recog_offer) >= REID_INTERVAL_SECS
+                        )
+                        if need_reid and (_now - self._last_recog_offer) >= REID_MIN_GAP_SECS:
+                            try:
+                                self._recog_queue.put_nowait(frame.copy())
+                                self._last_recog_offer = _now
+                            except queue.Full:
+                                pass
+                        # Annotate from the tracker and render
                         annotated = self._annotate_frame(frame)
                         self.camera_feed.render(annotated)
                     if self._active_nav == "enrollment" and self._enrollment_panel is not None:

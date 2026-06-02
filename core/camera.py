@@ -79,10 +79,12 @@ class CameraCapture:
         return cap
 
     def _try_open_url(self, url: str) -> cv2.VideoCapture | None:
-        cap = cv2.VideoCapture(url)
-        if cap is None or not cap.isOpened():
-            if cap is not None:
-                cap.release()
+        # Open via FFMPEG with TCP transport + timeouts so an unreachable network
+        # stream fails in seconds instead of blocking the UI for 30s+.
+        from core.ip_camera import open_stream
+
+        cap = open_stream(url)
+        if cap is None:
             return None
 
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)

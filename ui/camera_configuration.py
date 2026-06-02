@@ -8,8 +8,9 @@ from typing import Any
 
 import customtkinter as ctk
 
-from api.camera_manager import camera_manager, scan_usb_cameras, test_ip_camera
+from api.camera_manager import camera_manager, probe_ip_camera, scan_usb_cameras, test_ip_camera
 from api.camera_store import add_ip_camera, delete_ip_camera, get_camera_preference, get_saved_ip_cameras
+from core.ip_camera import build_candidate_urls, redact
 from ui.components import (
     COLOR_ACCENT,
     COLOR_ACCENT_HOVER,
@@ -101,9 +102,10 @@ class CameraConfigurationSection(ctk.CTkFrame):
     )
     self._ip_tab_btn.pack(side="left")
 
-    self._list_host = ctk.CTkScrollableFrame(self, fg_color="transparent", height=220)
-    self._list_host.pack(fill="both", expand=True, padx=PADDING, pady=(0, 8))
-
+    # Always-visible entry point — opens the "Add IP Camera" modal (no longer a buried
+    # inline form). Packed before the list so it sits directly under the tabs and is
+    # obvious on either tab. (Packed in order — no `before=` against the scrollable
+    # list, which CustomTkinter wraps and can't be used as a pack reference.)
     self._add_ip_btn = ctk.CTkButton(
         self,
         text="+ Add IP Camera",
@@ -113,27 +115,14 @@ class CameraConfigurationSection(ctk.CTkFrame):
         border_color=COLOR_BORDER,
         text_color=COLOR_ACCENT,
         hover_color=COLOR_BORDER,
-        command=self._toggle_add_ip_form,
+        command=self._open_add_ip_modal,
     )
+    self._add_ip_btn.pack(fill="x", padx=PADDING, pady=(0, 8))
 
-    self._ip_form = ctk.CTkFrame(self, fg_color=COLOR_BG, corner_radius=CORNER_RADIUS)
-    self._ip_label_entry = ctk.CTkEntry(self._ip_form, placeholder_text="Entrance Camera 1")
-    self._ip_url_entry = ctk.CTkEntry(self._ip_form, placeholder_text="rtsp://192.168.1.x:554/stream")
-    self._ip_test_label = ctk.CTkLabel(self._ip_form, text="", font=body_small_font())
-    self._ip_test_ok = False
-    self._ip_form_visible = False
-    ctk.CTkLabel(self._ip_form, text="Label", font=body_small_font(), text_color=COLOR_TEXT_MUTED).pack(
-        anchor="w", padx=10, pady=(8, 0)
-    )
-    self._ip_label_entry.pack(fill="x", padx=10, pady=4)
-    ctk.CTkLabel(self._ip_form, text="Stream URL", font=body_small_font(), text_color=COLOR_TEXT_MUTED).pack(anchor="w", padx=10)
-    self._ip_url_entry.pack(fill="x", padx=10, pady=4)
-    ip_btns = ctk.CTkFrame(self._ip_form, fg_color="transparent")
-    ip_btns.pack(fill="x", padx=10, pady=8)
-    ctk.CTkButton(ip_btns, text="Test", width=70, command=self._test_ip).pack(side="left")
-    self._ip_test_label.pack(side="left", padx=8)
-    ctk.CTkButton(ip_btns, text="Save", width=70, fg_color=COLOR_ACCENT, command=self._save_ip).pack(side="left", padx=6)
-    ctk.CTkButton(ip_btns, text="Cancel", width=70, fg_color=COLOR_BORDER, command=self._hide_ip_form).pack(side="left")
+    self._add_modal: ctk.CTkToplevel | None = None
+
+    self._list_host = ctk.CTkScrollableFrame(self, fg_color="transparent", height=220)
+    self._list_host.pack(fill="both", expand=True, padx=PADDING, pady=(0, 8))
 
     stream = ctk.CTkFrame(self, fg_color="transparent")
     stream.pack(fill="x", padx=PADDING, pady=(8, PADDING))
@@ -181,13 +170,9 @@ class CameraConfigurationSection(ctk.CTkFrame):
     if tab == "usb":
       self._usb_tab_btn.configure(fg_color=COLOR_ACCENT)
       self._ip_tab_btn.configure(fg_color=COLOR_BORDER)
-      self._add_ip_btn.pack_forget()
-      if self._ip_form_visible:
-        self._ip_form.pack_forget()
     else:
       self._ip_tab_btn.configure(fg_color=COLOR_ACCENT)
       self._usb_tab_btn.configure(fg_color=COLOR_BORDER)
-      self._add_ip_btn.pack(fill="x", padx=PADDING, pady=(0, 8))
     self._render_list()
 
   def _refresh_active_card(self) -> None:
@@ -195,7 +180,7 @@ class CameraConfigurationSection(ctk.CTkFrame):
     if active and active.get("label"):
       self._active_title.configure(text=str(active["label"]))
       if active.get("type") in ("rj45", "ip"):
-        self._active_sub.configure(text=str(active.get("url", ""))[:80])
+        self._active_sub.configure(text=redact(str(active.get("url", "")))[:80])
       else:
         self._active_sub.configure(text=f"USB index {active.get('index', 0)}")
       self._active_badge.configure(text="Connected", text_color=COLOR_SAFE)
@@ -257,7 +242,7 @@ class CameraConfigurationSection(ctk.CTkFrame):
       label = str(cam.get("label", "Camera"))
       ctk.CTkLabel(inner, text=label, font=body_small_font(), text_color=COLOR_TEXT).grid(row=0, column=0, sticky="w")
       if cam.get("url"):
-        ctk.CTkLabel(inner, text=str(cam["url"])[:60], font=body_small_font(), text_color=COLOR_TEXT_MUTED).grid(
+        ctk.CTkLabel(inner, text=redact(str(cam["url"]))[:60], font=body_small_font(), text_color=COLOR_TEXT_MUTED).grid(
             row=1, column=0, sticky="w"
         )
       status = str(cam.get("status", ""))
@@ -323,48 +308,159 @@ class CameraConfigurationSection(ctk.CTkFrame):
       self._run_scan()
       self._refresh_active_card()
 
-  def _hide_ip_form(self) -> None:
-    self._ip_form.pack_forget()
-    self._ip_form_visible = False
-    self._ip_test_ok = False
-    self._ip_test_label.configure(text="")
+  # ------------------------------------------------------------------
+  # Add IP Camera modal
+  # ------------------------------------------------------------------
 
-  def _toggle_add_ip_form(self) -> None:
-    if self._ip_form_visible:
-      self._hide_ip_form()
+  def _open_add_ip_modal(self) -> None:
+    """Open a focused dialog to add an IP camera (auto-detect or add manually)."""
+    if self._add_modal is not None and self._add_modal.winfo_exists():
+      self._add_modal.focus()
       return
-    self._ip_form_visible = True
-    self._ip_form.pack(fill="x", padx=PADDING, pady=(0, 8))
 
-  def _test_ip(self) -> None:
-    url = self._ip_url_entry.get().strip()
-    if not url:
-      return
-    ok = test_ip_camera(url)
-    self._ip_test_label.configure(
-        text="Reachable" if ok else "Unreachable",
-        text_color=COLOR_SAFE if ok else COLOR_DANGER,
-    )
-    self._ip_test_ok = ok
+    modal = ctk.CTkToplevel(self)
+    self._add_modal = modal
+    modal.title("Add IP Camera")
+    modal.configure(fg_color=COLOR_BG)
+    modal.geometry("440x520")
+    modal.resizable(False, False)
+    modal.transient(self.winfo_toplevel())
 
-  def _save_ip(self) -> None:
-    if not getattr(self, "_ip_test_ok", False):
-      show_toast(self, "Test the connection before saving.", type="warning")
-      return
-    label = self._ip_label_entry.get().strip()
-    url = self._ip_url_entry.get().strip()
-    if not label or not url:
-      show_toast(self, "Label and URL are required.", type="warning")
-      return
-    try:
-      add_ip_camera(label, url)
-    except ValueError as exc:
-      show_toast(self, str(exc), type="error")
-      return
-    self._hide_ip_form()
-    self._switch_tab("ip")
-    self._run_scan()
-    show_toast(self, "IP camera saved.", type="success")
+    def _close() -> None:
+      try:
+        modal.grab_release()
+      except Exception:
+        pass
+      self._add_modal = None
+      modal.destroy()
+
+    modal.protocol("WM_DELETE_WINDOW", _close)
+
+    body = ctk.CTkFrame(modal, fg_color="transparent")
+    body.pack(fill="both", expand=True, padx=18, pady=16)
+
+    ctk.CTkLabel(body, text="Add IP Camera", font=section_title_font(), text_color=COLOR_TEXT).pack(anchor="w")
+    ctk.CTkLabel(
+        body, text="Enter the camera's IP and login. We'll auto-detect the stream,\n"
+                   "or add it manually and connect later.",
+        font=body_small_font(), text_color=COLOR_TEXT_MUTED, justify="left",
+    ).pack(anchor="w", pady=(2, 10))
+
+    label_entry = ctk.CTkEntry(body, placeholder_text="Entrance Camera 1")
+    host_entry = ctk.CTkEntry(body, placeholder_text="192.168.1.108")
+    user_entry = ctk.CTkEntry(body, placeholder_text="admin")
+    pass_entry = ctk.CTkEntry(body, placeholder_text="password", show="•")
+    url_entry = ctk.CTkEntry(body, placeholder_text="(optional) rtsp://…/full-url  or  /custom/path")
+
+    def _field(text: str, widget: ctk.CTkEntry) -> None:
+      ctk.CTkLabel(body, text=text, font=body_small_font(), text_color=COLOR_TEXT_MUTED).pack(anchor="w", pady=(8, 0))
+      widget.pack(fill="x", pady=(2, 0))
+
+    _field("Label", label_entry)
+    _field("IP address / host", host_entry)
+    _field("Username", user_entry)
+    _field("Password", pass_entry)
+    # Most users leave this blank. The camera's web-page address (http://host) is NOT a
+    # stream and is ignored — only an rtsp:// URL or a stream path is used here.
+    _field("Stream URL (optional) — blank to auto-detect; advanced: rtsp://… only", url_entry)
+
+    status = ctk.CTkLabel(body, text="", font=body_small_font(), text_color=COLOR_TEXT_MUTED, wraplength=400, justify="left")
+    status.pack(anchor="w", pady=(12, 4))
+
+    btns = ctk.CTkFrame(body, fg_color="transparent")
+    btns.pack(fill="x", pady=(6, 0))
+    test_btn = ctk.CTkButton(btns, text="Test & Add", width=120, fg_color=COLOR_ACCENT, hover_color=COLOR_ACCENT_HOVER)
+    test_btn.pack(side="left")
+    manual_btn = ctk.CTkButton(btns, text="Add Manually", width=120, fg_color=COLOR_BORDER, hover_color=COLOR_ACCENT_HOVER)
+    manual_btn.pack(side="left", padx=8)
+    ctk.CTkButton(btns, text="Cancel", width=80, fg_color="transparent", border_width=1,
+                  border_color=COLOR_BORDER, hover_color=COLOR_BORDER, command=_close).pack(side="right")
+
+    def _set_status(msg: str, color: str = COLOR_TEXT_MUTED) -> None:
+      try:
+        if modal.winfo_exists():
+          modal.after(0, lambda: status.configure(text=msg, text_color=color))
+      except Exception:
+        pass
+
+    def _persist_and_connect(label: str, url: str, *, connect: bool) -> None:
+      """Save the camera and (optionally) connect. Runs on the UI thread."""
+      try:
+        entry = add_ip_camera(label, url)
+      except ValueError as exc:
+        show_toast(self, str(exc), type="error")
+        return
+      self._switch_tab("ip")
+      if connect:
+        result = camera_manager.select(
+            {"id": f"ip_{entry['id']}", "type": "rj45", "label": label, "url": url}
+        )
+        if result.get("success"):
+          self._active = result.get("active")
+          self._on_camera_connected(self._active)
+          show_toast(self, f"Connected — {label}  ({redact(url)})", type="success", duration=5000)
+        else:
+          show_toast(self, "Saved, but couldn't connect yet. Use Connect in the list to retry.",
+                     type="warning", duration=5000)
+      else:
+        show_toast(self, f"Added “{label}”. Use Connect in the list when ready.",
+                   type="success", duration=4000)
+      self._run_scan()
+      self._refresh_active_card()
+      _close()
+
+    def _on_test() -> None:
+      host = host_entry.get().strip()
+      if not host:
+        _set_status("Enter the camera IP address.", COLOR_DANGER)
+        return
+      user, pwd = user_entry.get().strip(), pass_entry.get()
+      override = url_entry.get().strip() or None
+      label = label_entry.get().strip() or "IP Camera"
+      test_btn.configure(state="disabled", text="Detecting…")
+      manual_btn.configure(state="disabled")
+      _set_status("Scanning ports & probing streams…")
+
+      def _work() -> None:
+        url = probe_ip_camera(host, user, pwd, path=override, on_progress=_set_status)
+
+        def _done() -> None:
+          if not modal.winfo_exists():
+            return
+          test_btn.configure(state="normal", text="Test & Add")
+          manual_btn.configure(state="normal")
+          if not url:
+            _set_status("No stream found. Check IP/credentials, paste a full rtsp:// URL "
+                        "above, or use “Add Manually”.", COLOR_DANGER)
+            return
+          _persist_and_connect(label, url, connect=True)
+
+        try:
+          if modal.winfo_exists():
+            modal.after(0, _done)
+        except Exception:
+          pass
+
+      threading.Thread(target=_work, daemon=True).start()
+
+    def _on_manual() -> None:
+      host = host_entry.get().strip()
+      if not host:
+        _set_status("Enter the camera IP address.", COLOR_DANGER)
+        return
+      user, pwd = user_entry.get().strip(), pass_entry.get()
+      override = url_entry.get().strip() or None
+      label = label_entry.get().strip() or "IP Camera"
+      candidates = build_candidate_urls(host, user, pwd, path=override)
+      if not candidates:
+        _set_status("Couldn't build a stream URL from that address.", COLOR_DANGER)
+        return
+      _persist_and_connect(label, candidates[0], connect=False)
+
+    test_btn.configure(command=_on_test)
+    manual_btn.configure(command=_on_manual)
+
+    modal.after(120, lambda: (modal.lift(), modal.grab_set(), host_entry.focus()))
 
   def _apply_stream(self) -> None:
     res_raw = (self._resolution_var.get() or "1280x720").strip().lower()
