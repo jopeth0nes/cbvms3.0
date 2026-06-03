@@ -30,6 +30,7 @@ from ui.settings import SettingsPanel
 from ui.training_panel import TrainingPanel
 from ui.records_panel import RecordsPanel
 from ui.violation_log import ViolationLogPanel
+from ui.account_manager import AccountManagerPanel
 from ui.components import (
     COLOR_ACCENT,
     COLOR_ACCENT_HOVER,
@@ -195,6 +196,7 @@ class CBVMSDashboard(ctk.CTk):
         self._settings_panel: SettingsPanel | None = None
         self._notifications_panel: NotificationsPanel | None = None
         self._records_panel: RecordsPanel | None = None
+        self._account_manager_panel: AccountManagerPanel | None = None
 
         self._stat_today_value: ctk.CTkLabel | None = None
         self._stat_unreviewed_value: ctk.CTkLabel | None = None
@@ -276,6 +278,7 @@ class CBVMSDashboard(ctk.CTk):
             ("violations", "⚠  Violation Log"),
             ("records",    "🗄  Records"),
             ("training",   "🎓  Training"),
+            ("accounts",   "🔑  Account Manager"),
             ("settings",   "⚙  Settings"),
         ]
         self._nav_buttons: dict[str, ctk.CTkButton] = {}
@@ -438,12 +441,17 @@ class CBVMSDashboard(ctk.CTk):
         self._records_panel = RecordsPanel(self._view_host, database=self._database)
         self._records_panel.grid_remove()
 
+        self._account_manager_panel = AccountManagerPanel(
+            self._view_host, database=self._database)
+        self._account_manager_panel.grid_remove()
+
         self._views: dict[str, ctk.CTkFrame] = {
             "live":       self._live_frame,
             "enrollment": self._enrollment_panel,
             "violations": self._violation_panel,
             "records":    self._records_panel,
             "training":   self._training_panel,
+            "accounts":   self._account_manager_panel,
             "settings":   self._settings_panel,
             "alerts":     self._notifications_panel,
         }
@@ -564,6 +572,7 @@ class CBVMSDashboard(ctk.CTk):
             "violations": "Violation Log",
             "records":    "Database & Record Management",
             "training":   "Training",
+            "accounts":   "Account Manager",
             "settings":   "Settings",
             "alerts":     "Notifications",
         }
@@ -580,6 +589,8 @@ class CBVMSDashboard(ctk.CTk):
                 self._violation_panel.refresh()
             if key == "records" and self._records_panel is not None:
                 self._records_panel.on_show()
+            if key == "accounts" and self._account_manager_panel is not None:
+                self._account_manager_panel.on_show()
             if key == "alerts" and self._notifications_panel is not None:
                 self._notifications_panel.refresh_external()
 
@@ -975,37 +986,40 @@ class CBVMSDashboard(ctk.CTk):
             person_box = None
 
             # --- Uniform check (chest region anchored to the face, not person-box %) ---
-            if uniform_on and person_boxes:
-                person_box = self._match_face_to_person([x1, y1, x2, y2], person_boxes)
-                if person_box is not None:
-                    region = self._person_detector.get_uniform_region(
-                        [x1, y1, x2, y2], frame.shape, person_box
-                    )
-                    if region is not None:
-                        ux1, uy1, ux2, uy2 = region
-                        uniform_crop = frame[uy1:uy2, ux1:ux2]
-                        if self._uniform_matcher.is_loaded():
-                            # Authoritative one-class colour check (no degenerate classifier).
-                            verdict, conf = self._uniform_matcher.is_uniform(uniform_crop)
-                            if verdict is not None:   # None = too dark/small to judge → neutral
-                                det["uniform_label"] = "correct_uniform" if verdict else "wrong_uniform"
-                                det["uniform_conf"] = conf
-                                det["torso_box"] = region
-                                if not verdict:
-                                    parts.append(f"Wrong uniform ({conf:.0%})")
-                        else:
-                            # Fallback: trained classifier (only when no colour reference yet).
-                            try:
-                                label, conf = self._trainer.predict("uniform", uniform_crop)
-                            except Exception as exc:
-                                print(f"[CBVMS] uniform predict error: {exc}")
-                                label, conf = None, 0.0
-                            if label is not None and conf >= UNIFORM_MIN_CONF:
-                                det["uniform_label"] = label
-                                det["uniform_conf"] = conf
-                                det["torso_box"] = region
-                                if label == "wrong_uniform":
-                                    parts.append(f"Wrong uniform ({conf:.0%})")
+            if uniform_on:
+                person_box = None
+                if person_boxes:
+                    person_box = self._match_face_to_person([x1, y1, x2, y2], person_boxes)
+                # get_uniform_region works even without a person box (falls back to face
+                # width), so the check runs even when YOLO person detection fails.
+                region = self._person_detector.get_uniform_region(
+                    [x1, y1, x2, y2], frame.shape, person_box
+                )
+                if region is not None:
+                    ux1, uy1, ux2, uy2 = region
+                    uniform_crop = frame[uy1:uy2, ux1:ux2]
+                    if self._uniform_matcher.is_loaded():
+                        # Authoritative one-class colour check (no degenerate classifier).
+                        verdict, conf = self._uniform_matcher.is_uniform(uniform_crop)
+                        if verdict is not None:   # None = too dark/small to judge → neutral
+                            det["uniform_label"] = "correct_uniform" if verdict else "wrong_uniform"
+                            det["uniform_conf"] = conf
+                            det["torso_box"] = region
+                            if not verdict:
+                                parts.append(f"Wrong uniform ({conf:.0%})")
+                    else:
+                        # Fallback: trained classifier (only when no colour reference yet).
+                        try:
+                            label, conf = self._trainer.predict("uniform", uniform_crop)
+                        except Exception as exc:
+                            print(f"[CBVMS] uniform predict error: {exc}")
+                            label, conf = None, 0.0
+                        if label is not None and conf >= UNIFORM_MIN_CONF:
+                            det["uniform_label"] = label
+                            det["uniform_conf"] = conf
+                            det["torso_box"] = region
+                            if label == "wrong_uniform":
+                                parts.append(f"Wrong uniform ({conf:.0%})")
 
             # --- Earring check (face crop, male only) ---
             if earring_on and (det.get("gender", "") or "").lower() == "male":

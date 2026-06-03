@@ -117,8 +117,8 @@ class StudentRegistrationWindow(ctk.CTkToplevel):
 
         def _load() -> None:
             try:
-                from core.recognizer import Recognizer
-                rec = Recognizer(self.database)
+                from core.recognizer import FaceRecognizer
+                rec = FaceRecognizer(self.database)
                 rec._ensure_models()
                 self._recognizer = rec
             except Exception as exc:
@@ -478,8 +478,13 @@ class StudentRegistrationWindow(ctk.CTkToplevel):
 
                 if self._recognizer is not None:
                     try:
-                        emb, box = self._recognizer.encode_face_multi(
-                            [frame] * 5, min_valid=1)
+                        # Capture a burst of fresh frames for better embedding quality
+                        burst: list = [frame]
+                        for _ in range(4):
+                            f = self._get_frame()
+                            if f is not None:
+                                burst.append(f)
+                        emb, box = self._recognizer.encode_face_multi(burst, min_valid=1)
                         if emb is not None:
                             blob = pickle.dumps(emb)
                             # Use face-cropped photo when encoding succeeds

@@ -28,7 +28,7 @@ from ui.components import (
 
 class CBVMSLoginWindow(ctk.CTk):
     WIDTH = 420
-    HEIGHT = 560
+    HEIGHT = 460
 
     def __init__(self, auth_manager: AuthManager) -> None:
         super().__init__()
@@ -161,31 +161,6 @@ class CBVMSLoginWindow(ctk.CTk):
             text_color=COLOR_DANGER,
         )
         self.error_label.pack(fill="x")
-
-        # Divider
-        div = ctk.CTkFrame(container, fg_color=COLOR_BORDER, height=1)
-        div.pack(fill="x", pady=(PADDING, 0))
-
-        ctk.CTkLabel(
-            container,
-            text="New student?",
-            font=body_font(12),
-            text_color=COLOR_TEXT_MUTED,
-        ).pack(pady=(10, 4))
-
-        ctk.CTkButton(
-            container,
-            text="Register as Student",
-            height=40,
-            corner_radius=CORNER_RADIUS,
-            fg_color="transparent",
-            hover_color=COLOR_ACCENT_HOVER,
-            border_width=1,
-            border_color=COLOR_ACCENT,
-            text_color=COLOR_ACCENT,
-            font=body_font(13),
-            command=self._open_registration,
-        ).pack(fill="x")
 
         self.bind("<Return>", lambda _e: self._attempt_login())
         self.username_entry.focus_set()

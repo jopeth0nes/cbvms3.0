@@ -59,6 +59,10 @@ def main() -> None:
     if not username:
         return  # login window closed — exit
 
+    # Pick up any students who registered via the login screen's self-registration
+    # window (the recognizer was created before login, so new enrollments are stale).
+    recognizer.load_known_faces()
+
     logged_out = open_dashboard(
         username=username,
         database=database,

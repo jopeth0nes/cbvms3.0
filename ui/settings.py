@@ -113,6 +113,8 @@ class SettingsPanel(ctk.CTkFrame):
         row = self._notifications_section(scroll, row=row)
         row = self._model_status_section(scroll, row=row)
         row = self._admin_section(scroll, row=row)
+        row = self._ai_settings_section(scroll, row=row)
+        row = self._email_settings_section(scroll, row=row)
 
     def _section_card(self, master, title: str) -> ctk.CTkFrame:
         card = ctk.CTkFrame(
@@ -691,3 +693,216 @@ class SettingsPanel(ctk.CTkFrame):
         self._pw_msg.configure(text="Password updated successfully.", text_color=COLOR_SAFE)
         show_toast(self, "Password updated.", type="success")
 
+    # ------------------------------------------------------------------
+    # AI Analysis (Anthropic API key)
+    # ------------------------------------------------------------------
+
+    def _ai_settings_section(self, master, *, row: int) -> int:
+        from core.email_sender import load_smtp_config, save_smtp_config
+
+        card = self._section_card(master, "AI Analysis  (Appeal Review)")
+        card.grid(row=row, column=0, sticky="ew", padx=PADDING, pady=(0, PADDING))
+
+        ctk.CTkLabel(
+            card,
+            text=(
+                "Used to automatically analyse student appeals with Claude AI.\n"
+                "Get your API key at console.anthropic.com → API Keys."
+            ),
+            font=body_small_font(),
+            text_color=COLOR_TEXT_MUTED,
+            justify="left",
+            wraplength=680,
+        ).pack(anchor="w", padx=PADDING, pady=(0, 10))
+
+        form = ctk.CTkFrame(card, fg_color="transparent")
+        form.pack(fill="x", padx=PADDING, pady=(0, 8))
+        form.grid_columnconfigure(1, weight=1)
+
+        cfg = load_smtp_config()
+
+        ctk.CTkLabel(form, text="Anthropic API Key", font=body_small_font(),
+                     text_color=COLOR_TEXT_MUTED).grid(
+            row=0, column=0, sticky="w", padx=(0, 12), pady=6)
+
+        _api_entry = ctk.CTkEntry(form, show="•", placeholder_text="sk-ant-...")
+        _api_entry.grid(row=0, column=1, sticky="ew", pady=6)
+        stored_key = cfg.get("anthropic_api_key", "")
+        if stored_key:
+            _api_entry.insert(0, stored_key)
+
+        _show_var = ctk.BooleanVar(value=False)
+
+        def _toggle_show():
+            _api_entry.configure(show="" if _show_var.get() else "•")
+
+        ctk.CTkCheckBox(form, text="Show key", variable=_show_var,
+                        command=_toggle_show, font=body_small_font(),
+                        text_color=COLOR_TEXT_MUTED).grid(
+            row=0, column=2, padx=(8, 0), pady=6)
+
+        _ai_msg = ctk.CTkLabel(card, text="", font=body_small_font(),
+                               text_color=COLOR_TEXT_MUTED, wraplength=680)
+        _ai_msg.pack(anchor="w", padx=PADDING, pady=(0, 4))
+
+        def _save_ai() -> None:
+            cfg2 = load_smtp_config()
+            cfg2["anthropic_api_key"] = _api_entry.get().strip()
+            save_smtp_config(cfg2)
+            _ai_msg.configure(text="API key saved.", text_color=COLOR_SAFE)
+            show_toast(self, "Anthropic API key saved.", type="success")
+
+        def _test_ai() -> None:
+            import threading as _t
+            _save_ai()
+            key = _api_entry.get().strip()
+            if not key:
+                _ai_msg.configure(text="Enter an API key first.", text_color=COLOR_WARNING)
+                return
+            _ai_msg.configure(text="Testing API key…", text_color=COLOR_TEXT_MUTED)
+
+            def _run():
+                try:
+                    import anthropic
+                    client = anthropic.Anthropic(api_key=key)
+                    resp = client.messages.create(
+                        model="claude-haiku-4-5-20251001",
+                        max_tokens=10,
+                        messages=[{"role": "user", "content": "Say OK"}],
+                    )
+                    reply = resp.content[0].text.strip()
+                    msg, color = f"API key valid — model replied: {reply}", COLOR_SAFE
+                except Exception as exc:
+                    msg, color = f"Test failed: {exc}", COLOR_DANGER
+                card.after(0, lambda: _ai_msg.configure(text=msg, text_color=color))
+
+            _t.Thread(target=_run, daemon=True).start()
+
+        btn_row = ctk.CTkFrame(card, fg_color="transparent")
+        btn_row.pack(anchor="e", padx=PADDING, pady=(0, PADDING))
+
+        ctk.CTkButton(
+            btn_row, text="Test Key", width=100, height=34,
+            corner_radius=CORNER_RADIUS, fg_color=COLOR_BORDER,
+            hover_color=COLOR_ACCENT_HOVER, command=_test_ai,
+        ).pack(side="left", padx=(0, 8))
+
+        ctk.CTkButton(
+            btn_row, text="Save", width=100, height=34,
+            corner_radius=CORNER_RADIUS, fg_color=COLOR_ACCENT,
+            hover_color=COLOR_ACCENT_HOVER, command=_save_ai,
+        ).pack(side="left")
+
+        return row + 1
+
+    # ------------------------------------------------------------------
+    # Email / SMTP settings
+    # ------------------------------------------------------------------
+
+    def _email_settings_section(self, master, *, row: int) -> int:
+        from core.email_sender import load_smtp_config, save_smtp_config, send_credentials
+
+        card = self._section_card(master, "Email Settings  (SMTP)")
+        card.grid(row=row, column=0, sticky="ew", padx=PADDING, pady=(0, PADDING))
+
+        desc = ctk.CTkLabel(
+            card,
+            text=(
+                "Used to send login credentials to students when they are enrolled.\n"
+                "For Gmail, create an App Password (Google Account → Security → App Passwords)."
+            ),
+            font=body_small_font(),
+            text_color=COLOR_TEXT_MUTED,
+            justify="left",
+            wraplength=680,
+        )
+        desc.pack(anchor="w", padx=PADDING, pady=(0, 10))
+
+        form = ctk.CTkFrame(card, fg_color="transparent")
+        form.pack(fill="x", padx=PADDING, pady=(0, 8))
+        form.grid_columnconfigure(1, weight=1)
+        form.grid_columnconfigure(3, weight=1)
+
+        cfg = load_smtp_config()
+
+        def _lbl(r, c, text):
+            ctk.CTkLabel(form, text=text, font=body_small_font(),
+                         text_color=COLOR_TEXT_MUTED).grid(
+                row=r, column=c, sticky="w", padx=(0, 8), pady=5)
+
+        def _entry(r, c, val="", show="", width=0):
+            kw = {"show": show} if show else {}
+            if width:
+                kw["width"] = width
+            e = ctk.CTkEntry(form, **kw)
+            e.grid(row=r, column=c, sticky="ew", pady=5, padx=(0, 12))
+            if val:
+                e.insert(0, val)
+            return e
+
+        _lbl(0, 0, "Sender Email")
+        _smtp_email = _entry(0, 1, cfg.get("sender_email", ""))
+
+        _lbl(0, 2, "App Password")
+        _smtp_pass = _entry(0, 3, cfg.get("sender_password", ""), show="•")
+
+        _lbl(1, 0, "SMTP Host")
+        _smtp_host = _entry(1, 1, cfg.get("host", "smtp.gmail.com"))
+
+        _lbl(1, 2, "Port")
+        _smtp_port = _entry(1, 3, str(cfg.get("port", 587)), width=90)
+
+        _smtp_msg = ctk.CTkLabel(card, text="", font=body_small_font(),
+                                 text_color=COLOR_TEXT_MUTED, wraplength=680)
+        _smtp_msg.pack(anchor="w", padx=PADDING, pady=(0, 4))
+
+        def _save_smtp() -> None:
+            new_cfg = {
+                "sender_email": _smtp_email.get().strip(),
+                "sender_password": _smtp_pass.get(),
+                "host": _smtp_host.get().strip() or "smtp.gmail.com",
+                "port": int(_smtp_port.get().strip() or "587"),
+            }
+            save_smtp_config(new_cfg)
+            _smtp_msg.configure(text="SMTP settings saved.", text_color=COLOR_SAFE)
+            show_toast(self, "SMTP settings saved.", type="success")
+
+        def _test_smtp() -> None:
+            import threading as _t
+            _smtp_msg.configure(text="Sending test email…", text_color=COLOR_TEXT_MUTED)
+            _save_smtp()
+            email_addr = _smtp_email.get().strip()
+            if not email_addr:
+                _smtp_msg.configure(text="Enter a sender email first.", text_color=COLOR_WARNING)
+                return
+
+            def _run():
+                ok, err = send_credentials(
+                    to_email=email_addr,
+                    student_name="Test Student",
+                    student_id="TEST-001",
+                    username="TEST-001",
+                    password="TestPass123",
+                )
+                msg = "Test email sent to sender address." if ok else f"Test failed: {err}"
+                color = COLOR_SAFE if ok else COLOR_DANGER
+                card.after(0, lambda: _smtp_msg.configure(text=msg, text_color=color))
+
+            _t.Thread(target=_run, daemon=True).start()
+
+        btn_row = ctk.CTkFrame(card, fg_color="transparent")
+        btn_row.pack(anchor="e", padx=PADDING, pady=(0, PADDING))
+
+        ctk.CTkButton(
+            btn_row, text="Test Email", width=110, height=34,
+            corner_radius=CORNER_RADIUS, fg_color=COLOR_BORDER,
+            hover_color=COLOR_ACCENT_HOVER, command=_test_smtp,
+        ).pack(side="left", padx=(0, 8))
+
+        ctk.CTkButton(
+            btn_row, text="Save", width=100, height=34,
+            corner_radius=CORNER_RADIUS, fg_color=COLOR_ACCENT,
+            hover_color=COLOR_ACCENT_HOVER, command=_save_smtp,
+        ).pack(side="left")
+
+        return row + 1

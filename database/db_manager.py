@@ -135,6 +135,8 @@ class CBVMSDatabase:
                 conn.execute("ALTER TABLE students ADD COLUMN gender TEXT DEFAULT 'Unknown'")
             if "year_level" in cols and "year_and_section" not in cols:
                 conn.execute("ALTER TABLE students RENAME COLUMN year_level TO year_and_section")
+            if "email" not in cols:
+                conn.execute("ALTER TABLE students ADD COLUMN email TEXT DEFAULT ''")
             conn.commit()
         self._seed_default_admin()
 
@@ -165,7 +167,7 @@ class CBVMSDatabase:
         with self.connect() as conn:
             rows = conn.execute(
                 """
-                SELECT id, student_id, name, course, year_and_section, gender, encoding, photo, enrolled_at
+                SELECT id, student_id, name, course, year_and_section, gender, email, encoding, photo, enrolled_at
                 FROM students
                 ORDER BY name COLLATE NOCASE
                 """
@@ -176,7 +178,7 @@ class CBVMSDatabase:
         with self.connect() as conn:
             return conn.execute(
                 """
-                SELECT id, student_id, name, course, year_and_section, gender, encoding, photo, enrolled_at
+                SELECT id, student_id, name, course, year_and_section, gender, email, encoding, photo, enrolled_at
                 FROM students WHERE id = ?
                 """,
                 (student_pk,),
@@ -199,12 +201,13 @@ class CBVMSDatabase:
         encoding: bytes,
         photo: bytes,
         gender: str = "Unknown",
+        email: str = "",
     ) -> int:
         with self.connect() as conn:
             cursor = conn.execute(
                 """
-                INSERT INTO students (student_id, name, course, year_and_section, gender, encoding, photo)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO students (student_id, name, course, year_and_section, gender, email, encoding, photo)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     student_id.strip(),
@@ -212,6 +215,7 @@ class CBVMSDatabase:
                     course.strip(),
                     year_and_section.strip(),
                     gender.strip() or "Unknown",
+                    (email or "").strip(),
                     encoding,
                     photo,
                 ),
@@ -229,8 +233,16 @@ class CBVMSDatabase:
             return cursor.rowcount > 0
 
     def delete_student(self, student_pk: int) -> bool:
-
         with self.connect() as conn:
+            # Resolve student_id string before deleting the row
+            row = conn.execute(
+                "SELECT student_id FROM students WHERE id = ?", (student_pk,)
+            ).fetchone()
+            if row is None:
+                return False
+            sid = row[0]
+            # Cascade: remove login account so the student can no longer log in
+            conn.execute("DELETE FROM student_accounts WHERE student_id = ?", (sid,))
             cursor = conn.execute("DELETE FROM students WHERE id = ?", (student_pk,))
             conn.commit()
             return cursor.rowcount > 0
@@ -371,6 +383,62 @@ class CBVMSDatabase:
         except Exception as exc:
             print(f"[DB] insert_student_account error: {exc}")
             return False
+
+    def get_all_student_accounts(self) -> list[dict]:
+        """Return all student accounts joined with student info, sorted by name."""
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT sa.id, sa.student_id, sa.username, sa.password_hash, sa.created_at,
+                       s.name, s.course, s.year_and_section, s.gender
+                FROM student_accounts sa
+                LEFT JOIN students s ON s.student_id = sa.student_id
+                ORDER BY s.name COLLATE NOCASE
+                """
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def reset_student_password(self, student_id: str, new_password: str) -> bool:
+        """Reset a student account password. Returns True on success."""
+        try:
+            with self.connect() as conn:
+                cursor = conn.execute(
+                    "UPDATE student_accounts SET password_hash = ? WHERE student_id = ?",
+                    (hash_password(new_password), (student_id or "").strip()),
+                )
+                conn.commit()
+                return cursor.rowcount > 0
+        except Exception as exc:
+            print(f"[DB] reset_student_password error: {exc}")
+            return False
+
+    def upsert_student_account(self, student_id: str, username: str, password: str) -> tuple[bool, str]:
+        """Create or update a student account.
+
+        If an account already exists for this student_id (e.g. from self-registration),
+        the password is updated but the existing username is preserved.
+        Returns (success, actual_username_used).
+        """
+        sid = (student_id or "").strip()
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT username FROM student_accounts WHERE student_id = ?", (sid,)
+            ).fetchone()
+        if row is not None:
+            existing_username = row[0]
+            try:
+                with self.connect() as conn:
+                    conn.execute(
+                        "UPDATE student_accounts SET password_hash = ? WHERE student_id = ?",
+                        (hash_password(password), sid),
+                    )
+                    conn.commit()
+                return True, existing_username
+            except Exception as exc:
+                print(f"[DB] upsert_student_account update error: {exc}")
+                return False, existing_username
+        success = self.insert_student_account(sid, username, password)
+        return success, username
 
     def verify_student_account(self, username: str, password: str) -> dict | None:
         """Return {student_id, display_name} if credentials match, else None."""

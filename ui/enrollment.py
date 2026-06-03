@@ -434,7 +434,7 @@ class EnrollmentPanel(ctk.CTkFrame):
         modal = ctk.CTkToplevel(self)
         modal.title("Enroll New Student")
         modal.configure(fg_color=COLOR_BG)
-        modal.geometry("860x560")
+        modal.geometry("860x600")
         modal.resizable(False, False)
         modal.transient(self.winfo_toplevel())
         modal.after(120, modal.lift)
@@ -462,6 +462,7 @@ class EnrollmentPanel(ctk.CTkFrame):
             ("Student ID", "student_id"),
             ("Course", "course"),
             ("Year and Section", "year_and_section"),
+            ("Email Address", "email"),
         ]
         self._entries = {}
         for r, (label, key) in enumerate(fields):
@@ -473,12 +474,12 @@ class EnrollmentPanel(ctk.CTkFrame):
             self._entries[key] = entry
 
         ctk.CTkLabel(form, text="Gender", font=body_font(12), text_color=COLOR_TEXT_MUTED).grid(
-            row=4, column=0, sticky="w", pady=6, padx=(0, 12)
+            row=5, column=0, sticky="w", pady=6, padx=(0, 12)
         )
         self._gender_var = ctk.StringVar(value="Male")
         ctk.CTkSegmentedButton(
             form, values=["Male", "Female"], variable=self._gender_var,
-        ).grid(row=4, column=1, sticky="ew", pady=6)
+        ).grid(row=5, column=1, sticky="ew", pady=6)
 
         self._enroll_status_label = ctk.CTkLabel(
             form_card, text="", font=body_font(12), text_color=COLOR_TEXT_MUTED, wraplength=360,
@@ -793,6 +794,8 @@ class EnrollmentPanel(ctk.CTkFrame):
         student_id = self._entries["student_id"].get().strip()
         course = self._entries["course"].get().strip()
         year_and_section = self._entries["year_and_section"].get().strip()
+        email = self._entries.get("email", None)
+        email = email.get().strip() if email else ""
         gender = self._gender_var.get()
 
         def _rearm(msg: str) -> None:
@@ -803,7 +806,7 @@ class EnrollmentPanel(ctk.CTkFrame):
                 self._wizard_refresh(state, _ENROLL_FINISH_TEXT)
 
         if not all([name, student_id, course, year_and_section]):
-            _rearm("Please fill in all fields.")
+            _rearm("Please fill in all fields (email is optional).")
             return
         if self.database.student_id_exists(student_id):
             _rearm(f"Student ID '{student_id}' is already enrolled.")
@@ -819,6 +822,10 @@ class EnrollmentPanel(ctk.CTkFrame):
         self._set_enroll_status("Encoding faces and enrolling…")
 
         def _do_enroll() -> None:
+            import random
+            import string
+            from core.email_sender import send_credentials
+
             blob, box = self._wizard_embed(angle_frames)
             if blob is None:
                 modal.after(0, lambda: _rearm(
@@ -829,18 +836,42 @@ class EnrollmentPanel(ctk.CTkFrame):
                 self.database.insert_student(
                     student_id=student_id, name=name, course=course,
                     year_and_section=year_and_section, gender=gender,
-                    encoding=blob, photo=photo,
+                    encoding=blob, photo=photo, email=email,
                 )
             except Exception as exc:
                 modal.after(0, lambda e=exc: _rearm(f"Enrollment failed: {e}"))
                 return
-            modal.after(0, _on_success)
 
-        def _on_success() -> None:
+            # Auto-generate a new password and upsert the student account.
+            # upsert preserves an existing username (e.g. from self-registration)
+            # while resetting the password to the newly-generated one.
+            chars = string.ascii_letters + string.digits
+            password = "".join(random.choices(chars, k=10))
+            ok_acct, actual_username = self.database.upsert_student_account(
+                student_id, student_id, password
+            )
+
+            email_note = ""
+            if email and ok_acct:
+                ok_mail, err = send_credentials(
+                    to_email=email,
+                    student_name=name,
+                    student_id=student_id,
+                    username=actual_username,
+                    password=password,
+                )
+                email_note = " Email sent." if ok_mail else f" (Email failed: {err})"
+            elif not ok_acct:
+                email_note = " (Account creation failed — email not sent.)"
+
+            modal.after(0, lambda: _on_success(email_note, actual_username, password))
+
+        def _on_success(email_note: str, username: str, password: str) -> None:
             self._clear_form()
             self._reload_students()
             self.recognizer.load_known_faces()
-            self._set_status("Student enrolled successfully.", success=True)
+            msg = f"Enrolled! Login: {username} / {password}.{email_note}"
+            self._set_status(msg, success=True)
             close = state.get("close")
             if close is not None:
                 close()

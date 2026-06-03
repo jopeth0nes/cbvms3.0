@@ -89,7 +89,12 @@ class StudentPortal(ctk.CTk):
 
         self.db = CBVMSDatabase()
         self._student = self.db.get_student_by_student_id(student_id) or {}
-        self._violations = self.db.get_violations_for_student(student_id)
+        # Students only see violations the admin has confirmed (marked as reviewed).
+        # Unreviewed detections are pending admin verification and stay hidden.
+        self._violations = [
+            v for v in self.db.get_violations_for_student(student_id)
+            if v.get("status") == "reviewed"
+        ]
         self.db.ensure_notifications_for_student(student_id)
         self._notifications = self.db.get_notifications_for_student(student_id)
         self._appeals = self.db.get_appeals_for_student(student_id)
@@ -272,7 +277,7 @@ class StudentPortal(ctk.CTk):
     def _panel_dashboard(self) -> None:
         v = self._violations
         total = len(v)
-        unreviewed = sum(1 for x in v if x.get("status") == "unreviewed")
+        pending_appeals = sum(1 for x in self._appeals if x.get("status") == "pending")
         last_dt = _parse_ts(v[0]["timestamp"]) if v else None
         last_str = last_dt.strftime("%b %d, %Y") if last_dt else "None"
 
@@ -290,7 +295,7 @@ class StudentPortal(ctk.CTk):
             cards.grid_columnconfigure(c, weight=1, uniform="stat")
         specs = [
             ("⚠️", "Total Violations", str(total), SP_DANGER if total > 0 else SP_SAFE),
-            ("📋", "Unreviewed", str(unreviewed), SP_WARNING),
+            ("📋", "Pending Appeals", str(pending_appeals), SP_WARNING if pending_appeals > 0 else SP_SAFE),
             ("🕒", "Last Violation", last_str, SP_TEXT),
             ("✅", "Compliance Streak", f"{streak} days", SP_SAFE),
         ]
@@ -402,12 +407,12 @@ class StudentPortal(ctk.CTk):
                      text_color=SP_WHITE, fg_color=SP_ACCENT, corner_radius=999,
                      padx=12, pady=3).grid(row=0, column=0, sticky="w")
         seg = ctk.CTkSegmentedButton(
-            head, values=["All", "Unreviewed", "Reviewed"], command=self._on_violation_filter,
+            head, values=["All"], command=self._on_violation_filter,
             fg_color=SP_BORDER, selected_color=SP_ACCENT, selected_hover_color=SP_ACCENT_HOVER,
             unselected_color=SP_SURFACE, unselected_hover_color=SP_HOVER_LIGHT,
             text_color=SP_TEXT,
         )
-        seg.set(self._violation_filter)
+        seg.set("All")
         seg.grid(row=0, column=1, sticky="e")
 
         self._viol_list = ctk.CTkFrame(scroll, fg_color="transparent")
@@ -422,11 +427,7 @@ class StudentPortal(ctk.CTk):
     def _render_violation_list(self) -> None:
         for w in self._viol_list.winfo_children():
             w.destroy()
-        items = self._violations
-        if self._violation_filter == "Unreviewed":
-            items = [v for v in items if v.get("status") == "unreviewed"]
-        elif self._violation_filter == "Reviewed":
-            items = [v for v in items if v.get("status") == "reviewed"]
+        items = self._violations  # already filtered to reviewed-only at load time
 
         if not items:
             self._empty_state(self._viol_list, row=0)
@@ -503,8 +504,8 @@ class StudentPortal(ctk.CTk):
         modal = ctk.CTkToplevel(self)
         modal.title("Submit Appeal")
         modal.configure(fg_color=SP_BG)
-        modal.geometry("500x480")
-        modal.resizable(False, False)
+        modal.geometry("520x620")
+        modal.resizable(False, True)
         modal.transient(self)
         modal.after(120, modal.lift)
         modal.after(200, lambda: modal.winfo_exists() and modal.grab_set())
@@ -589,8 +590,9 @@ class StudentPortal(ctk.CTk):
                       text_color=SP_ACCENT, border_width=1, border_color=SP_BORDER,
                       font=_f(11), command=_pick_file).pack(side="right")
 
+        # Row 10: validation error (was incorrectly sharing row=7 with evidence label)
         err = ctk.CTkLabel(inner, text="", font=_f(11), text_color=SP_DANGER)
-        err.grid(row=7, column=0, sticky="w", pady=(4, 0))
+        err.grid(row=10, column=0, sticky="w", pady=(4, 0))
 
         def _submit() -> None:
             reason = reason_box.get("1.0", "end-1c").strip()
@@ -651,13 +653,14 @@ class StudentPortal(ctk.CTk):
                 on_complete=_on_ai_done,
             )
 
+        # Row 11: Submit / Cancel buttons (was incorrectly sharing row=8 with the description label)
         btns = ctk.CTkFrame(inner, fg_color="transparent")
-        btns.grid(row=8, column=0, sticky="ew", pady=(12, 0))
-        ctk.CTkButton(btns, text="Submit Appeal", height=40, corner_radius=8,
+        btns.grid(row=11, column=0, sticky="ew", pady=(16, 8))
+        ctk.CTkButton(btns, text="Submit Appeal", height=42, corner_radius=8,
                       fg_color=SP_ACCENT, hover_color=SP_ACCENT_HOVER, text_color=SP_WHITE,
                       font=_f(13, "bold"), command=_submit).pack(side="left", fill="x",
                                                                   expand=True, padx=(0, 8))
-        ctk.CTkButton(btns, text="Cancel", width=110, height=40, corner_radius=8,
+        ctk.CTkButton(btns, text="Cancel", width=110, height=42, corner_radius=8,
                       fg_color=SP_SURFACE, hover_color=SP_HOVER_LIGHT, text_color=SP_TEXT,
                       border_width=1, border_color=SP_BORDER, command=modal.destroy).pack(side="right")
 
@@ -900,17 +903,17 @@ class StudentPortal(ctk.CTk):
                          text_color=rec_color, fg_color=rec_bg,
                          corner_radius=999, padx=10, pady=2).pack(side="right")
             if ai_text:
-                ctk.CTkLabel(ai_frame, text=ai_text, font=_f(11), text_color=SP_MUTED,
+                ctk.CTkLabel(ai_frame, text=ai_text, font=_f(13), text_color=SP_TEXT,
                              anchor="w", wraplength=660,
-                             justify="left").pack(anchor="w", padx=12, pady=(0, 4))
+                             justify="left").pack(anchor="w", padx=12, pady=(4, 6))
             if ai_analyzed_at:
                 dt_ai = _parse_ts(ai_analyzed_at)
                 ts_ai = dt_ai.strftime("%b %d, %Y · %H:%M") if dt_ai else ai_analyzed_at
-                ctk.CTkLabel(ai_frame, text=f"Analyzed: {ts_ai}", font=_f(10),
-                             text_color=SP_MUTED, anchor="w").pack(anchor="w", padx=12)
+                ctk.CTkLabel(ai_frame, text=f"Analyzed: {ts_ai}", font=_f(11),
+                             text_color=SP_MUTED, anchor="w").pack(anchor="w", padx=12, pady=(0, 6))
         else:
-            ctk.CTkLabel(ai_frame, text="Analysis pending…", font=_f(11),
-                         text_color=SP_MUTED, anchor="w").pack(anchor="w", padx=12, pady=(0, 4))
+            ctk.CTkLabel(ai_frame, text="Analysis pending…", font=_f(12),
+                         text_color=SP_TEXT, anchor="w").pack(anchor="w", padx=12, pady=(0, 4))
         ctk.CTkFrame(ai_frame, fg_color="transparent", height=4).pack()
 
         # Admin notes (if any)
@@ -986,13 +989,81 @@ class StudentPortal(ctk.CTk):
             ctk.CTkLabel(fields, text=str(value), font=_f(14, "bold"), text_color=SP_TEXT,
                          anchor="w").grid(row=i * 2 + 1, column=0, sticky="w")
 
-        # Password section
+        # Change Password section
         pwd = ctk.CTkFrame(card, fg_color="transparent")
         pwd.grid(row=2, column=0, columnspan=2, sticky="ew", padx=20, pady=(0, 20))
-        ctk.CTkFrame(pwd, height=1, fg_color=SP_BORDER).pack(fill="x", pady=(0, 12))
-        ctk.CTkLabel(pwd, text="Password", font=_f(15, "bold"), text_color=SP_TEXT).pack(anchor="w")
-        ctk.CTkLabel(pwd, text="To change your password, contact your system administrator.",
-                     font=_f(12), text_color=SP_MUTED).pack(anchor="w", pady=(4, 0))
+        ctk.CTkFrame(pwd, height=1, fg_color=SP_BORDER).pack(fill="x", pady=(0, 14))
+        ctk.CTkLabel(pwd, text="Change Password", font=_f(15, "bold"),
+                     text_color=SP_TEXT).pack(anchor="w")
+        ctk.CTkLabel(pwd, text="Enter your current password then choose a new one.",
+                     font=_f(12), text_color=SP_MUTED).pack(anchor="w", pady=(2, 12))
+
+        pw_form = ctk.CTkFrame(pwd, fg_color="transparent")
+        pw_form.pack(fill="x")
+        pw_form.grid_columnconfigure((0, 1, 2), weight=1, uniform="pwcol")
+
+        def _pw_col(col, label, show="•"):
+            ctk.CTkLabel(pw_form, text=label, font=_f(11), text_color=SP_MUTED,
+                         anchor="w").grid(row=0, column=col, sticky="w",
+                                          padx=(0 if col == 0 else 8, 8), pady=(0, 4))
+            e = ctk.CTkEntry(pw_form, show=show, height=38, corner_radius=8,
+                             fg_color=SP_SURFACE, border_color=SP_BORDER,
+                             text_color=SP_TEXT, border_width=1)
+            e.grid(row=1, column=col, sticky="ew",
+                   padx=(0 if col == 0 else 8, 8), pady=(0, 6))
+            return e
+
+        e_cur  = _pw_col(0, "Current Password")
+        e_new  = _pw_col(1, "New Password")
+        e_conf = _pw_col(2, "Confirm New Password")
+
+        pw_msg = ctk.CTkLabel(pwd, text="", font=_f(11), text_color=SP_DANGER, anchor="w")
+        pw_msg.pack(anchor="w", pady=(0, 6))
+
+        def _save_pw() -> None:
+            cur  = e_cur.get()
+            new  = e_new.get()
+            conf = e_conf.get()
+            if not cur or not new or not conf:
+                pw_msg.configure(text="Please fill in all three fields.", text_color=SP_DANGER)
+                return
+            if len(new) < 6:
+                pw_msg.configure(text="New password must be at least 6 characters.",
+                                 text_color=SP_DANGER)
+                return
+            if new != conf:
+                pw_msg.configure(text="New password and confirmation do not match.",
+                                 text_color=SP_DANGER)
+                return
+            if cur == new:
+                pw_msg.configure(text="New password must be different from current.",
+                                 text_color=SP_DANGER)
+                return
+            # Verify current password using the stored username
+            with self.db.connect() as _c:
+                _row = _c.execute(
+                    "SELECT username FROM student_accounts WHERE student_id = ?",
+                    (self.student_id,)).fetchone()
+            if _row is None or self.db.verify_student_account(_row[0], cur) is None:
+                pw_msg.configure(text="Current password is incorrect.", text_color=SP_DANGER)
+                return
+            ok = self.db.reset_student_password(self.student_id, new)
+            if ok:
+                e_cur.delete(0, "end")
+                e_new.delete(0, "end")
+                e_conf.delete(0, "end")
+                pw_msg.configure(text="✓  Password changed successfully.", text_color=SP_SAFE)
+                self._log_activity("Password changed", "Student updated their account password")
+            else:
+                pw_msg.configure(text="Failed to save new password. Please try again.",
+                                 text_color=SP_DANGER)
+
+        btn_row = ctk.CTkFrame(pwd, fg_color="transparent")
+        btn_row.pack(anchor="e")
+        ctk.CTkButton(btn_row, text="Save Password", height=38, width=160,
+                      corner_radius=8, fg_color=SP_ACCENT, hover_color=SP_ACCENT_HOVER,
+                      text_color=SP_WHITE, font=_f(13, "bold"),
+                      command=_save_pw).pack(side="right")
 
         self._activity_log_card(scroll, row=2)
 
