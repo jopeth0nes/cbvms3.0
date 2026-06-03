@@ -59,6 +59,7 @@ PRESENCE_TIMEOUT_SECS = 30   # seconds absent from frame before re-appearance tr
 DB_LOG_COOLDOWN_SECS   = 300 # 5-minute minimum between DB log entries per person
 
 UNIFORM_MIN_CONF = 0.60      # below this the uniform verdict is treated as uncertain (no OK/violation)
+CAMERA_IDLE_RELEASE_SECS = 4.0  # release the camera after this long with no consumer (power saver)
 DETECT_EVERY_N_FRAMES = 3    # offer every Nth feed frame to the fast detect worker (~10 FPS)
 REID_INTERVAL_SECS = 2.0     # periodic identity refresh even when all tracks are identified
 REID_MIN_GAP_SECS = 0.5      # min spacing between recognition offers (recognition takes ~0.5s)
@@ -105,6 +106,9 @@ class CBVMSDashboard(ctk.CTk):
         self._camera_resolution_setting = (1280, 720)
         self._fps_cap_setting = 30
         self._camera_retry_count = 0
+        # Power saver: the camera is released when no consumer (Live view, enroll
+        # wizard, or training capture modal) has asked for a frame recently.
+        self._last_frame_request = 0.0  # time.monotonic() of the last camera need
 
         self._database = CBVMSDatabase()
         self._database.initialize()
@@ -514,6 +518,11 @@ class CBVMSDashboard(ctk.CTk):
         previous_nav = self._active_nav
         self._active_nav = key
 
+        # Power saver: entering Live (re)opens the camera if it was released; leaving Live
+        # is handled lazily by the idle watchdog in _update_feed (with a grace window).
+        if key == "live":
+            self._acquire_camera()
+
         for nav_key, btn in self._nav_buttons.items():
             btn.configure(
                 fg_color=COLOR_ACCENT if nav_key == key else "transparent",
@@ -703,8 +712,23 @@ class CBVMSDashboard(ctk.CTk):
     # Camera lifecycle
     # ------------------------------------------------------------------
 
+    def _camera_needed(self) -> bool:
+        """True while a consumer needs the camera: Live view, or a recent frame request
+        (the enroll wizard / training capture modal pull frames via _get_camera_frame)."""
+        return (
+            self._active_nav == "live"
+            or (time.monotonic() - self._last_frame_request) <= CAMERA_IDLE_RELEASE_SECS
+        )
+
+    def _acquire_camera(self) -> None:
+        """Start the camera if it's currently off (no-op if open/opening)."""
+        if self._camera is None:
+            self._camera_retry_count = 0
+            self._deferred_start_camera()
+
     def _deferred_start_camera(self) -> None:
         self.update_idletasks()
+        self._last_frame_request = time.monotonic()  # grace window for explicit starts
         self._stop_camera()
         try:
             self._camera_spinner.pack(side="right", padx=(0, 10), pady=14)
@@ -760,7 +784,9 @@ class CBVMSDashboard(ctk.CTk):
             self._status_camera.configure(text=f"Camera: {err}", text_color=COLOR_DANGER)
             if self._camera_retry_count == 0:
                 show_toast(self, f"Camera error: {err}", type="error", duration=4000)
-            if self._camera_retry_count < 8:
+            # Only retry while a consumer still needs the camera — don't power-cycle a
+            # camera nobody's watching.
+            if self._camera_retry_count < 8 and self._camera_needed():
                 self._camera_retry_count += 1
                 self.after(2000, self._deferred_start_camera)
 
@@ -770,9 +796,16 @@ class CBVMSDashboard(ctk.CTk):
             self._camera = None
 
     def _get_camera_frame(self):
+        # A consumer (enroll wizard / training capture modal) wants a frame — mark the
+        # camera as needed and lazily start it if it was released for power saving.
+        self._last_frame_request = time.monotonic()
+        if self._camera is None:
+            self._acquire_camera()
         if self._camera and self._camera.is_open:
-            frame = self._camera.get_latest_frame()
-            return frame if frame is not None else self._camera.read()
+            # Off the Live view _update_feed no longer pumps reads, so read a FRESH frame
+            # here for the modal previews; fall back to the last good frame on a drop.
+            frame = self._camera.read()
+            return frame if frame is not None else self._camera.get_latest_frame()
         return None
 
     # ------------------------------------------------------------------
@@ -1081,11 +1114,17 @@ class CBVMSDashboard(ctk.CTk):
                 self._violation_dirty = False
                 if self._active_nav == "violations" and self._violation_panel is not None:
                     self._violation_panel.refresh()
-            if self._camera and self._camera.is_open:
-                frame = self._camera.read()
-                if frame is not None:
-                    if self._active_nav == "live":
+
+            # Power saver: release the camera device when no consumer needs it.
+            if self._camera is not None and not self._camera_needed():
+                self._stop_camera()
+
+            if self._active_nav == "live":
+                if self._camera and self._camera.is_open:
+                    frame = self._camera.read()
+                    if frame is not None:
                         _now = time.time()
+                        self._last_frame_request = time.monotonic()  # keep camera alive
                         # Drain worker results on the UI thread (workers never call Tk).
                         _boxes = _drain(self._boxes_out)
                         if _boxes is not None:
@@ -1128,12 +1167,13 @@ class CBVMSDashboard(ctk.CTk):
                         # Annotate from the tracker and render
                         annotated = self._annotate_frame(frame)
                         self.camera_feed.render(annotated)
-                    if self._active_nav == "enrollment" and self._enrollment_panel is not None:
-                        self._enrollment_panel.update_preview(frame)
+                    else:
+                        self.camera_feed.show_placeholder()
                 else:
+                    # On Live but the camera is off/reopening (e.g. just released for
+                    # power saving, or warming up) — show the placeholder meanwhile.
                     self.camera_feed.show_placeholder()
-            else:
-                self.camera_feed.show_placeholder()
+            # Non-live navs: render nothing (the live canvas is hidden anyway).
         except Exception as exc:
             print(f"[CBVMS] feed error: {exc}")
         self._feed_job = self.after(self._feed_interval_ms, self._update_feed)
