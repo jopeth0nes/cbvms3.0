@@ -19,6 +19,7 @@ from core.notifier import Notifier
 from core.person_detector import PersonDetector
 from core.recognizer import FaceRecognizer
 from core.tracker import FaceTracker
+from core.uniform_matcher import UniformColorMatcher
 from core.trainer import ViolationTrainer
 from core.violation_engine import LiveViolationChecker
 from database.db_manager import CBVMSDatabase
@@ -88,7 +89,14 @@ ORANGE_BGR = (0, 165, 255)   # torso box color (distinct from green/red/blue fac
 
 
 class CBVMSDashboard(ctk.CTk):
-    def __init__(self, username: str = "admin") -> None:
+    def __init__(
+        self,
+        username: str = "admin",
+        *,
+        database: "CBVMSDatabase | None" = None,
+        recognizer: "FaceRecognizer | None" = None,
+        person_detector: "PersonDetector | None" = None,
+    ) -> None:
         super().__init__()
         self.username = username
         self._logout_requested = False
@@ -110,11 +118,17 @@ class CBVMSDashboard(ctk.CTk):
         # wizard, or training capture modal) has asked for a frame recently.
         self._last_frame_request = 0.0  # time.monotonic() of the last camera need
 
-        self._database = CBVMSDatabase()
-        self._database.initialize()
+        # Reuse pre-built (and already-warming) objects injected from main.py so the
+        # heavy models load during the login screen instead of after the dashboard opens.
+        self._injected = recognizer is not None
+        if database is not None:
+            self._database = database
+        else:
+            self._database = CBVMSDatabase()
+            self._database.initialize()
 
         # Face recognizer (InsightFace buffalo_l: SCRFD + ArcFace) — lazy model load inside
-        self._recognizer = FaceRecognizer(self._database)
+        self._recognizer = recognizer if recognizer is not None else FaceRecognizer(self._database)
 
         # Real-time notification broker (sound + toast + bell badge + log panel)
         self._notifier = Notifier()
@@ -123,11 +137,18 @@ class CBVMSDashboard(ctk.CTk):
         # Live violation checker (uniform / earring) backed by the trainer models
         self._checker = LiveViolationChecker(self._trainer, notifier=self._notifier)
         # Full-body person detector (YOLOv8n) for reliable torso crops
-        try:
-            self._person_detector = PersonDetector()
-        except Exception as exc:
-            print(f"[CBVMS] PersonDetector init failed: {exc}")
-            self._person_detector = None
+        if self._injected:
+            self._person_detector = person_detector  # may be None if it failed upstream
+        else:
+            try:
+                self._person_detector = PersonDetector()
+            except Exception as exc:
+                print(f"[CBVMS] PersonDetector init failed: {exc}")
+                self._person_detector = None
+
+        # One-class uniform colour check — the authoritative uniform verdict (the binary
+        # classifier degenerates on the abundant-correct / scarce-wrong dataset).
+        self._uniform_matcher = UniformColorMatcher()
 
         # Detect-and-track pipeline. Two background workers feed a UI-owned tracker:
         #   • detect worker — fast SCRFD-only boxes (~52ms) every couple of frames,
@@ -159,6 +180,11 @@ class CBVMSDashboard(ctk.CTk):
         self._recognize_worker = threading.Thread(target=self._recognize_worker_loop, daemon=True)
         self._detect_worker.start()
         self._recognize_worker.start()
+        # Pre-warm the heavy models (InsightFace, YOLO, trained classifiers) in the
+        # background at launch — they otherwise load lazily on the first frame, so the
+        # Live Monitor would take several seconds to start scanning. Warming now hides
+        # that behind the login→dashboard build + camera warmup.
+        threading.Thread(target=self._prewarm_models, daemon=True).start()
 
         # Separate DB-write cooldown (much longer than UI presence timeout)
         # Prevents rapid re-logging of the same person making deletes appear to do nothing
@@ -191,7 +217,7 @@ class CBVMSDashboard(ctk.CTk):
         self._build_menubar()
         self._tick_clock()
         self._schedule_feed_update()
-        self.after(300, self._deferred_start_camera)
+        self.after(80, self._deferred_start_camera)   # start the camera ASAP after the UI maps
 
     # ------------------------------------------------------------------
     # UI construction
@@ -729,6 +755,7 @@ class CBVMSDashboard(ctk.CTk):
     def _deferred_start_camera(self) -> None:
         self.update_idletasks()
         self._last_frame_request = time.monotonic()  # grace window for explicit starts
+        self._face_frame_counter = 0   # so the first frame after (re)start is scanned at once
         self._stop_camera()
         try:
             self._camera_spinner.pack(side="right", padx=(0, 10), pady=14)
@@ -812,6 +839,42 @@ class CBVMSDashboard(ctk.CTk):
     # Background face detection worker
     # ------------------------------------------------------------------
 
+    def _prewarm_models(self) -> None:
+        """Load + prime the heavy models at launch so Live Monitor scans immediately.
+
+        Runs on a daemon thread (pure CV work, no Tk). A tiny dummy inference primes the
+        ONNX/torch graphs so the very first real frame isn't slowed by graph allocation.
+        """
+        dummy = np.zeros((480, 640, 3), dtype=np.uint8)
+        try:
+            if self._recognizer._ensure_models():
+                self._recognizer.detect_faces(dummy)        # prime SCRFD detection graph
+        except Exception as exc:
+            print(f"[CBVMS] recognizer prewarm failed: {exc}")
+        try:
+            if self._person_detector is not None:
+                self._person_detector._ensure_model()
+                self._person_detector.detect_persons(dummy)  # prime YOLO graph
+        except Exception as exc:
+            print(f"[CBVMS] person-detector prewarm failed: {exc}")
+        # Warm any already-trained violation classifiers so the first check isn't delayed.
+        for module in ("uniform", "earring"):
+            try:
+                if self._trainer.is_trained(module):
+                    self._trainer._get_model(module)
+            except Exception:
+                pass
+        # Calibrate the one-class uniform colour reference from the correct-uniform photos
+        # if it's missing or the photo count changed (no retrain / "wrong" photos needed).
+        try:
+            correct_dir = self._trainer.label_dir("uniform", "correct_uniform")
+            n_have = len(list(correct_dir.glob("*.jpg"))) if correct_dir.exists() else 0
+            if n_have >= 1 and (not self._uniform_matcher.is_loaded()
+                                or self._uniform_matcher.sample_count != n_have):
+                self._uniform_matcher.build_from_dir(correct_dir)
+        except Exception as exc:
+            print(f"[CBVMS] uniform colour calibration failed: {exc}")
+
     def _detect_worker_loop(self) -> None:
         """Background thread: fast SCRFD-only detection → fresh boxes for the tracker.
 
@@ -889,7 +952,7 @@ class CBVMSDashboard(ctk.CTk):
         uniform_on = (
             self._person_detector is not None
             and self._checker.check_uniform
-            and self._trainer.is_trained("uniform")
+            and (self._uniform_matcher.is_loaded() or self._trainer.is_trained("uniform"))
         )
         if uniform_on and any(d.get("matched") for d in detections):
             person_boxes = self._person_detector.detect_persons(frame)
@@ -921,19 +984,28 @@ class CBVMSDashboard(ctk.CTk):
                     if region is not None:
                         ux1, uy1, ux2, uy2 = region
                         uniform_crop = frame[uy1:uy2, ux1:ux2]
-                        try:
-                            label, conf = self._trainer.predict("uniform", uniform_crop)
-                        except Exception as exc:
-                            print(f"[CBVMS] uniform predict error: {exc}")
-                            label, conf = None, 0.0
-                        # Only trust a confident verdict; a low-confidence prediction is
-                        # treated as "uncertain" (shown neutrally) rather than a false OK.
-                        if label is not None and conf >= UNIFORM_MIN_CONF:
-                            det["uniform_label"] = label
-                            det["uniform_conf"] = conf
-                            det["torso_box"] = region
-                            if label == "wrong_uniform":
-                                parts.append(f"Wrong uniform ({conf:.0%})")
+                        if self._uniform_matcher.is_loaded():
+                            # Authoritative one-class colour check (no degenerate classifier).
+                            verdict, conf = self._uniform_matcher.is_uniform(uniform_crop)
+                            if verdict is not None:   # None = too dark/small to judge → neutral
+                                det["uniform_label"] = "correct_uniform" if verdict else "wrong_uniform"
+                                det["uniform_conf"] = conf
+                                det["torso_box"] = region
+                                if not verdict:
+                                    parts.append(f"Wrong uniform ({conf:.0%})")
+                        else:
+                            # Fallback: trained classifier (only when no colour reference yet).
+                            try:
+                                label, conf = self._trainer.predict("uniform", uniform_crop)
+                            except Exception as exc:
+                                print(f"[CBVMS] uniform predict error: {exc}")
+                                label, conf = None, 0.0
+                            if label is not None and conf >= UNIFORM_MIN_CONF:
+                                det["uniform_label"] = label
+                                det["uniform_conf"] = conf
+                                det["torso_box"] = region
+                                if label == "wrong_uniform":
+                                    parts.append(f"Wrong uniform ({conf:.0%})")
 
             # --- Earring check (face crop, male only) ---
             if earring_on and (det.get("gender", "") or "").lower() == "male":
@@ -1146,8 +1218,9 @@ class CBVMSDashboard(ctk.CTk):
                                 self._face_presence[_key] = _now
 
                         self._face_frame_counter += 1
-                        # Fast detection: offer every Nth frame for smooth box tracking.
-                        if self._face_frame_counter % DETECT_EVERY_N_FRAMES == 0:
+                        # Fast detection: scan the very first frame immediately, then
+                        # every Nth frame for smooth box tracking.
+                        if self._face_frame_counter == 1 or self._face_frame_counter % DETECT_EVERY_N_FRAMES == 0:
                             try:
                                 self._face_queue.put_nowait(frame.copy())
                             except queue.Full:
@@ -1335,8 +1408,19 @@ class CBVMSDashboard(ctk.CTk):
         self.destroy()
 
 
-def open_dashboard(username: str = "admin") -> bool:
+def open_dashboard(
+    username: str = "admin",
+    *,
+    database=None,
+    recognizer=None,
+    person_detector=None,
+) -> bool:
     """Run the dashboard. Returns True if the user logged out (vs. closed the app)."""
-    app = CBVMSDashboard(username=username)
+    app = CBVMSDashboard(
+        username=username,
+        database=database,
+        recognizer=recognizer,
+        person_detector=person_detector,
+    )
     app.mainloop()
     return getattr(app, "_logout_requested", False)

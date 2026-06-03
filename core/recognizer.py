@@ -85,7 +85,14 @@ class FaceRecognizer:
         try:
             from insightface.app import FaceAnalysis
 
-            app = FaceAnalysis(name="buffalo_l", providers=["CPUExecutionProvider"])
+            # Load only the models we actually use: SCRFD detection, ArcFace recognition,
+            # and gender/age (for the unknown-face gender hint). Skipping the 106-point
+            # landmark model speeds up both startup load and per-frame recognition.
+            app = FaceAnalysis(
+                name="buffalo_l",
+                allowed_modules=["detection", "recognition", "genderage"],
+                providers=["CPUExecutionProvider"],
+            )
             app.prepare(ctx_id=-1, det_size=(640, 640))  # ctx_id=-1 => CPU
             self._app = app
 
