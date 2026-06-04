@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pickle
+import re
 import threading
 import tkinter as tk
 from tkinter import messagebox, ttk
@@ -25,9 +26,14 @@ from ui.components import (
     COLOR_TEXT_MUTED,
     COLOR_WARNING,
     CORNER_RADIUS,
+    CORNER_RADIUS_LG,
     PADDING,
+    PADDING_LG,
+    CBVMSCard,
+    MirrorController,
     body_font,
     heading_font,
+    make_mirror_button,
 )
 
 if TYPE_CHECKING:
@@ -46,9 +52,13 @@ _ANGLES = [
 _ENROLL_FINISH_TEXT = "✓ All Angles Done — Enroll Student"
 _UPDATE_FINISH_TEXT = "✓ All Angles Done — Update Photo"
 
+# Lightweight email sanity check (only applied when an email is provided — it is optional).
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
 
 class EnrollmentPanel(ctk.CTkFrame):
-    """Student list + selected-photo preview. Enrolling happens in a modal.
+    """Student list + selected-photo preview. Enrolling swaps the panel's center to an
+    in-panel flow (details form → guided face capture); Update Photo still uses a modal.
 
     All photo rendering uses ImageTk.PhotoImage (CTkImage does not display on
     this macOS/CustomTkinter build).
@@ -70,15 +80,24 @@ class EnrollmentPanel(ctk.CTkFrame):
         self._students: list[dict] = []
         self._selected_pk: int | None = None
 
-        # Modal-scoped widgets (created when a modal opens)
+        # Enroll-flow-scoped widgets (created when the in-panel enroll flow opens)
         self._entries: dict[str, ctk.CTkEntry] = {}
         self._gender_var: ctk.StringVar | None = None
         self._enroll_status_label: ctk.CTkLabel | None = None
         self._enroll_close: Callable[[], None] | None = None
+        self._enroll_screen: ctk.CTkFrame | None = None
+        self._enroll_step_chips: list | None = None
 
-        self.grid_columnconfigure(0, weight=1)
-        self.grid_columnconfigure(1, weight=1)
+        # The panel hosts one full-bleed screen at a time (list ⇄ enroll flow).
         self.grid_rowconfigure(0, weight=1)
+        self.grid_columnconfigure(0, weight=1)
+
+        # List screen — student list (left) + selected-photo preview (right).
+        self._list_screen = ctk.CTkFrame(self, fg_color=COLOR_BG)
+        self._list_screen.grid(row=0, column=0, sticky="nsew")
+        self._list_screen.grid_columnconfigure(0, weight=1)
+        self._list_screen.grid_columnconfigure(1, weight=1)
+        self._list_screen.grid_rowconfigure(0, weight=1)
 
         self._build_left_panel()
         self._build_preview_panel()
@@ -91,7 +110,7 @@ class EnrollmentPanel(ctk.CTkFrame):
 
     def _build_left_panel(self) -> None:
         left = ctk.CTkFrame(
-            self,
+            self._list_screen,
             fg_color=COLOR_SURFACE,
             corner_radius=CORNER_RADIUS,
             border_width=1,
@@ -114,7 +133,7 @@ class EnrollmentPanel(ctk.CTkFrame):
             corner_radius=CORNER_RADIUS,
             fg_color=COLOR_ACCENT,
             hover_color=COLOR_ACCENT_HOVER,
-            command=self._open_enroll_modal,
+            command=self._open_enroll_flow,
         ).grid(row=0, column=1, sticky="e")
 
         self._search_var = tk.StringVar()
@@ -196,7 +215,7 @@ class EnrollmentPanel(ctk.CTkFrame):
 
     def _build_preview_panel(self) -> None:
         right = ctk.CTkFrame(
-            self, fg_color=COLOR_SURFACE, corner_radius=CORNER_RADIUS,
+            self._list_screen, fg_color=COLOR_SURFACE, corner_radius=CORNER_RADIUS,
             border_width=1, border_color=COLOR_BORDER,
         )
         right.grid(row=0, column=1, sticky="nsew", padx=(PADDING // 2, 0))
@@ -412,49 +431,157 @@ class EnrollmentPanel(ctk.CTkFrame):
     # ------------------------------------------------------------------
 
     def on_show(self) -> None:
-        return
+        # Always land on the student list when the panel is (re)opened.
+        if self._enroll_screen is None:
+            self._list_screen.grid()
 
     def on_hide(self) -> None:
-        return
+        # Navigating away mid-enroll: tear the flow down so its camera after()
+        # loops stop and we return cleanly to the list for next time.
+        if self._enroll_close is not None:
+            self._enroll_close()
 
     def update_preview(self, frame: np.ndarray | None) -> None:
         return
 
     # ------------------------------------------------------------------
-    # Enroll modal
+    # In-panel enroll flow (form → guided capture, no pop-up window)
     # ------------------------------------------------------------------
 
-    def _open_enroll_modal(self) -> None:
+    def _open_enroll_flow(self) -> None:
+        """Take over the panel's center: show the details form first, then (once it is
+        filled with valid info) swap to the guided face-capture wizard — no modal window."""
         if self.recognizer is None:
             self._set_status(
                 "Face recognition not ready. Please wait for the model to load.", error=True,
             )
             return
+        if self._enroll_screen is not None:
+            return  # already in a flow
 
-        modal = ctk.CTkToplevel(self)
-        modal.title("Enroll New Student")
-        modal.configure(fg_color=COLOR_BG)
-        modal.geometry("860x600")
-        modal.resizable(False, False)
-        modal.transient(self.winfo_toplevel())
-        modal.after(120, modal.lift)
-        modal.after(200, lambda: self._safe_grab(modal))
+        self._list_screen.grid_remove()
 
-        modal.grid_columnconfigure((0, 1), weight=1)
-        modal.grid_rowconfigure(1, weight=1)
+        screen = ctk.CTkFrame(self, fg_color=COLOR_BG)
+        screen.grid(row=0, column=0, sticky="nsew")
+        screen.grid_columnconfigure(0, weight=1)
+        screen.grid_rowconfigure(2, weight=1)
+        self._enroll_screen = screen
+
+        header = ctk.CTkFrame(screen, fg_color="transparent")
+        header.grid(row=0, column=0, sticky="ew", padx=PADDING, pady=(0, 4))
+        header.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(
+            header, text="Enroll New Student", font=heading_font(18), text_color=COLOR_TEXT,
+        ).grid(row=0, column=0, sticky="w")
+        self._build_enroll_stepper(header).grid(row=0, column=1, sticky="e")
+
+        # Body host — the form and capture sub-steps swap in and out of this cell.
+        body = ctk.CTkFrame(screen, fg_color="transparent")
+        body.grid(row=2, column=0, sticky="nsew", pady=(8, 0))
+        body.grid_columnconfigure(0, weight=1)
+        body.grid_rowconfigure(0, weight=1)
+
+        # Shared status line — persists across both sub-steps.
+        self._enroll_status_label = ctk.CTkLabel(
+            screen, text="", font=body_font(12), text_color=COLOR_TEXT_MUTED, wraplength=560,
+        )
+        self._enroll_status_label.grid(row=3, column=0, sticky="w", padx=PADDING, pady=(4, 0))
+
+        state: dict = {
+            "modal": self,  # wizard schedules after()/checks winfo_exists() against the panel
+            "step": 0, "angle_frames": {}, "capturing": False, "alive": True, "body": body,
+        }
+
+        def _return_to_list() -> None:
+            state["alive"] = False
+            for job_key in ("job_tick", "job_detect"):
+                if state.get(job_key) is not None:
+                    try:
+                        self.after_cancel(state[job_key])
+                    except Exception:
+                        pass
+                    state[job_key] = None
+            self._enroll_status_label = None
+            self._enroll_close = None
+            self._enroll_screen = None
+            self._enroll_step_chips = None
+            try:
+                screen.destroy()
+            except Exception:
+                pass
+            self._list_screen.grid()
+
+        state["close"] = _return_to_list
+        self._enroll_close = _return_to_list
+
+        self._build_enroll_form(body, state)
+
+    # ------------------------------------------------------------------
+    # Enroll progress stepper (① Details → ② Face Capture)
+    # ------------------------------------------------------------------
+
+    def _build_enroll_stepper(self, parent) -> ctk.CTkFrame:
+        bar = ctk.CTkFrame(parent, fg_color="transparent")
+        self._enroll_step_chips: list | None = []
+        steps = [("1", "Details"), ("2", "Face Capture")]
+        for i, (num, label) in enumerate(steps):
+            chip = ctk.CTkFrame(bar, fg_color=COLOR_SURFACE, corner_radius=999,
+                                border_width=1, border_color=COLOR_BORDER)
+            chip.pack(side="left")
+            dot = ctk.CTkLabel(chip, text=num, width=24, height=24, corner_radius=12,
+                               fg_color=COLOR_BORDER, text_color=COLOR_TEXT_MUTED, font=body_font(12))
+            dot.pack(side="left", padx=(6, 6), pady=4)
+            txt = ctk.CTkLabel(chip, text=label, font=body_font(12), text_color=COLOR_TEXT_MUTED)
+            txt.pack(side="left", padx=(0, 12), pady=4)
+            self._enroll_step_chips.append((chip, dot, txt, num))
+            if i < len(steps) - 1:
+                ctk.CTkFrame(bar, fg_color=COLOR_BORDER, height=2, width=32).pack(side="left", padx=8)
+        return bar
+
+    def _set_enroll_step(self, idx: int) -> None:
+        chips = getattr(self, "_enroll_step_chips", None)
+        if not chips:
+            return
+        for i, (chip, dot, txt, num) in enumerate(chips):
+            if i == idx:
+                dot.configure(fg_color=COLOR_ACCENT, text_color=COLOR_TEXT, text=num)
+                txt.configure(text_color=COLOR_TEXT)
+                chip.configure(border_color=COLOR_ACCENT)
+            elif i < idx:
+                dot.configure(fg_color=COLOR_SAFE, text_color=COLOR_TEXT, text="✓")
+                txt.configure(text_color=COLOR_TEXT_MUTED)
+                chip.configure(border_color=COLOR_BORDER)
+            else:
+                dot.configure(fg_color=COLOR_BORDER, text_color=COLOR_TEXT_MUTED, text=num)
+                txt.configure(text_color=COLOR_TEXT_MUTED)
+                chip.configure(border_color=COLOR_BORDER)
+
+    def _build_enroll_form(self, body, state: dict) -> None:
+        """Sub-step 1 — details card (left) + guidance/tips panel (right), filling the width."""
+        self._set_enroll_step(0)
+
+        form_frame = ctk.CTkFrame(body, fg_color="transparent")
+        form_frame.grid(row=0, column=0, sticky="nsew")
+        form_frame.grid_columnconfigure(0, weight=3, uniform="enrollcols")
+        form_frame.grid_columnconfigure(1, weight=2, uniform="enrollcols")
+        form_frame.grid_rowconfigure(0, weight=1)
+        state["form_frame"] = form_frame
+
+        # LEFT — student details card
+        card = CBVMSCard(form_frame)
+        card.grid(row=0, column=0, sticky="nsew", padx=(0, PADDING))
+        card.grid_columnconfigure(0, weight=1)
 
         ctk.CTkLabel(
-            modal, text="Enroll New Student", font=heading_font(16), text_color=COLOR_TEXT,
-        ).grid(row=0, column=0, columnspan=2, sticky="w", padx=PADDING, pady=(PADDING, 8))
+            card, text="Student Information", font=heading_font(16), text_color=COLOR_TEXT,
+        ).grid(row=0, column=0, sticky="w", padx=PADDING_LG, pady=(PADDING_LG, 0))
+        ctk.CTkLabel(
+            card, text="Fill in the details, then continue to face capture.",
+            font=body_font(12), text_color=COLOR_TEXT_MUTED,
+        ).grid(row=1, column=0, sticky="w", padx=PADDING_LG, pady=(2, 14))
 
-        # LEFT — form
-        form_card = ctk.CTkFrame(modal, fg_color=COLOR_SURFACE, corner_radius=CORNER_RADIUS,
-                                 border_width=1, border_color=COLOR_BORDER)
-        form_card.grid(row=1, column=0, sticky="nsew", padx=(PADDING, 8), pady=(0, 8))
-        form_card.grid_columnconfigure(0, weight=1)
-
-        form = ctk.CTkFrame(form_card, fg_color="transparent")
-        form.pack(fill="x", padx=PADDING, pady=PADDING)
+        form = ctk.CTkFrame(card, fg_color="transparent")
+        form.grid(row=2, column=0, sticky="ew", padx=PADDING_LG, pady=(0, 4))
         form.grid_columnconfigure(1, weight=1)
 
         fields = [
@@ -466,67 +593,155 @@ class EnrollmentPanel(ctk.CTkFrame):
         ]
         self._entries = {}
         for r, (label, key) in enumerate(fields):
-            ctk.CTkLabel(form, text=label, font=body_font(12), text_color=COLOR_TEXT_MUTED).grid(
-                row=r, column=0, sticky="w", pady=6, padx=(0, 12)
+            ctk.CTkLabel(form, text=label, font=body_font(13), text_color=COLOR_TEXT_MUTED).grid(
+                row=r, column=0, sticky="w", pady=9, padx=(0, 16)
             )
-            entry = ctk.CTkEntry(form)
-            entry.grid(row=r, column=1, sticky="ew", pady=6)
+            entry = ctk.CTkEntry(form, height=38)
+            entry.grid(row=r, column=1, sticky="ew", pady=9)
+            entry.bind("<Return>", lambda _e: self._enroll_continue(state))
             self._entries[key] = entry
 
-        ctk.CTkLabel(form, text="Gender", font=body_font(12), text_color=COLOR_TEXT_MUTED).grid(
-            row=5, column=0, sticky="w", pady=6, padx=(0, 12)
+        ctk.CTkLabel(form, text="Gender", font=body_font(13), text_color=COLOR_TEXT_MUTED).grid(
+            row=5, column=0, sticky="w", pady=9, padx=(0, 16)
         )
         self._gender_var = ctk.StringVar(value="Male")
         ctk.CTkSegmentedButton(
-            form, values=["Male", "Female"], variable=self._gender_var,
-        ).grid(row=5, column=1, sticky="ew", pady=6)
+            form, values=["Male", "Female"], variable=self._gender_var, height=36,
+        ).grid(row=5, column=1, sticky="ew", pady=9)
 
-        self._enroll_status_label = ctk.CTkLabel(
-            form_card, text="", font=body_font(12), text_color=COLOR_TEXT_MUTED, wraplength=360,
-        )
-        self._enroll_status_label.pack(anchor="w", padx=PADDING, pady=(0, PADDING))
-
-        # RIGHT — guided multi-angle capture wizard
-        cam_card = ctk.CTkFrame(modal, fg_color=COLOR_SURFACE, corner_radius=CORNER_RADIUS,
-                                border_width=1, border_color=COLOR_BORDER)
-        cam_card.grid(row=1, column=1, sticky="nsew", padx=(8, PADDING), pady=(0, 8))
-
-        state: dict = {
-            "modal": modal, "step": 0, "angle_frames": {}, "capturing": False, "alive": True,
-        }
-
-        def _close() -> None:
-            state["alive"] = False
-            for job_key in ("job_tick", "job_detect"):
-                if state.get(job_key) is not None:
-                    try:
-                        modal.after_cancel(state[job_key])
-                    except Exception:
-                        pass
-                    state[job_key] = None
-            try:
-                modal.grab_release()
-            except Exception:
-                pass
-            self._enroll_status_label = None
-            self._enroll_close = None
-            modal.destroy()
-
-        state["close"] = _close
-        self._enroll_close = _close
-
-        self._build_capture_wizard(
-            cam_card, state, on_finish=self._finish_enroll, finish_text=_ENROLL_FINISH_TEXT,
-        )
-
-        btns = ctk.CTkFrame(modal, fg_color="transparent")
-        btns.grid(row=2, column=0, columnspan=2, sticky="ew", padx=PADDING, pady=(0, PADDING))
+        btns = ctk.CTkFrame(card, fg_color="transparent")
+        btns.grid(row=3, column=0, sticky="ew", padx=PADDING_LG, pady=(14, PADDING_LG))
         ctk.CTkButton(
-            btns, text="Cancel", width=130, height=36, corner_radius=CORNER_RADIUS,
-            fg_color=COLOR_BORDER, hover_color=COLOR_DANGER, command=_close,
+            btns, text="Cancel", width=130, height=40, corner_radius=CORNER_RADIUS,
+            fg_color=COLOR_BORDER, hover_color=COLOR_DANGER, command=state["close"],
+        ).pack(side="left")
+        ctk.CTkButton(
+            btns, text="Continue →", width=170, height=40, corner_radius=CORNER_RADIUS,
+            font=heading_font(13), fg_color=COLOR_ACCENT, hover_color=COLOR_ACCENT_HOVER,
+            command=lambda: self._enroll_continue(state),
         ).pack(side="right")
 
-        modal.protocol("WM_DELETE_WINDOW", _close)
+        # RIGHT — guidance / what happens next
+        self._build_enroll_guidance(form_frame)
+
+        self._entries["name"].focus_set()
+
+    def _build_enroll_guidance(self, parent) -> None:
+        """Static side panel that fills the right column and previews the capture step."""
+        guide = CBVMSCard(parent)
+        guide.grid(row=0, column=1, sticky="nsew")
+        guide.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(guide, text="👤", font=heading_font(48), text_color=COLOR_ACCENT).grid(
+            row=0, column=0, pady=(PADDING_LG, 2)
+        )
+        ctk.CTkLabel(
+            guide, text="Next: Face Capture", font=heading_font(16), text_color=COLOR_TEXT,
+        ).grid(row=1, column=0, padx=PADDING_LG)
+        ctk.CTkLabel(
+            guide,
+            text="After you continue, we'll capture 3 quick angles of the student's face "
+                 "(front, left, right) to build an accurate recognition profile.",
+            font=body_font(12), text_color=COLOR_TEXT_MUTED, wraplength=240, justify="left",
+        ).grid(row=2, column=0, padx=PADDING_LG, pady=(8, 16), sticky="w")
+
+        tips = [
+            ("💡", "Use even, front-facing lighting"),
+            ("🙂", "Look straight at the camera"),
+            ("🧢", "Remove hats, masks, or sunglasses"),
+        ]
+        tip_wrap = ctk.CTkFrame(guide, fg_color="transparent")
+        tip_wrap.grid(row=3, column=0, padx=PADDING_LG, pady=(0, PADDING_LG), sticky="w")
+        for icon, text in tips:
+            trow = ctk.CTkFrame(tip_wrap, fg_color="transparent")
+            trow.pack(anchor="w", pady=5)
+            ctk.CTkLabel(trow, text=icon, font=body_font(15)).pack(side="left", padx=(0, 10))
+            ctk.CTkLabel(
+                trow, text=text, font=body_font(12), text_color=COLOR_TEXT_MUTED,
+            ).pack(side="left")
+
+    def _enroll_continue(self, state: dict) -> None:
+        """Validate the form; on success, advance to the capture sub-step."""
+        if not self._entries or self._gender_var is None:
+            return
+        name = self._entries["name"].get().strip()
+        student_id = self._entries["student_id"].get().strip()
+        course = self._entries["course"].get().strip()
+        year_and_section = self._entries["year_and_section"].get().strip()
+        email = self._entries["email"].get().strip()
+
+        if not all([name, student_id, course, year_and_section]):
+            self._set_enroll_status("Please fill in all fields (email is optional).", error=True)
+            return
+        if email and not _EMAIL_RE.match(email):
+            self._set_enroll_status(
+                "Please enter a valid email address (or leave it blank).", error=True)
+            return
+        if self.database.student_id_exists(student_id):
+            self._set_enroll_status(f"Student ID '{student_id}' is already enrolled.", error=True)
+            return
+
+        self._set_enroll_status("")
+        self._build_enroll_capture(state)
+
+    def _build_enroll_capture(self, state: dict) -> None:
+        """Sub-step 2 — guided multi-angle capture. The form is hidden (not destroyed) so
+        _finish_enroll can still read self._entries / self._gender_var, and Back can restore it."""
+        form_frame = state.get("form_frame")
+        if form_frame is not None:
+            form_frame.grid_remove()
+        self._set_enroll_step(1)
+
+        cap_frame = ctk.CTkFrame(state["body"], fg_color="transparent")
+        cap_frame.grid(row=0, column=0, sticky="nsew")
+        cap_frame.grid_columnconfigure(0, weight=1)
+        cap_frame.grid_rowconfigure(1, weight=1)
+        state["capture_frame"] = cap_frame
+
+        ctk.CTkButton(
+            cap_frame, text="← Back to details", width=150, height=28,
+            corner_radius=CORNER_RADIUS, fg_color="transparent", hover_color=COLOR_BORDER,
+            text_color=COLOR_TEXT_MUTED, font=body_font(11),
+            command=lambda: self._enroll_back_to_form(state),
+        ).grid(row=0, column=0, sticky="w", padx=4, pady=(0, 4))
+
+        cam_card = CBVMSCard(cap_frame)
+        cam_card.grid(row=1, column=0)  # centered
+
+        # Fresh capture pass each time we enter this sub-step. The enroll capture uses a
+        # large preview (big=True) to fill the panel; the Update-Photo modal keeps defaults.
+        state["alive"] = True
+        state["step"] = 0
+        state["angle_frames"] = {}
+        self._build_capture_wizard(
+            cam_card, state, on_finish=self._finish_enroll, finish_text=_ENROLL_FINISH_TEXT,
+            preview_size=(520, 390), big=True,
+        )
+
+    def _enroll_back_to_form(self, state: dict) -> None:
+        """Return to the details form (values preserved), stopping the live camera loops."""
+        if state.get("capturing"):
+            return
+        state["alive"] = False
+        for job_key in ("job_tick", "job_detect"):
+            if state.get(job_key) is not None:
+                try:
+                    self.after_cancel(state[job_key])
+                except Exception:
+                    pass
+                state[job_key] = None
+        cap_frame = state.get("capture_frame")
+        if cap_frame is not None:
+            try:
+                cap_frame.destroy()
+            except Exception:
+                pass
+            state["capture_frame"] = None
+        self._set_enroll_step(0)
+        form_frame = state.get("form_frame")
+        if form_frame is not None:
+            form_frame.grid()
+        self._set_enroll_status("")
 
     def _clear_form(self) -> None:
         for entry in self._entries.values():
@@ -539,12 +754,23 @@ class EnrollmentPanel(ctk.CTkFrame):
     # Guided multi-angle capture wizard (shared by enroll + update)
     # ------------------------------------------------------------------
 
-    def _build_capture_wizard(self, card, state: dict, *, on_finish, finish_text: str) -> None:
+    def _build_capture_wizard(
+        self, card, state: dict, *, on_finish, finish_text: str,
+        preview_size: tuple[int, int] = (PREVIEW_WIDTH, PREVIEW_HEIGHT), big: bool = False,
+    ) -> None:
         """Build the 3-step front/left/right capture UI into `card`.
 
         `state` carries: modal, step, angle_frames, capturing, alive, widget refs.
         `on_finish(modal, state)` runs once all angles are captured/skipped.
+        `preview_size`/`big` scale the preview + controls (enroll uses a big preview; the
+        Update-Photo modal keeps the compact default).
         """
+        pw, ph = preview_size
+        state["preview_w"], state["preview_h"] = pw, ph
+        state["mirror"] = MirrorController()
+        pad = 16 if big else 12
+        csz = 38 if big else 30
+
         # Warm up the recognizer models (for the live "face detected" indicator) without
         # blocking the UI thread — has_face() returns False until this finishes.
         if self.recognizer is not None:
@@ -552,24 +778,31 @@ class EnrollmentPanel(ctk.CTkFrame):
 
         # Step indicator (3 circles + caption)
         ind = ctk.CTkFrame(card, fg_color="transparent")
-        ind.pack(fill="x", padx=12, pady=(12, 2))
+        ind.pack(fill="x", padx=pad, pady=(pad, 2))
         crow = ctk.CTkFrame(ind, fg_color="transparent")
         crow.pack()
         circles = []
         for i in range(3):
-            c = ctk.CTkLabel(crow, text=str(i + 1), width=30, height=30, corner_radius=15,
-                             fg_color=COLOR_BORDER, text_color=COLOR_TEXT_MUTED, font=body_font(13))
-            c.pack(side="left", padx=6)
+            c = ctk.CTkLabel(crow, text=str(i + 1), width=csz, height=csz, corner_radius=csz // 2,
+                             fg_color=COLOR_BORDER, text_color=COLOR_TEXT_MUTED,
+                             font=body_font(15 if big else 13))
+            c.pack(side="left", padx=8 if big else 6)
             circles.append(c)
-        step_caption = ctk.CTkLabel(ind, text="", font=body_font(12), text_color=COLOR_TEXT)
-        step_caption.pack(pady=(6, 0))
+        step_caption = ctk.CTkLabel(ind, text="", font=body_font(14 if big else 12),
+                                    text_color=COLOR_TEXT)
+        step_caption.pack(pady=(8 if big else 6, 0))
         state["circles"] = circles
         state["step_caption"] = step_caption
 
-        # Live preview canvas (pose-guide overlay drawn each tick)
-        canvas = tk.Canvas(card, width=PREVIEW_WIDTH, height=PREVIEW_HEIGHT,
+        # Live preview canvas (pose-guide overlay drawn each tick) with an overlaid mirror toggle.
+        cam_wrap = ctk.CTkFrame(card, fg_color="transparent")
+        cam_wrap.pack(padx=pad, pady=(8, 6))
+        canvas = tk.Canvas(cam_wrap, width=pw, height=ph,
                            bg=COLOR_BG, highlightthickness=0, borderwidth=0)
-        canvas.pack(padx=12, pady=(8, 6))
+        canvas.pack()
+        mirror_btn = make_mirror_button(cam_wrap, state["mirror"])
+        mirror_btn.place(in_=canvas, relx=1.0, x=-8, y=8, anchor="ne")
+        mirror_btn.lift()
         state["canvas"] = canvas
         state["canvas_item"] = None
         state["img"] = None
@@ -577,9 +810,10 @@ class EnrollmentPanel(ctk.CTkFrame):
         # Detection status (dot + text)
         srow = ctk.CTkFrame(card, fg_color="transparent")
         srow.pack(pady=(0, 6))
-        dot = ctk.CTkLabel(srow, text="●", font=body_font(14), text_color=COLOR_TEXT_MUTED)
+        dot = ctk.CTkLabel(srow, text="●", font=body_font(16 if big else 14),
+                           text_color=COLOR_TEXT_MUTED)
         dot.pack(side="left", padx=(0, 6))
-        det_status = ctk.CTkLabel(srow, text="Loading model…", font=body_font(12),
+        det_status = ctk.CTkLabel(srow, text="Loading model…", font=body_font(13 if big else 12),
                                   text_color=COLOR_TEXT_MUTED)
         det_status.pack(side="left")
         state["dot"] = dot
@@ -587,29 +821,31 @@ class EnrollmentPanel(ctk.CTkFrame):
 
         # Capture + skip
         cap_btn = ctk.CTkButton(
-            card, text="Capture This Angle", height=40, corner_radius=CORNER_RADIUS,
+            card, text="Capture This Angle", height=46 if big else 40, corner_radius=CORNER_RADIUS,
+            font=heading_font(14) if big else None,
             fg_color=COLOR_ACCENT, hover_color=COLOR_ACCENT_HOVER,
             command=lambda: self._wizard_capture(state, on_finish, finish_text),
         )
-        cap_btn.pack(fill="x", padx=12, pady=(2, 4))
+        cap_btn.pack(fill="x", padx=pad, pady=(2, 4))
         state["cap_btn"] = cap_btn
         skip_btn = ctk.CTkButton(
-            card, text="Skip this angle →", height=24, corner_radius=CORNER_RADIUS,
+            card, text="Skip this angle →", height=26 if big else 24, corner_radius=CORNER_RADIUS,
             fg_color="transparent", hover_color=COLOR_BORDER, text_color=COLOR_TEXT_MUTED,
-            font=body_font(11), command=lambda: self._wizard_skip(state, on_finish, finish_text),
+            font=body_font(12 if big else 11),
+            command=lambda: self._wizard_skip(state, on_finish, finish_text),
         )
-        skip_btn.pack(padx=12, pady=(0, 6))
+        skip_btn.pack(padx=pad, pady=(0, 6))
         state["skip_btn"] = skip_btn
 
         # Progress pills
         prow = ctk.CTkFrame(card, fg_color="transparent")
-        prow.pack(pady=(0, 10))
+        prow.pack(pady=(0, pad))
         pills = {}
         for key, _instr in _ANGLES:
-            p = ctk.CTkLabel(prow, text=f"{key.title()}: 0", font=body_font(11),
+            p = ctk.CTkLabel(prow, text=f"{key.title()}: 0", font=body_font(12 if big else 11),
                              text_color=COLOR_TEXT_MUTED, fg_color=COLOR_BG,
-                             corner_radius=999, padx=8, pady=2)
-            p.pack(side="left", padx=4)
+                             corner_radius=999, padx=10 if big else 8, pady=3 if big else 2)
+            p.pack(side="left", padx=5 if big else 4)
             pills[key] = p
         state["pills"] = pills
 
@@ -618,24 +854,35 @@ class EnrollmentPanel(ctk.CTkFrame):
         self._wizard_detect(state)
 
     @staticmethod
-    def _draw_pose_guide(disp, step: int):
-        """Draw a face-oval guide (+ direction arrow) onto the preview frame in place."""
+    def _draw_pose_guide(disp, step: int, mirror: bool = False):
+        """Draw a face-oval guide (+ direction arrow) onto the preview frame in place.
+
+        Scales to the frame size, and (when ``mirror``) flips the horizontal direction so the
+        guidance matches the mirrored (selfie) view the user sees."""
         h, w = disp.shape[:2]
         cx, cy = w // 2, h // 2
-        if step == 1:        # turn LEFT → guide oval shifts right
-            center = (cx + 30, cy)
-        elif step == 2:      # turn RIGHT → guide oval shifts left
-            center = (cx - 30, cy)
+        rx, ry = int(w * 0.19), int(h * 0.33)
+        off = int(w * 0.09)
+        fs = max(0.9, w / 320.0)
+        sign = -1 if mirror else 1
+        if step == 1:        # turn LEFT → guide oval shifts (mirror-aware)
+            center = (cx + sign * off, cy)
+        elif step == 2:      # turn RIGHT
+            center = (cx - sign * off, cy)
         else:
             center = (cx, cy)
-        cv2.ellipse(disp, center, (60, 80), 0, 0, 360, (255, 255, 255), 2)
+        cv2.ellipse(disp, center, (rx, ry), 0, 0, 360, (255, 255, 255), 2)
         # cv2 (Hershey) fonts are ASCII-only, so use "<-"/"->" for the arrows.
+        arrow = None
         if step == 1:
-            cv2.putText(disp, "<-", (cx - 95, cy + 8), cv2.FONT_HERSHEY_SIMPLEX,
-                        1.0, (255, 255, 255), 2, cv2.LINE_AA)
+            arrow = "->" if mirror else "<-"
         elif step == 2:
-            cv2.putText(disp, "->", (cx + 60, cy + 8), cv2.FONT_HERSHEY_SIMPLEX,
-                        1.0, (255, 255, 255), 2, cv2.LINE_AA)
+            arrow = "<-" if mirror else "->"
+        if arrow is not None:
+            left_side = (step == 1) != mirror
+            ax = (cx - rx - int(50 * fs)) if left_side else (cx + rx + int(10 * fs))
+            cv2.putText(disp, arrow, (ax, cy + 8), cv2.FONT_HERSHEY_SIMPLEX,
+                        fs, (255, 255, 255), 2, cv2.LINE_AA)
         return disp
 
     def _wizard_tick(self, state: dict) -> None:
@@ -644,8 +891,16 @@ class EnrollmentPanel(ctk.CTkFrame):
             return
         frame = self.get_frame()
         if frame is not None:
-            disp = cv2.resize(frame, (PREVIEW_WIDTH, PREVIEW_HEIGHT))
-            self._draw_pose_guide(disp, state["step"])
+            pw = state.get("preview_w", PREVIEW_WIDTH)
+            ph = state.get("preview_h", PREVIEW_HEIGHT)
+            disp = cv2.resize(frame, (pw, ph))
+            mctrl = state.get("mirror")
+            mir = mctrl.display_mirror() if mctrl is not None else False
+            if mir:
+                disp = cv2.flip(disp, 1)
+            self._draw_pose_guide(disp, state["step"], mirror=mir)
+            if mctrl is not None:
+                disp = mctrl.apply_anim(disp)
             rgb = np.ascontiguousarray(cv2.cvtColor(disp, cv2.COLOR_BGR2RGB))
             photo = ImageTk.PhotoImage(image=Image.fromarray(rgb), master=state["canvas"])
             state["img"] = photo

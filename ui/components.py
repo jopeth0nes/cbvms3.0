@@ -1,6 +1,10 @@
 """Reusable UI theme and widgets for CBVMS."""
 
+import time
+
 import customtkinter as ctk
+import cv2
+import numpy as np
 import tkinter as tk
 
 COLOR_BG = "#0F1117"
@@ -173,3 +177,96 @@ def _reposition_toasts(root) -> None:
             y -= h + 10
         except Exception:
             continue
+
+
+# ----------------------------------------------------------------------
+# Camera mirror toggle (display-only horizontal flip + card-flip animation)
+# ----------------------------------------------------------------------
+
+
+class MirrorController:
+    """Display-only horizontal-mirror toggle with a quick card-flip animation.
+
+    Mirroring is purely a viewing transform: a caller draws its overlays in screen space
+    using ``display_mirror()`` to pick the orientation, then passes the finished frame
+    through ``apply_anim()`` so the toggle animates. The frames fed to detection/recognition
+    or saved during capture are never touched — only what reaches the screen.
+    """
+
+    _DURATION = 0.22  # animation length in seconds
+
+    def __init__(self) -> None:
+        self.enabled = False
+        self._anim_start: float | None = None
+
+    def toggle(self) -> None:
+        self.enabled = not self.enabled
+        self._anim_start = time.monotonic()
+
+    def _progress(self) -> float | None:
+        """Animation progress in [0, 1), or None when idle (auto-clears when finished)."""
+        if self._anim_start is None:
+            return None
+        p = (time.monotonic() - self._anim_start) / self._DURATION
+        if p >= 1.0:
+            self._anim_start = None
+            return None
+        return p
+
+    def is_animating(self) -> bool:
+        return self._anim_start is not None
+
+    def display_mirror(self) -> bool:
+        """Orientation to DRAW this tick. During the flip, hold the old orientation until the
+        midpoint (when the squish reaches 0 width), then reveal the new one — a seamless swap."""
+        p = self._progress()
+        if p is None:
+            return self.enabled
+        return (not self.enabled) if p < 0.5 else self.enabled
+
+    def apply_anim(self, frame_bgr: "np.ndarray") -> "np.ndarray":
+        """Squish the frame horizontally toward 0 width at the flip midpoint (card-flip).
+        No-op when idle, so the steady-state render path pays nothing."""
+        p = self._progress()
+        if p is None or frame_bgr is None:
+            return frame_bgr
+        h, w = frame_bgr.shape[:2]
+        factor = abs(1.0 - 2.0 * p)            # 1 → 0 → 1 across the animation
+        new_w = max(1, int(round(w * factor)))
+        squished = cv2.resize(frame_bgr, (new_w, h), interpolation=cv2.INTER_LINEAR)
+        canvas = np.zeros((h, w, 3), dtype=frame_bgr.dtype)
+        x0 = (w - new_w) // 2
+        canvas[:, x0:x0 + new_w] = squished
+        return canvas
+
+
+def make_mirror_button(master, controller: MirrorController, on_toggle=None) -> ctk.CTkButton:
+    """A compact mirror-toggle pill meant to overlay a camera view (place it top-right).
+
+    Reflects + drives ``controller`` state: muted when off, accent when on, with a brief
+    flash on click for tactile feedback. The caller positions it with ``.place(...)``.
+    """
+    btn = ctk.CTkButton(
+        master, text="⇄  Mirror", width=104, height=30, corner_radius=CORNER_RADIUS,
+        fg_color=COLOR_SURFACE, hover_color=COLOR_BORDER, text_color=COLOR_TEXT_MUTED,
+        border_width=1, border_color=COLOR_BORDER, font=body_small_font(),
+    )
+
+    def _styled() -> None:
+        if controller.enabled:
+            btn.configure(fg_color=COLOR_ACCENT, hover_color=COLOR_ACCENT_HOVER,
+                          text_color=COLOR_TEXT, border_color=COLOR_ACCENT, text="⇄  Mirror On")
+        else:
+            btn.configure(fg_color=COLOR_SURFACE, hover_color=COLOR_BORDER,
+                          text_color=COLOR_TEXT_MUTED, border_color=COLOR_BORDER, text="⇄  Mirror")
+
+    def _click() -> None:
+        controller.toggle()
+        btn.configure(fg_color=COLOR_SAFE if controller.enabled else COLOR_BORDER)
+        btn.after(120, _styled)
+        if on_toggle is not None:
+            on_toggle()
+
+    btn.configure(command=_click)
+    _styled()
+    return btn

@@ -51,8 +51,10 @@ from ui.components import (
     body_font,
     body_small_font,
     heading_font,
+    make_mirror_button,
     panel_title_font,
     show_toast,
+    MirrorController,
 )
 
 FEED_FPS = 30
@@ -375,6 +377,13 @@ class CBVMSDashboard(ctk.CTk):
         # Camera feed — no fixed width/height; grid(sticky="nsew") controls size
         self.camera_feed = CameraFeed(self._live_frame, bg_color=COLOR_BG)
         self.camera_feed.grid(row=1, column=0, padx=10, pady=10, sticky="nsew")
+
+        # Display-only mirror toggle, overlaid in the feed's top-right corner. Flips only
+        # the shown pixels — detection/recognition still run on the un-mirrored frame.
+        self._mirror = MirrorController()
+        self._mirror_btn = make_mirror_button(self._live_frame, self._mirror)
+        self._mirror_btn.place(in_=self.camera_feed, relx=1.0, x=-14, y=14, anchor="ne")
+        self._mirror_btn.lift()
 
         status_bar = ctk.CTkFrame(
             self._live_frame, fg_color=COLOR_SURFACE,
@@ -1137,18 +1146,30 @@ class CBVMSDashboard(ctk.CTk):
         cv2.putText(out, text, (x + 3, y_baseline - 4),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1, cv2.LINE_AA)
 
-    def _annotate_frame(self, frame: np.ndarray) -> np.ndarray:
+    def _annotate_frame(self, frame: np.ndarray, mirror: bool = False) -> np.ndarray:
         """Draw a square + label per tracked face, plus orange torso/uniform overlays.
 
         Boxes come from the tracker (fast SCRFD positions, IoU-locked to one face each);
         identity/color/violation come from the recognizer once it has identified the track.
+
+        When ``mirror`` is set, the display frame is horizontally flipped and each box's
+        x-coordinates are mirrored (``x1, x2 = w - x2, w - x1``) so boxes still line up while
+        labels are drawn upright. The caller keeps feeding the un-mirrored ``frame`` to the
+        detection/recognition queues, so mirroring is display-only.
         """
         tracks = self._tracker.renderable()
+        out = cv2.flip(frame, 1) if mirror else frame
         if not tracks:
-            return frame
-        out = frame.copy()
+            return out
+        out = out.copy()
+        w = out.shape[1]
+
+        def _mx(x1: int, x2: int) -> tuple[int, int]:
+            return (w - x2, w - x1) if mirror else (x1, x2)
+
         for tr in tracks:
             x1, y1, x2, y2 = tr.box_int()
+            x1, x2 = _mx(x1, x2)
 
             # Not yet identified by the (slower) recognizer — neutral box, no premature label.
             if not tr.identified:
@@ -1174,6 +1195,7 @@ class CBVMSDashboard(ctk.CTk):
             torso_box = tr.torso_box
             if torso_box is not None:
                 tx1, ty1, tx2, ty2 = [int(v) for v in torso_box]
+                tx1, tx2 = _mx(tx1, tx2)
                 cv2.rectangle(out, (tx1, ty1), (tx2, ty2), ORANGE_BGR, 2)
                 if tr.uniform_label is not None:
                     conf = tr.uniform_conf
@@ -1251,9 +1273,9 @@ class CBVMSDashboard(ctk.CTk):
                                 self._last_recog_offer = _now
                             except queue.Full:
                                 pass
-                        # Annotate from the tracker and render
-                        annotated = self._annotate_frame(frame)
-                        self.camera_feed.render(annotated)
+                        # Annotate from the tracker and render (mirror is display-only).
+                        annotated = self._annotate_frame(frame, mirror=self._mirror.display_mirror())
+                        self.camera_feed.render(self._mirror.apply_anim(annotated))
                     else:
                         self.camera_feed.show_placeholder()
                 else:
