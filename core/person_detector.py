@@ -50,6 +50,35 @@ def skin_fraction(crop_bgr: np.ndarray) -> float:
     return float(int(skin.sum())) / float(n_body)
 
 
+def clamp_top_below_chin(
+    box: list[int] | None,
+    chin_y: int | float,
+    face_h: int | float,
+    frame_shape: tuple[int, ...],
+    *,
+    margin: float = 0.10,
+) -> list[int] | None:
+    """Force a torso box's TOP edge to sit below the chin (the hard face floor).
+
+    The top is pushed DOWN only — never up — to at least ``chin_y + margin*face_h`` (a small
+    margin below the chin to skip the neck). Because identity face detection is reliable every
+    frame, this makes it geometrically impossible for the crop to include the face at any
+    distance or pose. Returns a frame-clamped ``[x1,y1,x2,y2]``, or None if the result is
+    smaller than ``_MIN_CROP_PX`` or off-frame.
+    """
+    if box is None:
+        return None
+    x1, y1, x2, y2 = [int(v) for v in box]
+    H, W = int(frame_shape[0]), int(frame_shape[1])
+    floor_top = int(chin_y + margin * face_h)
+    y1 = max(y1, floor_top)                      # push the top DOWN only
+    x1, y1 = max(0, x1), max(0, y1)
+    x2, y2 = min(W, x2), min(H, y2)
+    if (x2 - x1) < _MIN_CROP_PX or (y2 - y1) < _MIN_CROP_PX:
+        return None
+    return [x1, y1, x2, y2]
+
+
 class PersonDetector:
     """Detects persons via YOLOv8n (COCO class 0); returns boxes by area desc.
 
@@ -258,15 +287,24 @@ class PersonDetector:
         frame_shape: tuple[int, ...],
         person_box: list[int] | None = None,
         *,
-        down: float = 2.6,
-        width_pad: float = 0.6,
+        down: float = 3.0,
+        top_margin: float = 0.10,
+        width_pad: float = 0.5,
     ) -> list[int] | None:
         """Chest/shirt box anchored to the detected face — the torso is directly below it.
 
-        Unlike a fixed fraction of the person box (which lands on the face in a close-up
-        shot where the body is cropped), anchoring to the face works for both close-up
-        and full-body framing. Width comes from the matched person box (shoulders) when
-        available, else from the face width. Returns [x1,y1,x2,y2] or None if too small.
+        Face-anthropometry: torso width and chest position scale reliably with head size, so
+        this tracks the chest at any distance. Unlike a fixed fraction of the person box (which
+        lands on the face in a close-up shot where the body is cropped), anchoring to the face
+        works for both close-up and full-body framing. Geometry:
+
+          * top    = chin + ``top_margin``*face_h   (margin below the chin, skips the neck)
+          * bottom = chin + ``down``*face_h          (~3x face-height down through the shirt)
+          * width  = matched person box (shoulders) when available, else ``3x`` the face width
+                     centred on the face — i.e. ``cx ± (1+width_pad)*face_w``.
+
+        Returns [x1,y1,x2,y2] or None if too small. This is the guaranteed fallback floor used
+        by :meth:`chest_region`.
         """
         fx1, fy1, fx2, fy2 = [int(v) for v in face_box]
         fw, fh = fx2 - fx1, fy2 - fy1
@@ -275,14 +313,14 @@ class PersonDetector:
         H, W = int(frame_shape[0]), int(frame_shape[1])
         cx = (fx1 + fx2) // 2
 
-        top = fy2                              # start at the chin
+        top = int(fy2 + top_margin * fh)       # margin below the chin (skip the neck)
         bottom = int(fy2 + down * fh)          # down through the shirt
         if person_box is not None:
             px1, py1, px2, py2 = [int(v) for v in person_box]
             left, right = px1, px2
             bottom = min(bottom, py2)           # never past the body
         else:
-            half = int(fw * (1.0 + width_pad))
+            half = int(fw * (1.0 + width_pad))  # total width = 3x face width centred on cx
             left, right = cx - half, cx + half
 
         left, top = max(0, left), max(0, top)
@@ -290,3 +328,51 @@ class PersonDetector:
         if (right - left) < _MIN_CROP_PX or (bottom - top) < _MIN_CROP_PX:
             return None
         return [left, top, right, bottom]
+
+    # ------------------------------------------------------------------
+    # Final chest region with a HARD face floor (single source of truth)
+    # ------------------------------------------------------------------
+
+    def chest_region(
+        self,
+        frame_bgr: np.ndarray,
+        face_box: list[int],
+        person_box: list[int] | None = None,
+    ) -> tuple[list[int] | None, str]:
+        """Final torso/chest region for uniform classification, clamped below the chin.
+
+        Identity face detection is reliable every frame, so the recognised face box anchors a
+        hard geometric floor: every candidate region has its TOP pushed below the chin
+        (:func:`clamp_top_below_chin`) before it can be used — the crop can never include the
+        face. Order of preference, all clamped:
+
+          (a)/(b) pose shoulders(+hips) box  [:meth:`pose_torso_box`, needs a person box;
+                  prefers the shoulder+hip quad, falls internally to a shoulder-width extent
+                  when the hips are off-frame] →
+          (c) face-anthropometry chest box   [:meth:`get_uniform_region`, works with no
+                  person box — the guaranteed floor].
+
+        Returns ``(region|None, method)`` with method in ``{'pose', 'face', 'none'}``. Pose
+        failing or clamping to nothing simply falls through to (c), which is almost always
+        available, so the box no longer drops in/out frame-to-frame.
+        """
+        if frame_bgr is None or frame_bgr.size == 0 or face_box is None:
+            return None, "none"
+        fx1, fy1, fx2, fy2 = [int(v) for v in face_box]
+        chin_y, face_h = fy2, (fy2 - fy1)
+        if face_h <= 0:
+            return None, "none"
+
+        # (a)/(b) pose — only when we can restrict pose to this person's box.
+        if person_box is not None:
+            pose = self.pose_torso_box(frame_bgr, person_box)
+            clamped = clamp_top_below_chin(pose, chin_y, face_h, frame_bgr.shape)
+            if clamped is not None:
+                return clamped, "pose"
+
+        # (c) face-derived chest box — guaranteed floor; works with or without a person box.
+        face_reg = self.get_uniform_region(face_box, frame_bgr.shape, person_box)
+        clamped = clamp_top_below_chin(face_reg, chin_y, face_h, frame_bgr.shape)
+        if clamped is not None:
+            return clamped, "face"
+        return None, "none"

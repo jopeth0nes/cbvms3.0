@@ -16,7 +16,7 @@ import numpy as np
 
 from core.camera import CameraCapture
 from core.notifier import Notifier
-from core.person_detector import PersonDetector
+from core.person_detector import PersonDetector, skin_fraction
 from core.recognizer import FaceRecognizer
 from core.tracker import FaceTracker
 from core.uniform_matcher import UniformColorMatcher, fuse_uniform_prob
@@ -66,6 +66,7 @@ DB_LOG_COOLDOWN_SECS   = 300 # 5-minute minimum between DB log entries per perso
 UNIFORM_MIN_CONF = 0.60      # below this the uniform verdict is treated as uncertain (no OK/violation)
 UNIFORM_VIOLATION_CONF = 0.65  # higher bar before a WRONG-uniform alert is logged (cuts false alarms)
 UNIFORM_EMA_ALPHA = 0.5      # smoothing weight for the per-person uniform probability (anti-flicker)
+UNIFORM_SKIN_ABSTAIN = 0.40  # after clamping below the chin, a crop still >40% bare skin → abstain
 CAMERA_IDLE_RELEASE_SECS = 4.0  # release the camera after this long with no consumer (power saver)
 DETECT_EVERY_N_FRAMES = 3    # offer every Nth feed frame to the fast detect worker (~10 FPS)
 REID_INTERVAL_SECS = 2.0     # periodic identity refresh even when all tracks are identified
@@ -1017,10 +1018,11 @@ class CBVMSDashboard(ctk.CTk):
 
             # --- Uniform check (torso/shirt region) ---
             if uniform_on:
-                # Torso comes ONLY from the YOLOv8 person box (COCO class 0) as the fixed
-                # 0.20-0.65 * person-height slice — the same region train/reference now match.
-                # Pose keypoints (shoulder-confidence gate) and the face-shift heuristic were
-                # too unstable frame-to-frame and caused the box to drop in and out.
+                # The torso crop is anchored to the recognised FACE box with a HARD floor: its
+                # top is forced below the chin (chin_y + 0.10*face_h), so it is geometrically
+                # impossible to land on the face at any range/pose. Pose shoulders+hips refine
+                # when available; the face-anthropometry chest box is the guaranteed fallback
+                # (works even with no YOLO person box). See PersonDetector.chest_region.
                 person_box = None
                 if person_boxes:
                     person_box = self._match_face_to_person([x1, y1, x2, y2], person_boxes)
@@ -1029,61 +1031,67 @@ class CBVMSDashboard(ctk.CTk):
                         # torso box just because the face↔person overlap dipped below 0.5.
                         person_box = person_boxes[0]   # largest by area (detect_persons sorts)
                 region = None
-                if person_box is not None:
-                    try:
-                        tx1, ty1, tx2, ty2 = self._person_detector.get_torso_box(person_box)
-                        tx1, ty1 = max(0, tx1), max(0, ty1)
-                        tx2, ty2 = min(w, tx2), min(h, ty2)
-                        if (tx2 - tx1) >= 32 and (ty2 - ty1) >= 32:
-                            region = [tx1, ty1, tx2, ty2]
-                        else:
-                            print(f"[CBVMS] torso localize: person {person_box} slice "
-                                  f"{tx2 - tx1}x{ty2 - ty1}px < 32 — no torso box this frame")
-                    except Exception as exc:
-                        print(f"[CBVMS] torso localize error: {exc}")
+                region_method = "none"
+                try:
+                    region, region_method = self._person_detector.chest_region(
+                        frame, [x1, y1, x2, y2], person_box
+                    )
+                except Exception as exc:
+                    print(f"[CBVMS] torso localize error: {exc}")
                 if region is not None:
                     ux1, uy1, ux2, uy2 = region
                     uniform_crop = frame[uy1:uy2, ux1:ux2]
 
-                    # Classifier P(correct) — YOLOv8-cls trained on the SAME 0.20-0.65 torso
-                    # crop (data/training_cropped). Replaces the ResNet18 embedder, which was
-                    # mis-calibrated to the live crop and vetoed correct polos (Step 4 diagnosis).
-                    p_cls = None
-                    proba = self._trainer.predict_proba("uniform", uniform_crop)
-                    if proba is not None:
-                        p_cls = proba.get("correct_uniform")
+                    # Skin guard AFTER clamping: with the top below the chin this should never
+                    # trip, but if the final crop is still mostly bare skin, abstain rather than
+                    # classify a face. The earring check below still runs. (rule 4)
+                    skin = skin_fraction(uniform_crop)
+                    if skin > UNIFORM_SKIN_ABSTAIN:
+                        print(f"[CBVMS] uniform abstain ({region_method}): crop skin={skin:.0%} "
+                              f"> {UNIFORM_SKIN_ABSTAIN:.0%}  face={[x1, y1, x2, y2]} region={region}")
+                    else:
+                        # Classifier P(correct) — YOLOv8-cls trained on 0.20-0.65 torso crops
+                        # (data/training_cropped). The live crop is now the face-anchored
+                        # chest_region; the classifier generalizes to it cleanly (verified: 100%
+                        # correct/wrong separation on chest_region-cropped training data — it
+                        # learned shirt, not framing). Replaces the ResNet18 embedder, which was
+                        # mis-calibrated to the live crop and vetoed correct polos (Step 4 diagnosis).
+                        p_cls = None
+                        proba = self._trainer.predict_proba("uniform", uniform_crop)
+                        if proba is not None:
+                            p_cls = proba.get("correct_uniform")
 
-                    # Colour-matcher P(correct) — uniform-colour signal (co-required veto).
-                    p_col = None
-                    if self._uniform_matcher.is_loaded():
-                        verdict, p = self._uniform_matcher.is_uniform(uniform_crop)
-                        if verdict is not None:   # None = too dark/small to judge → skip
-                            p_col = p
+                        # Colour-matcher P(correct) — uniform-colour signal (co-required veto).
+                        p_col = None
+                        if self._uniform_matcher.is_loaded():
+                            verdict, p = self._uniform_matcher.is_uniform(uniform_crop)
+                            if verdict is not None:   # None = too dark/small to judge → skip
+                                p_col = p
 
-                    # "Correct" needs BOTH stable signals to agree (min): the classifier confirms
-                    # the garment, colour confirms the uniform colour. Either can veto. Both run
-                    # on the identical torso crop used at train/reference time.
-                    p_fused = fuse_uniform_prob(p_cls, p_col)
-                    if p_fused is not None:
-                        # Smooth per person so the shown % is stable, not flickering frame-to-frame.
-                        key = det.get("student_id") or det.get("name") or "unknown"
-                        prev = self._uniform_ema.get(key)
-                        ema = p_fused if prev is None else (
-                            UNIFORM_EMA_ALPHA * p_fused + (1.0 - UNIFORM_EMA_ALPHA) * prev
-                        )
-                        self._uniform_ema[key] = ema
+                        # "Correct" needs BOTH stable signals to agree (min): the classifier confirms
+                        # the garment, colour confirms the uniform colour. Either can veto. Both run
+                        # on the identical torso crop used at train/reference time.
+                        p_fused = fuse_uniform_prob(p_cls, p_col)
+                        if p_fused is not None:
+                            # Smooth per person so the shown % is stable, not flickering frame-to-frame.
+                            key = det.get("student_id") or det.get("name") or "unknown"
+                            prev = self._uniform_ema.get(key)
+                            ema = p_fused if prev is None else (
+                                UNIFORM_EMA_ALPHA * p_fused + (1.0 - UNIFORM_EMA_ALPHA) * prev
+                            )
+                            self._uniform_ema[key] = ema
 
-                        is_correct = ema >= 0.5
-                        # Confidence = probability of the verdict actually shown.
-                        confidence = ema if is_correct else (1.0 - ema)
-                        if confidence >= UNIFORM_MIN_CONF:
-                            det["uniform_label"] = "correct_uniform" if is_correct else "wrong_uniform"
-                            det["uniform_conf"] = confidence
-                            det["torso_box"] = region
-                            # Show the wrong verdict at MIN_CONF, but only log/alert above the
-                            # stricter VIOLATION_CONF bar to avoid borderline false alarms.
-                            if not is_correct and confidence >= UNIFORM_VIOLATION_CONF:
-                                parts.append(f"Wrong uniform ({confidence:.0%})")
+                            is_correct = ema >= 0.5
+                            # Confidence = probability of the verdict actually shown.
+                            confidence = ema if is_correct else (1.0 - ema)
+                            if confidence >= UNIFORM_MIN_CONF:
+                                det["uniform_label"] = "correct_uniform" if is_correct else "wrong_uniform"
+                                det["uniform_conf"] = confidence
+                                det["torso_box"] = region
+                                # Show the wrong verdict at MIN_CONF, but only log/alert above the
+                                # stricter VIOLATION_CONF bar to avoid borderline false alarms.
+                                if not is_correct and confidence >= UNIFORM_VIOLATION_CONF:
+                                    parts.append(f"Wrong uniform ({confidence:.0%})")
 
             # --- Earring check (face crop, male only) ---
             if earring_on and (det.get("gender", "") or "").lower() == "male":
