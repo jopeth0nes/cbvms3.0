@@ -16,9 +16,17 @@ background workers post results via after(0)), so no locking is required.
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass, field
 
 import numpy as np
+
+# Uniform-verdict temporal smoothing (anti-flicker). The displayed correct/wrong label only
+# flips when at least M of the last N recognition cycles agree; otherwise the previous stable
+# verdict is held. The torso box is held for a few cycles when localization briefly misses.
+UNIFORM_BUF_N = 7        # rolling window of recent per-cycle uniform verdicts
+UNIFORM_BUF_M = 5        # agreeing verdicts in the window required to flip the shown label
+TORSO_COAST_MAX = 3      # recognition cycles to keep the last torso box when localization misses
 
 
 def _iou(a: list[float], b: list[float]) -> float:
@@ -55,12 +63,38 @@ class Track:
 
     # Violation overlay (set on the recognition path)
     violation: str | None = None
-    uniform_label: str | None = None
+    uniform_label: str | None = None       # raw latest-cycle verdict (debug/reference)
     uniform_conf: float = 0.0
     torso_box: list[int] | None = None
 
+    # Smoothed uniform verdict shown in the UI (see FaceTracker.assign_identities).
+    uniform_buf: deque = field(default_factory=lambda: deque(maxlen=UNIFORM_BUF_N))
+    stable_uniform_label: str | None = None
+    stable_uniform_conf: float = 0.0
+    torso_coast: int = 0                    # cycles the torso box has been held without a new one
+
     def box_int(self) -> list[int]:
         return [int(round(v)) for v in self.box]
+
+    def _update_stable_uniform(self) -> None:
+        """Flip the displayed uniform verdict only when >= M of the last N cycles agree;
+        otherwise hold the previous stable verdict. Seeds the first verdict so a freshly
+        seen person shows a label before the window fills. Confidence = mean of agreeing cycles."""
+        labels = [lbl for lbl, _ in self.uniform_buf
+                  if lbl in ("correct_uniform", "wrong_uniform")]
+        if not labels:
+            return
+        for cand in ("wrong_uniform", "correct_uniform"):
+            if labels.count(cand) >= UNIFORM_BUF_M:
+                confs = [c for lbl, c in self.uniform_buf if lbl == cand]
+                self.stable_uniform_label = cand
+                self.stable_uniform_conf = float(sum(confs) / len(confs)) if confs else 0.0
+                return
+        if self.stable_uniform_label is None:   # nothing stable yet → seed with newest verdict
+            seed = labels[-1]
+            confs = [c for lbl, c in self.uniform_buf if lbl == seed]
+            self.stable_uniform_label = seed
+            self.stable_uniform_conf = float(sum(confs) / len(confs)) if confs else 0.0
 
 
 class FaceTracker:
@@ -167,9 +201,28 @@ class FaceTracker:
             tr.gender = r.get("gender", "—") or "—"
             tr.matched = bool(r.get("matched", False))
             tr.violation = r.get("violation")
-            tr.uniform_label = r.get("uniform_label")
-            tr.uniform_conf = float(r.get("uniform_conf", 0.0) or 0.0)
-            tr.torso_box = r.get("torso_box")
+
+            # Uniform smoothing only on the enriched recognition path (the fast identity-only
+            # path has no "uniform_label" key, so it must not push empty verdicts or clear the
+            # held torso box).
+            if "uniform_label" in r:
+                raw_label = r.get("uniform_label")
+                tr.uniform_label = raw_label
+                tr.uniform_conf = float(r.get("uniform_conf", 0.0) or 0.0)
+                tr.uniform_buf.append((raw_label, tr.uniform_conf))
+                tr._update_stable_uniform()
+
+                # Torso box hold/coast: accept a fresh box; otherwise keep the last one for a
+                # few cycles so a single localization miss doesn't make the box disappear.
+                new_box = r.get("torso_box")
+                if new_box is not None:
+                    tr.torso_box = [int(v) for v in new_box]
+                    tr.torso_coast = 0
+                elif tr.torso_box is not None:
+                    tr.torso_coast += 1
+                    if tr.torso_coast > TORSO_COAST_MAX:
+                        tr.torso_box = None
+                        tr.torso_coast = 0
 
     # ------------------------------------------------------------------
     # Queries

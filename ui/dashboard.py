@@ -896,22 +896,17 @@ class CBVMSDashboard(ctk.CTk):
                     self._trainer._get_model(module)
             except Exception:
                 pass
-        # Build the uniform reference from the correct-uniform photos when missing or the photo
-        # count changed (runs on this background thread; both are cached to disk afterwards):
-        #   - colour matcher: dominant-hue calibration (fast, cv2 only)
-        #   - embedding matcher: pretrained-ResNet18 prototype fingerprint (slower first build,
-        #     then loads instantly from models/uniform_embed_ref.npz)
+        # Build the uniform COLOUR reference from the inference-matched torso crops
+        # (data/training_cropped via _source_label_dir) so the hue is learned from the shirt,
+        # not the scene background. The live verdict is classifier AND colour (min); the
+        # ResNet18 embedder was dropped — Step 4 showed it vetoed correctly-worn polos — so it
+        # is no longer built here.
         try:
-            correct_dir = self._trainer.label_dir("uniform", "correct_uniform")
-            wrong_dir = self._trainer.label_dir("uniform", "wrong_uniform")
+            correct_dir = self._trainer._source_label_dir("uniform", "correct_uniform")
             n_have = len(list(correct_dir.glob("*.jpg"))) if correct_dir.exists() else 0
             if n_have >= 1 and (not self._uniform_matcher.is_loaded()
                                 or self._uniform_matcher.sample_count != n_have):
                 self._uniform_matcher.build_from_dir(correct_dir)
-            if n_have >= 1 and (not self._uniform_embed.is_loaded()
-                                or self._uniform_embed.sample_count != n_have):
-                self._uniform_embed.build_from_dir(
-                    correct_dir, wrong_dir if wrong_dir.exists() else None)
         except Exception as exc:
             print(f"[CBVMS] uniform reference build failed: {exc}")
         # Warm the pose model so the first live uniform check doesn't stall on download/load.
@@ -998,7 +993,7 @@ class CBVMSDashboard(ctk.CTk):
         uniform_on = (
             self._person_detector is not None
             and self._checker.check_uniform
-            and (self._uniform_embed.is_loaded() or self._uniform_matcher.is_loaded())
+            and (self._trainer.is_trained("uniform") or self._uniform_matcher.is_loaded())
         )
         if uniform_on and any(d.get("matched") for d in detections):
             person_boxes = self._person_detector.detect_persons(frame)
@@ -1022,37 +1017,41 @@ class CBVMSDashboard(ctk.CTk):
 
             # --- Uniform check (torso/shirt region) ---
             if uniform_on:
+                # Torso comes ONLY from the YOLOv8 person box (COCO class 0) as the fixed
+                # 0.20-0.65 * person-height slice — the same region train/reference now match.
+                # Pose keypoints (shoulder-confidence gate) and the face-shift heuristic were
+                # too unstable frame-to-frame and caused the box to drop in and out.
                 person_box = None
                 if person_boxes:
                     person_box = self._match_face_to_person([x1, y1, x2, y2], person_boxes)
-                # Prefer the POSE-anchored torso (shoulders+hips) — the SAME region the uniform
-                # fingerprint is built from, stable across pose/arms. Fall back to the person-box
-                # torso slice, then the face-anchored region, when pose/person detection misses.
+                    if person_box is None:
+                        # Single-subject entrance: a clearly-visible person must not lose the
+                        # torso box just because the face↔person overlap dipped below 0.5.
+                        person_box = person_boxes[0]   # largest by area (detect_persons sorts)
                 region = None
                 if person_box is not None:
-                    region = self._person_detector.pose_torso_box(frame, person_box)
-                    if region is None:
+                    try:
                         tx1, ty1, tx2, ty2 = self._person_detector.get_torso_box(person_box)
                         tx1, ty1 = max(0, tx1), max(0, ty1)
                         tx2, ty2 = min(w, tx2), min(h, ty2)
                         if (tx2 - tx1) >= 32 and (ty2 - ty1) >= 32:
                             region = [tx1, ty1, tx2, ty2]
-                if region is None:
-                    region = self._person_detector.get_uniform_region(
-                        [x1, y1, x2, y2], frame.shape, person_box
-                    )
+                        else:
+                            print(f"[CBVMS] torso localize: person {person_box} slice "
+                                  f"{tx2 - tx1}x{ty2 - ty1}px < 32 — no torso box this frame")
+                    except Exception as exc:
+                        print(f"[CBVMS] torso localize error: {exc}")
                 if region is not None:
                     ux1, uy1, ux2, uy2 = region
                     uniform_crop = frame[uy1:uy2, ux1:ux2]
 
-                    # Embedding P(correct) — pretrained-ResNet18 garment fingerprint match.
-                    # Generalises from the correct-uniform photos (unlike the from-scratch
-                    # classifier) and catches same-colour wrong styles.
-                    p_embed = None
-                    if self._uniform_embed.is_loaded():
-                        verdict, p = self._uniform_embed.prob_correct(uniform_crop)
-                        if verdict is not None:   # None = too small / backbone missing → skip
-                            p_embed = p
+                    # Classifier P(correct) — YOLOv8-cls trained on the SAME 0.20-0.65 torso
+                    # crop (data/training_cropped). Replaces the ResNet18 embedder, which was
+                    # mis-calibrated to the live crop and vetoed correct polos (Step 4 diagnosis).
+                    p_cls = None
+                    proba = self._trainer.predict_proba("uniform", uniform_crop)
+                    if proba is not None:
+                        p_cls = proba.get("correct_uniform")
 
                     # Colour-matcher P(correct) — uniform-colour signal (co-required veto).
                     p_col = None
@@ -1061,9 +1060,10 @@ class CBVMSDashboard(ctk.CTk):
                         if verdict is not None:   # None = too dark/small to judge → skip
                             p_col = p
 
-                    # "Correct" needs BOTH to agree (min): colour confirms the uniform colour,
-                    # the embedding confirms the garment. Either can veto a non-uniform.
-                    p_fused = fuse_uniform_prob(p_embed, p_col)
+                    # "Correct" needs BOTH stable signals to agree (min): the classifier confirms
+                    # the garment, colour confirms the uniform colour. Either can veto. Both run
+                    # on the identical torso crop used at train/reference time.
+                    p_fused = fuse_uniform_prob(p_cls, p_col)
                     if p_fused is not None:
                         # Smooth per person so the shown % is stable, not flickering frame-to-frame.
                         key = det.get("student_id") or det.get("name") or "unknown"
@@ -1234,7 +1234,12 @@ class CBVMSDashboard(ctk.CTk):
                 continue
 
             matched = tr.matched
-            has_violation = bool(tr.violation)
+            # Face colour follows the SMOOTHED uniform verdict (not the raw per-cycle one) so it
+            # can't flicker red/green out of sync with the torso label. Non-uniform violations
+            # (e.g. earring) still come from the raw violation string.
+            uniform_wrong = (tr.stable_uniform_label == "wrong_uniform")
+            other_violation = bool(tr.violation) and "uniform" not in (tr.violation or "").lower()
+            has_violation = uniform_wrong or other_violation
 
             # Face box: green (OK) / red (violation) / blue (unknown)
             if not matched:
@@ -1252,9 +1257,9 @@ class CBVMSDashboard(ctk.CTk):
                 tx1, ty1, tx2, ty2 = [int(v) for v in torso_box]
                 tx1, tx2 = _mx(tx1, tx2)
                 cv2.rectangle(out, (tx1, ty1), (tx2, ty2), ORANGE_BGR, 2)
-                if tr.uniform_label is not None:
-                    conf = tr.uniform_conf
-                    if tr.uniform_label == "wrong_uniform":
+                if tr.stable_uniform_label is not None:
+                    conf = tr.stable_uniform_conf
+                    if tr.stable_uniform_label == "wrong_uniform":
                         tag = f"X Wrong uniform {conf:.0%}"
                     else:
                         tag = f"OK Uniform {conf:.0%}"

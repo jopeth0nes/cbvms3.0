@@ -32,7 +32,10 @@ class PersonDetector:
 
     _MODEL_PATH = "yolov8n.pt"        # auto-downloads if missing
     _POSE_MODEL_PATH = "yolov8n-pose.pt"  # auto-downloads once (~6 MB)
-    _CONF = 0.40
+    # Lowered 0.40 -> 0.25 so a clearly-visible upright entrant isn't dropped frame-to-frame
+    # (the live torso box must be present on every frame a person is visible). 0.25 is a
+    # standard YOLO confidence floor; IoU/NMS unchanged so duplicate boxes are still merged.
+    _CONF = 0.25
     _IOU = 0.50
 
     def __init__(self) -> None:
