@@ -7,6 +7,7 @@ model on first use. CPU only. No new dependencies (ultralytics already present).
 
 from __future__ import annotations
 
+import cv2
 import numpy as np
 
 # Vertical slice of the person box used as the torso (fractions of body height).
@@ -21,6 +22,32 @@ _POSE_MIN_PX = 60
 _KP_L_SHOULDER, _KP_R_SHOULDER = 5, 6
 _KP_L_HIP, _KP_R_HIP = 11, 12
 _KP_CONF_MIN = 0.30
+
+# Bare-skin HSV band for the "can't judge" guard — flags a crop that has drifted onto the
+# face/neck instead of the shirt. OpenCV HSV: H 0-179, S/V 0-255. The band is deliberately
+# tight around skin hues so a coloured polo is not mistaken for skin.
+_SKIN_HSV_LO = (0, 30, 60)
+_SKIN_HSV_HI = (25, 170, 255)
+_SKIN_FRAC_MAX = 0.55    # crop with > this fraction of skin pixels is "mostly skin" → abstain
+
+
+def skin_fraction(crop_bgr: np.ndarray) -> float:
+    """Fraction (0..1) of a BGR crop that is bare-skin coloured.
+
+    Used by the uniform abstain guard: a torso crop that has slipped onto the face/neck reads
+    as predominantly skin. The denominator is the usable body pixels (not black/blown) so a
+    dark background can't dilute the ratio. Returns 0.0 when there is too little to judge.
+    """
+    if crop_bgr is None or crop_bgr.size == 0:
+        return 0.0
+    hsv = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2HSV)
+    V = hsv[..., 2]
+    body = (V >= 35) & (V <= 250)
+    n_body = int(body.sum())
+    if n_body < 50:
+        return 0.0
+    skin = (cv2.inRange(hsv, _SKIN_HSV_LO, _SKIN_HSV_HI) > 0) & body
+    return float(int(skin.sum())) / float(n_body)
 
 
 class PersonDetector:
