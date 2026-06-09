@@ -20,6 +20,11 @@ ROOT = Path(__file__).resolve().parents[1]
 TRAIN_DIR = ROOT / "data" / "training"
 PREPARED_DIR = ROOT / "data" / "training_prepared"
 RUNS_DIR = ROOT / "data" / "runs"
+# Torso-cropped mirror of TRAIN_DIR produced by scripts/crop_torsos.py. When present,
+# training/eval read from here so the model sees the SAME torso region as inference
+# (fixes full-frame-train vs torso-crop-infer). Raw uploads in TRAIN_DIR are untouched —
+# the UI keeps adding/counting full frames there.
+CROPPED_DIR = ROOT / "data" / "training_cropped"
 
 MODULES: dict[str, dict] = {
     "uniform": {
@@ -76,6 +81,15 @@ class ViolationTrainer:
 
     @staticmethod
     def label_dir(module: str, label: str) -> Path:
+        return TRAIN_DIR / module / label
+
+    @staticmethod
+    def _source_label_dir(module: str, label: str) -> Path:
+        """Train/eval source: prefer inference-matched torso crops (CROPPED_DIR) over the
+        raw full-frame uploads; fall back to TRAIN_DIR when the crop mirror isn't built."""
+        cropped = CROPPED_DIR / module / label
+        if cropped.exists() and any(cropped.glob("*.jpg")):
+            return cropped
         return TRAIN_DIR / module / label
 
     # ------------------------------------------------------------------
@@ -179,7 +193,7 @@ class ViolationTrainer:
         train_by_label: dict[str, list[Path]] = {}
         val_by_label: dict[str, list[Path]] = {}
         for label in MODULES[module]["labels"]:
-            files = list(self.label_dir(module, label).glob("*.jpg"))
+            files = list(self._source_label_dir(module, label).glob("*.jpg"))
             if not files:
                 continue
             train, val = self._split_label_files(files)
@@ -408,7 +422,7 @@ class ViolationTrainer:
         # Fallback: reconstruct the same deterministic split _prepare_split uses.
         out = {}
         for lbl in labels:
-            _, val = self._split_label_files(list(self.label_dir(module, lbl).glob("*.jpg")))
+            _, val = self._split_label_files(list(self._source_label_dir(module, lbl).glob("*.jpg")))
             out[lbl] = val
         return out
 
