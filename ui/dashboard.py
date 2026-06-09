@@ -19,7 +19,8 @@ from core.notifier import Notifier
 from core.person_detector import PersonDetector
 from core.recognizer import FaceRecognizer
 from core.tracker import FaceTracker
-from core.uniform_matcher import UniformColorMatcher
+from core.uniform_matcher import UniformColorMatcher, fuse_uniform_prob
+from core.uniform_embedder import UniformEmbedMatcher
 from core.trainer import ViolationTrainer
 from core.violation_engine import LiveViolationChecker
 from database.db_manager import CBVMSDatabase
@@ -63,6 +64,8 @@ PRESENCE_TIMEOUT_SECS = 30   # seconds absent from frame before re-appearance tr
 DB_LOG_COOLDOWN_SECS   = 300 # 5-minute minimum between DB log entries per person
 
 UNIFORM_MIN_CONF = 0.60      # below this the uniform verdict is treated as uncertain (no OK/violation)
+UNIFORM_VIOLATION_CONF = 0.65  # higher bar before a WRONG-uniform alert is logged (cuts false alarms)
+UNIFORM_EMA_ALPHA = 0.5      # smoothing weight for the per-person uniform probability (anti-flicker)
 CAMERA_IDLE_RELEASE_SECS = 4.0  # release the camera after this long with no consumer (power saver)
 DETECT_EVERY_N_FRAMES = 3    # offer every Nth feed frame to the fast detect worker (~10 FPS)
 REID_INTERVAL_SECS = 2.0     # periodic identity refresh even when all tracks are identified
@@ -149,9 +152,11 @@ class CBVMSDashboard(ctk.CTk):
                 print(f"[CBVMS] PersonDetector init failed: {exc}")
                 self._person_detector = None
 
-        # One-class uniform colour check — the authoritative uniform verdict (the binary
-        # classifier degenerates on the abundant-correct / scarce-wrong dataset).
+        # Uniform verdict = pretrained-embedding match (garment fingerprint) AND colour match.
+        # Both generalise from the correct-uniform photos; the from-scratch YOLO classifier
+        # degenerated on the abundant-correct / scarce-wrong dataset and is no longer used live.
         self._uniform_matcher = UniformColorMatcher()
+        self._uniform_embed = UniformEmbedMatcher()
 
         # Detect-and-track pipeline. Two background workers feed a UI-owned tracker:
         #   • detect worker — fast SCRFD-only boxes (~52ms) every couple of frames,
@@ -192,6 +197,7 @@ class CBVMSDashboard(ctk.CTk):
         # Separate DB-write cooldown (much longer than UI presence timeout)
         # Prevents rapid re-logging of the same person making deletes appear to do nothing
         self._db_log_cooldowns: dict[str, float] = {}  # identity_key → last_logged_epoch
+        self._uniform_ema: dict[str, float] = {}       # identity_key → smoothed P(correct uniform)
 
         self._enrollment_panel: EnrollmentPanel | None = None
         self._violation_panel: ViolationLogPanel | None = None
@@ -431,9 +437,11 @@ class CBVMSDashboard(ctk.CTk):
             self._view_host,
             database=self._database,
             recognizer=self._recognizer,
-            violation_engine=None,
             username=self.username,
-            get_detector_loaded=lambda: False,
+            get_detector_loaded=lambda: (
+                self._person_detector is not None
+                and getattr(self._person_detector, "_model", None) is not None
+            ),
             apply_camera_settings=self._apply_camera_settings,
             on_camera_source_connected=self._on_camera_source_connected,
             trainer=self._trainer,
@@ -574,6 +582,8 @@ class CBVMSDashboard(ctk.CTk):
 
         if previous_nav == "enrollment" and self._enrollment_panel is not None:
             self._enrollment_panel.on_hide()
+        if previous_nav == "training" and self._training_panel is not None:
+            self._training_panel.on_hide()
 
         titles = {
             "live":       "Live Monitor",
@@ -594,6 +604,8 @@ class CBVMSDashboard(ctk.CTk):
             self._view_host.tkraise()
             if key == "enrollment" and self._enrollment_panel is not None:
                 self._enrollment_panel.on_show()
+            if key == "training" and self._training_panel is not None:
+                self._training_panel.on_show()
             if key == "violations" and self._violation_panel is not None:
                 self._violation_panel.refresh()
             if key == "records" and self._records_panel is not None:
@@ -884,16 +896,30 @@ class CBVMSDashboard(ctk.CTk):
                     self._trainer._get_model(module)
             except Exception:
                 pass
-        # Calibrate the one-class uniform colour reference from the correct-uniform photos
-        # if it's missing or the photo count changed (no retrain / "wrong" photos needed).
+        # Build the uniform reference from the correct-uniform photos when missing or the photo
+        # count changed (runs on this background thread; both are cached to disk afterwards):
+        #   - colour matcher: dominant-hue calibration (fast, cv2 only)
+        #   - embedding matcher: pretrained-ResNet18 prototype fingerprint (slower first build,
+        #     then loads instantly from models/uniform_embed_ref.npz)
         try:
             correct_dir = self._trainer.label_dir("uniform", "correct_uniform")
+            wrong_dir = self._trainer.label_dir("uniform", "wrong_uniform")
             n_have = len(list(correct_dir.glob("*.jpg"))) if correct_dir.exists() else 0
             if n_have >= 1 and (not self._uniform_matcher.is_loaded()
                                 or self._uniform_matcher.sample_count != n_have):
                 self._uniform_matcher.build_from_dir(correct_dir)
+            if n_have >= 1 and (not self._uniform_embed.is_loaded()
+                                or self._uniform_embed.sample_count != n_have):
+                self._uniform_embed.build_from_dir(
+                    correct_dir, wrong_dir if wrong_dir.exists() else None)
         except Exception as exc:
-            print(f"[CBVMS] uniform colour calibration failed: {exc}")
+            print(f"[CBVMS] uniform reference build failed: {exc}")
+        # Warm the pose model so the first live uniform check doesn't stall on download/load.
+        try:
+            if self._person_detector is not None:
+                self._person_detector._ensure_pose_model()
+        except Exception:
+            pass
 
     def _detect_worker_loop(self) -> None:
         """Background thread: fast SCRFD-only detection → fresh boxes for the tracker.
@@ -972,7 +998,7 @@ class CBVMSDashboard(ctk.CTk):
         uniform_on = (
             self._person_detector is not None
             and self._checker.check_uniform
-            and (self._uniform_matcher.is_loaded() or self._trainer.is_trained("uniform"))
+            and (self._uniform_embed.is_loaded() or self._uniform_matcher.is_loaded())
         )
         if uniform_on and any(d.get("matched") for d in detections):
             person_boxes = self._person_detector.detect_persons(frame)
@@ -994,41 +1020,70 @@ class CBVMSDashboard(ctk.CTk):
             parts: list[str] = []
             person_box = None
 
-            # --- Uniform check (chest region anchored to the face, not person-box %) ---
+            # --- Uniform check (torso/shirt region) ---
             if uniform_on:
                 person_box = None
                 if person_boxes:
                     person_box = self._match_face_to_person([x1, y1, x2, y2], person_boxes)
-                # get_uniform_region works even without a person box (falls back to face
-                # width), so the check runs even when YOLO person detection fails.
-                region = self._person_detector.get_uniform_region(
-                    [x1, y1, x2, y2], frame.shape, person_box
-                )
+                # Prefer the POSE-anchored torso (shoulders+hips) — the SAME region the uniform
+                # fingerprint is built from, stable across pose/arms. Fall back to the person-box
+                # torso slice, then the face-anchored region, when pose/person detection misses.
+                region = None
+                if person_box is not None:
+                    region = self._person_detector.pose_torso_box(frame, person_box)
+                    if region is None:
+                        tx1, ty1, tx2, ty2 = self._person_detector.get_torso_box(person_box)
+                        tx1, ty1 = max(0, tx1), max(0, ty1)
+                        tx2, ty2 = min(w, tx2), min(h, ty2)
+                        if (tx2 - tx1) >= 32 and (ty2 - ty1) >= 32:
+                            region = [tx1, ty1, tx2, ty2]
+                if region is None:
+                    region = self._person_detector.get_uniform_region(
+                        [x1, y1, x2, y2], frame.shape, person_box
+                    )
                 if region is not None:
                     ux1, uy1, ux2, uy2 = region
                     uniform_crop = frame[uy1:uy2, ux1:ux2]
+
+                    # Embedding P(correct) — pretrained-ResNet18 garment fingerprint match.
+                    # Generalises from the correct-uniform photos (unlike the from-scratch
+                    # classifier) and catches same-colour wrong styles.
+                    p_embed = None
+                    if self._uniform_embed.is_loaded():
+                        verdict, p = self._uniform_embed.prob_correct(uniform_crop)
+                        if verdict is not None:   # None = too small / backbone missing → skip
+                            p_embed = p
+
+                    # Colour-matcher P(correct) — uniform-colour signal (co-required veto).
+                    p_col = None
                     if self._uniform_matcher.is_loaded():
-                        # Authoritative one-class colour check (no degenerate classifier).
-                        verdict, conf = self._uniform_matcher.is_uniform(uniform_crop)
-                        if verdict is not None:   # None = too dark/small to judge → neutral
-                            det["uniform_label"] = "correct_uniform" if verdict else "wrong_uniform"
-                            det["uniform_conf"] = conf
+                        verdict, p = self._uniform_matcher.is_uniform(uniform_crop)
+                        if verdict is not None:   # None = too dark/small to judge → skip
+                            p_col = p
+
+                    # "Correct" needs BOTH to agree (min): colour confirms the uniform colour,
+                    # the embedding confirms the garment. Either can veto a non-uniform.
+                    p_fused = fuse_uniform_prob(p_embed, p_col)
+                    if p_fused is not None:
+                        # Smooth per person so the shown % is stable, not flickering frame-to-frame.
+                        key = det.get("student_id") or det.get("name") or "unknown"
+                        prev = self._uniform_ema.get(key)
+                        ema = p_fused if prev is None else (
+                            UNIFORM_EMA_ALPHA * p_fused + (1.0 - UNIFORM_EMA_ALPHA) * prev
+                        )
+                        self._uniform_ema[key] = ema
+
+                        is_correct = ema >= 0.5
+                        # Confidence = probability of the verdict actually shown.
+                        confidence = ema if is_correct else (1.0 - ema)
+                        if confidence >= UNIFORM_MIN_CONF:
+                            det["uniform_label"] = "correct_uniform" if is_correct else "wrong_uniform"
+                            det["uniform_conf"] = confidence
                             det["torso_box"] = region
-                            if not verdict:
-                                parts.append(f"Wrong uniform ({conf:.0%})")
-                    else:
-                        # Fallback: trained classifier (only when no colour reference yet).
-                        try:
-                            label, conf = self._trainer.predict("uniform", uniform_crop)
-                        except Exception as exc:
-                            print(f"[CBVMS] uniform predict error: {exc}")
-                            label, conf = None, 0.0
-                        if label is not None and conf >= UNIFORM_MIN_CONF:
-                            det["uniform_label"] = label
-                            det["uniform_conf"] = conf
-                            det["torso_box"] = region
-                            if label == "wrong_uniform":
-                                parts.append(f"Wrong uniform ({conf:.0%})")
+                            # Show the wrong verdict at MIN_CONF, but only log/alert above the
+                            # stricter VIOLATION_CONF bar to avoid borderline false alarms.
+                            if not is_correct and confidence >= UNIFORM_VIOLATION_CONF:
+                                parts.append(f"Wrong uniform ({confidence:.0%})")
 
             # --- Earring check (face crop, male only) ---
             if earring_on and (det.get("gender", "") or "").lower() == "male":
@@ -1335,6 +1390,7 @@ class CBVMSDashboard(ctk.CTk):
         self._alerts.clear()
         self._face_presence.clear()
         self._db_log_cooldowns.clear()   # reset so next detection logs fresh
+        self._uniform_ema.clear()        # drop smoothed uniform state for a clean slate
         self._refresh_alerts_ui()
 
     def _refresh_alerts_ui(self) -> None:

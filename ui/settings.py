@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import colorsys
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -18,7 +17,7 @@ if TYPE_CHECKING:
     from core.notifier import Notifier
     from core.recognizer import Recognizer
     from core.trainer import ViolationTrainer
-    from core.violation_engine import LiveViolationChecker, ViolationEngine
+    from core.violation_engine import LiveViolationChecker
 
 from database.db_manager import CBVMSDatabase
 from ui.camera_configuration import CameraConfigurationSection
@@ -35,8 +34,8 @@ from ui.components import (
     COLOR_WARNING,
     CORNER_RADIUS,
     PADDING,
-    ROW_STRIPE_EVEN,
     body_small_font,
+    enable_trackpad_scroll,
     heading_font,
     panel_title_font,
     section_title_font,
@@ -49,15 +48,6 @@ _SENS_BG_BALANCED = "#12281F"  # dark green
 _SENS_BG_LENIENT = "#2E2310"   # dark orange
 
 
-def _hex_from_hsv(h: int, s: int, v: int) -> str:
-    # OpenCV HSV uses H:0-179, S/V:0-255. Convert to 0..1 for colorsys.
-    hf = max(0.0, min(1.0, h / 179.0 if 179 else 0.0))
-    sf = max(0.0, min(1.0, s / 255.0 if 255 else 0.0))
-    vf = max(0.0, min(1.0, v / 255.0 if 255 else 0.0))
-    r, g, b = colorsys.hsv_to_rgb(hf, sf, vf)
-    return f"#{int(r*255):02X}{int(g*255):02X}{int(b*255):02X}"
-
-
 class SettingsPanel(ctk.CTkFrame):
     def __init__(
         self,
@@ -65,7 +55,6 @@ class SettingsPanel(ctk.CTkFrame):
         *,
         database: CBVMSDatabase,
         recognizer: "Recognizer | None",
-        violation_engine: "ViolationEngine | None",
         username: str,
         get_detector_loaded: Callable[[], bool],
         apply_camera_settings: Callable[[int, tuple[int, int], int], None],
@@ -78,7 +67,6 @@ class SettingsPanel(ctk.CTkFrame):
         super().__init__(master, fg_color=COLOR_BG, **kwargs)
         self.database = database
         self.recognizer = recognizer
-        self.violation_engine = violation_engine
         self.trainer = trainer
         self.checker = checker
         self.notifier = notifier
@@ -115,6 +103,9 @@ class SettingsPanel(ctk.CTkFrame):
         row = self._admin_section(scroll, row=row)
         row = self._ai_settings_section(scroll, row=row)
         row = self._email_settings_section(scroll, row=row)
+
+        # Reliable trackpad/mouse-wheel scrolling over all the settings content.
+        enable_trackpad_scroll(scroll)
 
     def _section_card(self, master, title: str) -> ctk.CTkFrame:
         card = ctk.CTkFrame(
@@ -299,75 +290,25 @@ class SettingsPanel(ctk.CTkFrame):
             self._faces_loaded_label.configure(text=f"{count} faces loaded")
 
     def _violation_section(self, master, *, row: int) -> int:
-        card = self._section_card(master, "Violation Settings")
+        card = self._section_card(master, "Violation Checks")
         card.grid(row=row, column=0, sticky="ew", padx=PADDING, pady=(0, 12))
         card.grid_columnconfigure(0, weight=1)
 
-        # HSV sliders (lower + upper)
-        lower = getattr(self.violation_engine, "ALLOWED_HSV_LOWER", (0, 0, 0))
-        upper = getattr(self.violation_engine, "ALLOWED_HSV_UPPER", (180, 140, 120))
-        self._h_low = ctk.IntVar(value=int(lower[0]))
-        self._s_low = ctk.IntVar(value=int(lower[1]))
-        self._v_low = ctk.IntVar(value=int(lower[2]))
-        self._h_up = ctk.IntVar(value=int(upper[0]))
-        self._s_up = ctk.IntVar(value=int(upper[1]))
-        self._v_up = ctk.IntVar(value=int(upper[2]))
+        ctk.CTkLabel(
+            card,
+            text="Choose which checks run on the live feed. Each uses its trained model.",
+            font=body_small_font(), text_color=COLOR_TEXT_MUTED, wraplength=520, justify="left",
+        ).pack(anchor="w", padx=PADDING, pady=(0, 8))
 
-        hair = ctk.CTkFrame(card, fg_color=ROW_STRIPE_EVEN, corner_radius=CORNER_RADIUS)
-        hair.pack(fill="x", padx=PADDING, pady=(0, 10))
-        hair.grid_columnconfigure(1, weight=1)
-
-        top = ctk.CTkFrame(hair, fg_color="transparent")
-        top.grid(row=0, column=0, columnspan=2, sticky="ew", padx=12, pady=(12, 6))
-        top.grid_columnconfigure(1, weight=1)
-
-        ctk.CTkLabel(top, text="Hair Color Rule (HSV)", font=body_small_font(), text_color=COLOR_TEXT).grid(
-            row=0, column=0, sticky="w"
-        )
-        self._hair_swatch = ctk.CTkFrame(top, width=42, height=18, corner_radius=6, fg_color=COLOR_BORDER)
-        self._hair_swatch.grid(row=0, column=2, sticky="e")
-
-        def _slider_row(r: int, label: str, var: ctk.IntVar, frm: int, to: int) -> None:
-            rowf = ctk.CTkFrame(hair, fg_color="transparent")
-            rowf.grid(row=r, column=0, columnspan=2, sticky="ew", padx=12, pady=4)
-            rowf.grid_columnconfigure(1, weight=1)
-            ctk.CTkLabel(rowf, text=label, font=body_small_font(), text_color=COLOR_TEXT_MUTED).grid(
-                row=0, column=0, sticky="w", padx=(0, 10)
-            )
-            val = ctk.CTkLabel(rowf, text=str(var.get()), font=body_small_font(), text_color=COLOR_TEXT)
-            val.grid(row=0, column=2, sticky="e")
-
-            def _on(v: float) -> None:
-                vv = int(round(float(v)))
-                var.set(vv)
-                val.configure(text=str(vv))
-                self._apply_hair_hsv()
-
-            s = ctk.CTkSlider(rowf, from_=frm, to=to, number_of_steps=int(to - frm), command=_on)
-            s.set(var.get())
-            s.grid(row=0, column=1, sticky="ew")
-
-        _slider_row(1, "Lower H (0–179)", self._h_low, 0, 179)
-        _slider_row(2, "Lower S (0–255)", self._s_low, 0, 255)
-        _slider_row(3, "Upper S (0–255)", self._s_up, 0, 255)
-
-        # Two sliders only requested; we map them to S/V bounds (dark hair heuristic).
-        # Keep H and V fixed unless you want to expand later.
-        # (We still expose H lower as an extra for fine tuning in the UI.)
-
-        # Toggle switches
         switches = ctk.CTkFrame(card, fg_color="transparent")
         switches.pack(fill="x", padx=PADDING, pady=(0, PADDING))
         switches.grid_columnconfigure(0, weight=1)
 
-        self._enable_hair = ctk.BooleanVar(value=True)
-        self._enable_id = ctk.BooleanVar(value=True)
-        self._enable_uniform = ctk.BooleanVar(value=True)
-        self._enable_earring = ctk.BooleanVar(value=True)
+        # Initialise from the live checker so the switches reflect the real state.
+        self._enable_uniform = ctk.BooleanVar(value=bool(getattr(self.checker, "check_uniform", True)))
+        self._enable_earring = ctk.BooleanVar(value=bool(getattr(self.checker, "check_earring", True)))
 
         items = [
-            ("Enable Hair Color Check", self._enable_hair, "hair"),
-            ("Enable ID Badge Check", self._enable_id, "id_badge"),
             ("Enable Uniform Check", self._enable_uniform, "uniform"),
             ("Enable Earring Check", self._enable_earring, "earring"),
         ]
@@ -382,40 +323,11 @@ class SettingsPanel(ctk.CTkFrame):
             )
             sw.grid(row=i, column=0, sticky="w", pady=4)
 
-        self._apply_hair_hsv()
         self._apply_violation_toggles(None)
         return row + 1
 
-    def _apply_hair_hsv(self) -> None:
-        # Keep within sane bounds
-        h_low = int(self._h_low.get())
-        s_low = int(self._s_low.get())
-        s_up = int(self._s_up.get())
-        h_low = max(0, min(179, h_low))
-        s_low = max(0, min(255, s_low))
-        s_up = max(0, min(255, s_up))
-        if s_low > s_up:
-            s_low, s_up = s_up, s_low
-            self._s_low.set(s_low)
-            self._s_up.set(s_up)
-
-        # ViolationEngine uses upper S/V thresholds; we map these sliders accordingly.
-        try:
-            self.violation_engine.ALLOWED_HSV_LOWER = (h_low, s_low, 0)
-            self.violation_engine.ALLOWED_HSV_UPPER = (180, s_up, 120)
-        except Exception:
-            pass
-
-        # Preview: show the "upper bound" color as a swatch.
-        try:
-            preview = _hex_from_hsv(h_low, s_up, 200)
-            self._hair_swatch.configure(fg_color=preview)
-        except Exception:
-            pass
-
     def _apply_violation_toggles(self, _changed: str | None) -> None:
-        # Uniform / earring map to the live checker (YOLOv8 classifiers).
-        # Hair / ID badge have no live backend yet — left as UI-only switches.
+        # Uniform / earring map to the live checker (the trained classifiers).
         for attr, var in [
             ("check_uniform", self._enable_uniform),
             ("check_earring", self._enable_earring),
@@ -546,15 +458,31 @@ class SettingsPanel(ctk.CTkFrame):
                 refs["detail"].configure(text="")
                 continue
 
-            trained = self.trainer.is_trained(module)
             counts = self.trainer.get_sample_counts(module)
+            parts = "  ·  ".join(
+                f"{label.replace('_', ' ')}: {count}" for label, count in counts.items()
+            )
+
+            if module == "uniform":
+                # Uniform detection uses a pretrained-embedding "fingerprint" (+ colour check),
+                # not the YOLO classifier — report whether that reference is built.
+                try:
+                    from core.uniform_embedder import UniformEmbedMatcher
+                    built = UniformEmbedMatcher().is_loaded()
+                except Exception:
+                    built = False
+                refs["badge"].configure(
+                    text="Fingerprint ✓" if built else "Not built",
+                    text_color=COLOR_SAFE if built else COLOR_WARNING,
+                )
+                refs["detail"].configure(
+                    text=parts + "  ·  pretrained-embedding match + colour check")
+                continue
+
+            trained = self.trainer.is_trained(module)
             refs["badge"].configure(
                 text="Trained ✓" if trained else "Not trained",
                 text_color=COLOR_SAFE if trained else COLOR_WARNING,
-            )
-
-            parts = "  ·  ".join(
-                f"{label.replace('_', ' ')}: {count}" for label, count in counts.items()
             )
             if trained:
                 mtime = self.trainer.model_mtime(module)

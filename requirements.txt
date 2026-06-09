@@ -16,3 +16,6 @@ onnxruntime==1.19.2
 opencv-python-headless==4.10.0.84
 scikit-image==0.24.0
 tifffile==2024.8.30
+# HEIC/HEIF decode (iPhone/macOS default photo format) for Training-module uploads.
+# Pure Pillow add-on with bundled libheif — no system libraries required.
+pillow-heif==0.16.0

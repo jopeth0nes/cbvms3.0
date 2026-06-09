@@ -13,21 +13,36 @@ import numpy as np
 _TORSO_TOP_FRAC = 0.20   # skip head/neck
 _TORSO_BOT_FRAC = 0.65   # down through the shirt/torso
 _MIN_CROP_PX = 32
+# A pose torso must be at least this big to be trusted (rejects tiny/garbage detections on
+# full-body shots; a real webcam chest crop is far larger). Below this the caller falls back.
+_POSE_MIN_PX = 60
+
+# COCO-17 pose keypoint indices used to anchor the torso.
+_KP_L_SHOULDER, _KP_R_SHOULDER = 5, 6
+_KP_L_HIP, _KP_R_HIP = 11, 12
+_KP_CONF_MIN = 0.30
 
 
 class PersonDetector:
-    """Detects persons via YOLOv8n (COCO class 0); returns boxes by area desc."""
+    """Detects persons via YOLOv8n (COCO class 0); returns boxes by area desc.
 
-    _MODEL_PATH = "yolov8n.pt"   # auto-downloads if missing
+    Also provides a pose-anchored torso crop (YOLOv8-pose shoulders+hips) — far more stable
+    than a fixed fraction of the person box, which drifts with pose/arms/sitting.
+    """
+
+    _MODEL_PATH = "yolov8n.pt"        # auto-downloads if missing
+    _POSE_MODEL_PATH = "yolov8n-pose.pt"  # auto-downloads once (~6 MB)
     _CONF = 0.40
     _IOU = 0.50
 
     def __init__(self) -> None:
         self._model = None
         self._load_failed = False
+        self._pose_model = None
+        self._pose_load_failed = False
 
     # ------------------------------------------------------------------
-    # Model (lazy)
+    # Models (lazy)
     # ------------------------------------------------------------------
 
     def _ensure_model(self):
@@ -42,6 +57,20 @@ class PersonDetector:
         except Exception as exc:
             print(f"[PersonDetector] model load failed: {exc}")
             self._load_failed = True
+            return None
+
+    def _ensure_pose_model(self):
+        if self._pose_model is not None:
+            return self._pose_model
+        if self._pose_load_failed:
+            return None
+        try:
+            from ultralytics import YOLO
+            self._pose_model = YOLO(self._POSE_MODEL_PATH)  # ~6 MB, auto-downloads once
+            return self._pose_model
+        except Exception as exc:
+            print(f"[PersonDetector] pose model load failed: {exc}")
+            self._pose_load_failed = True
             return None
 
     # ------------------------------------------------------------------
@@ -105,6 +134,89 @@ class PersonDetector:
         if (tx2 - tx1) < _MIN_CROP_PX or (ty2 - ty1) < _MIN_CROP_PX:
             return None
         return frame_bgr[ty1:ty2, tx1:tx2]
+
+    # ------------------------------------------------------------------
+    # Pose-anchored torso (YOLOv8-pose shoulders + hips) — stable across pose
+    # ------------------------------------------------------------------
+
+    def pose_torso_box(self, frame_bgr: np.ndarray, region: list[int] | None = None) -> list[int] | None:
+        """Tight torso/shirt box [x1,y1,x2,y2] in FRAME coords from shoulder+hip keypoints.
+
+        `region` (a person box) restricts pose to that person — used live; pass None to run on
+        the whole image (build). Returns None when pose is unreliable so the caller can fall back.
+        """
+        model = self._ensure_pose_model()
+        if model is None or frame_bgr is None or frame_bgr.size == 0:
+            return None
+        H, W = frame_bgr.shape[:2]
+        ox, oy = 0, 0
+        img = frame_bgr
+        if region is not None:
+            rx1, ry1, rx2, ry2 = [int(v) for v in region]
+            rx1, ry1 = max(0, rx1), max(0, ry1)
+            rx2, ry2 = min(W, rx2), min(H, ry2)
+            if (rx2 - rx1) < _MIN_CROP_PX or (ry2 - ry1) < _MIN_CROP_PX:
+                return None
+            img = frame_bgr[ry1:ry2, rx1:rx2]
+            ox, oy = rx1, ry1
+
+        try:
+            results = model.predict(img, conf=0.25, verbose=False)
+        except Exception as exc:
+            print(f"[PersonDetector] pose error: {exc}")
+            return None
+        if not results:
+            return None
+        kpts = getattr(results[0], "keypoints", None)
+        if kpts is None or kpts.data is None or len(kpts.data) == 0:
+            return None
+        data = kpts.data.cpu().numpy()  # (n_persons, 17, 3): x, y, conf
+
+        # Pick the person with the strongest shoulder+hip keypoints.
+        best, best_score = None, -1.0
+        for person in data:
+            score = float(person[_KP_L_SHOULDER, 2] + person[_KP_R_SHOULDER, 2]
+                          + person[_KP_L_HIP, 2] + person[_KP_R_HIP, 2])
+            if score > best_score:
+                best_score, best = score, person
+        if best is None:
+            return None
+
+        ls, rs = best[_KP_L_SHOULDER], best[_KP_R_SHOULDER]
+        lh, rh = best[_KP_L_HIP], best[_KP_R_HIP]
+        if ls[2] < _KP_CONF_MIN or rs[2] < _KP_CONF_MIN:
+            return None  # need both shoulders to anchor the torso
+
+        shoulder_w = abs(float(ls[0]) - float(rs[0])) or 1.0
+        xs = [float(ls[0]), float(rs[0])]
+        top = min(float(ls[1]), float(rs[1]))
+        if lh[2] >= _KP_CONF_MIN and rh[2] >= _KP_CONF_MIN:
+            xs += [float(lh[0]), float(rh[0])]
+            bottom = max(float(lh[1]), float(rh[1]))
+        else:
+            bottom = top + 1.5 * shoulder_w  # hips out of frame (seated) → estimate torso height
+        x1, x2 = min(xs), max(xs)
+
+        padx = 0.08 * ((x2 - x1) if x2 > x1 else shoulder_w)
+        x1 -= padx
+        x2 += padx
+        top -= 0.10 * shoulder_w  # nudge up for the collar
+
+        x1 = max(0, int(round(x1 + ox)))
+        y1 = max(0, int(round(top + oy)))
+        x2 = min(W, int(round(x2 + ox)))
+        y2 = min(H, int(round(bottom + oy)))
+        if (x2 - x1) < _POSE_MIN_PX or (y2 - y1) < _POSE_MIN_PX:
+            return None  # too small to be a reliable torso → caller falls back
+        return [x1, y1, x2, y2]
+
+    def pose_torso_crop(self, frame_bgr: np.ndarray, region: list[int] | None = None) -> np.ndarray | None:
+        box = self.pose_torso_box(frame_bgr, region)
+        if box is None:
+            return None
+        x1, y1, x2, y2 = box
+        crop = frame_bgr[y1:y2, x1:x2]
+        return crop if crop.size > 0 else None
 
     # ------------------------------------------------------------------
     # Face-anchored uniform region (robust to framing)

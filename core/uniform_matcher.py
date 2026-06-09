@@ -41,6 +41,29 @@ _CHROMA_FRAC_MIN = 0.08        # ≥8% of body pixels must be coloured
 _HUE_RATIO_MIN = 0.20         # ≥20% of those coloured pixels must be the uniform hue
 
 
+def _logistic(x: float, center: float, scale: float) -> float:
+    """Smooth 0→1 ramp through 0.5 at ``center`` (width ~``scale``)."""
+    try:
+        return float(1.0 / (1.0 + np.exp(-(x - center) / scale)))
+    except Exception:
+        return 0.5
+
+
+def fuse_uniform_prob(p_cls: float | None, p_col: float | None) -> float | None:
+    """Combine the trained-classifier and colour-matcher P(correct) as NECESSARY conditions.
+
+    A torso is the correct uniform only if BOTH the learned classifier AND the uniform-colour
+    match agree — so we take the weaker (``min``) of the two signals, not a weighted average.
+    This lets the colour check veto a classifier that overfits its (imbalanced) training set
+    (e.g. flags a beige shirt as "correct"), and lets the classifier veto a same-colour but
+    wrong-style top. Degrades to whichever single signal is available, or None when neither is.
+    """
+    vals = [float(p) for p in (p_cls, p_col) if p is not None]
+    if not vals:
+        return None
+    return min(vals)
+
+
 class UniformColorMatcher:
     """Detects whether a torso crop shows the enrolled uniform colour (one-class)."""
 
@@ -131,8 +154,10 @@ class UniformColorMatcher:
     def is_uniform(self, crop_bgr: np.ndarray) -> tuple[bool | None, float]:
         """Classify a torso crop.
 
-        Returns (verdict, confidence 0-1): verdict True = correct uniform, False = wrong,
+        Returns (verdict, p_correct): verdict True = correct uniform, False = wrong,
         None = can't judge (empty / too dark a crop) → caller should stay neutral.
+        ``p_correct`` ∈ [0,1] is a calibrated probability that the torso shows the uniform
+        colour — high only when the crop is both sufficiently chromatic AND the right hue.
         """
         if not self.is_loaded() or crop_bgr is None or crop_bgr.size == 0:
             return None, 0.0
@@ -148,7 +173,11 @@ class UniformColorMatcher:
         n_chroma = int(chroma.sum())
         hue_ratio = float((chroma & self._hue_mask(H)).sum()) / n_chroma if n_chroma else 0.0
 
-        ok = chroma_frac >= _CHROMA_FRAC_MIN and hue_ratio >= _HUE_RATIO_MIN
-        margin = (hue_ratio - _HUE_RATIO_MIN) if ok else (_HUE_RATIO_MIN - hue_ratio)
-        conf = float(min(1.0, max(0.6, 0.6 + margin)))
-        return ok, conf
+        # Calibrated probability: a logistic on each cue (centred on its decision
+        # threshold) combined via geometric mean so BOTH must hold to read "correct".
+        # At the thresholds both cues sit at ~0.5 → p_correct ≈ 0.5 (the verdict boundary).
+        chroma_score = _logistic(chroma_frac, _CHROMA_FRAC_MIN, 0.04)
+        hue_score = _logistic(hue_ratio, _HUE_RATIO_MIN, 0.10)
+        p_correct = float(np.sqrt(max(0.0, chroma_score * hue_score)))
+        p_correct = min(1.0, max(0.0, p_correct))
+        return (p_correct >= 0.5), p_correct

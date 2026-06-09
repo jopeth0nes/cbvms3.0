@@ -1,5 +1,6 @@
 """Reusable UI theme and widgets for CBVMS."""
 
+import sys
 import time
 
 import customtkinter as ctk
@@ -238,6 +239,55 @@ class MirrorController:
         x0 = (w - new_w) // 2
         canvas[:, x0:x0 + new_w] = squished
         return canvas
+
+
+def enable_trackpad_scroll(scroll_frame) -> None:
+    """Make a CTkScrollableFrame scroll reliably with the macOS trackpad / mouse wheel.
+
+    CustomTkinter binds the wheel globally (``bind_all``) and routes it by walking widget
+    masters; with several scrollable panels in one app that routing is flaky on macOS, so
+    the trackpad often does nothing. This binds the wheel directly on the frame's canvas and
+    every current descendant, forwarding to the canvas and stopping propagation (``"break"``)
+    so there's exactly one scroll per gesture. Call once after the frame's contents are built.
+    """
+    canvas = getattr(scroll_frame, "_parent_canvas", None)
+    if canvas is None:
+        return
+
+    def _on_wheel(event):
+        try:
+            if canvas.yview() != (0.0, 1.0):       # only when there's overflow to scroll
+                if sys.platform.startswith("win"):
+                    canvas.yview_scroll(-int(event.delta / 120) or (-1 if event.delta > 0 else 1), "units")
+                else:                              # macOS + Linux <MouseWheel>
+                    canvas.yview_scroll(-int(event.delta), "units")
+        except Exception:
+            pass
+        return "break"
+
+    def _on_button(direction):
+        def _handler(_event):
+            try:
+                if canvas.yview() != (0.0, 1.0):
+                    canvas.yview_scroll(direction, "units")
+            except Exception:
+                pass
+            return "break"
+        return _handler
+
+    def _bind(widget):
+        try:
+            widget.bind("<MouseWheel>", _on_wheel, add="+")
+            widget.bind("<Button-4>", _on_button(-1), add="+")   # Linux X11 wheel up
+            widget.bind("<Button-5>", _on_button(1), add="+")    # Linux X11 wheel down
+        except Exception:
+            pass
+        for child in widget.winfo_children():
+            _bind(child)
+
+    # Binding the canvas recurses into the windowed inner frame and all content widgets,
+    # covering every widget exactly once.
+    _bind(canvas)
 
 
 def make_mirror_button(master, controller: MirrorController, on_toggle=None) -> ctk.CTkButton:

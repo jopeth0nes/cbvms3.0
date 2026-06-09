@@ -7,6 +7,7 @@ YOLOv8-cls train/val split is built automatically.
 
 from __future__ import annotations
 
+import json
 import shutil
 import uuid
 from pathlib import Path
@@ -33,7 +34,12 @@ MODULES: dict[str, dict] = {
 
 MIN_SAMPLES_PER_CLASS = 10
 IMG_SIZE = 224
-EPOCHS = 20
+EPOCHS = 40
+PATIENCE = 12
+# Fraction of each class held out for validation/evaluation (never trained on).
+VAL_FRAC = 0.2
+# Filename of the per-module held-out manifest written at train time.
+VAL_MANIFEST = "val_manifest.json"
 
 
 def _letterbox(image_bgr: np.ndarray, size: int = IMG_SIZE) -> np.ndarray:
@@ -76,8 +82,8 @@ class ViolationTrainer:
     # Dataset building
     # ------------------------------------------------------------------
 
-    def add_sample(self, module: str, label: str, image_bgr: np.ndarray) -> int:
-        """Save one letterboxed sample; return the new file count for that label."""
+    def add_sample(self, module: str, label: str, image_bgr: np.ndarray) -> Path:
+        """Save one letterboxed sample; return the saved file's Path."""
         self._validate(module, label)
         if image_bgr is None or image_bgr.size == 0:
             raise ValueError("Empty image")
@@ -88,7 +94,23 @@ class ViolationTrainer:
         out_path = folder / f"{uuid.uuid4().hex}.jpg"
         cv2.imwrite(str(out_path), processed, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
 
-        return len(list(folder.glob("*.jpg")))
+        return out_path
+
+    def delete_sample(self, module: str, label: str, path) -> bool:
+        """Delete a single sample file. Only removes files inside this label's folder
+        (guards against deleting anything outside the dataset). Returns True on success."""
+        self._validate(module, label)
+        try:
+            p = Path(path).resolve()
+            folder = self.label_dir(module, label).resolve()
+            if folder not in p.parents or p.suffix.lower() != ".jpg":
+                return False
+            if p.exists():
+                p.unlink()
+            return True
+        except Exception as exc:
+            print(f"[Trainer] delete_sample error: {exc}")
+            return False
 
     def get_sample_counts(self, module: str) -> dict[str, int]:
         self._validate(module)
@@ -123,6 +145,21 @@ class ViolationTrainer:
     # Training
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _split_label_files(files: list[Path]) -> tuple[list[Path], list[Path]]:
+        """Deterministic per-class train/val split (val = first VAL_FRAC of sorted files).
+
+        Sorting makes the split reproducible, so evaluate() can reconstruct the exact
+        held-out set the model never trained on even if the manifest is missing.
+        """
+        files = sorted(files)
+        if not files:
+            return [], []
+        n_val = max(1, int(len(files) * VAL_FRAC))
+        val = files[:n_val]
+        train = files[n_val:] or files  # never leave train empty (tiny datasets)
+        return train, val
+
     def _prepare_split(self, module: str) -> Path:
         """Build a YOLOv8-cls train/val directory from the flat sample folders.
 
@@ -130,6 +167,9 @@ class ViolationTrainer:
         the largest train-class size — otherwise a lopsided dataset (e.g. 563 vs 11)
         trains a degenerate model that always predicts the majority class. YOLOv8's
         built-in augmentation varies the duplicated images during training.
+
+        The VAL file list is persisted to a manifest so evaluate() reports honest,
+        held-out accuracy on photos the model never saw during training.
         """
         prepared = PREPARED_DIR / module
         if prepared.exists():
@@ -139,12 +179,12 @@ class ViolationTrainer:
         train_by_label: dict[str, list[Path]] = {}
         val_by_label: dict[str, list[Path]] = {}
         for label in MODULES[module]["labels"]:
-            files = sorted(self.label_dir(module, label).glob("*.jpg"))
+            files = list(self.label_dir(module, label).glob("*.jpg"))
             if not files:
                 continue
-            n_val = max(1, int(len(files) * 0.2))
-            val_by_label[label] = files[:n_val]
-            train_by_label[label] = files[n_val:] or files  # never leave train empty
+            train, val = self._split_label_files(files)
+            val_by_label[label] = val
+            train_by_label[label] = train
 
         # Balance the train split by oversampling the smaller class(es) to the max size.
         target = max((len(f) for f in train_by_label.values()), default=0)
@@ -163,6 +203,14 @@ class ViolationTrainer:
             dest.mkdir(parents=True, exist_ok=True)
             for f in files:
                 shutil.copy(f, dest / f.name)
+
+        # Persist the held-out val set (absolute source paths) for honest evaluation.
+        try:
+            prepared.mkdir(parents=True, exist_ok=True)
+            manifest = {lbl: [str(f) for f in files] for lbl, files in val_by_label.items()}
+            (prepared / VAL_MANIFEST).write_text(json.dumps(manifest, indent=2))
+        except Exception as exc:
+            print(f"[Trainer] could not write val manifest: {exc}")
 
         return prepared
 
@@ -211,13 +259,24 @@ class ViolationTrainer:
                 epochs=EPOCHS,
                 imgsz=IMG_SIZE,
                 batch=8,
-                patience=5,
+                patience=PATIENCE,
                 project=str(RUNS_DIR),
                 name=module,
                 exist_ok=True,
                 verbose=False,
                 workers=0,     # avoid multiprocessing inside a daemon thread
                 device="cpu",
+                cos_lr=True,           # smoother LR decay → better convergence
+                dropout=0.1,           # light regularisation against overfitting
+                # Clothing-appropriate augmentation: colour/brightness jitter, flips,
+                # small rotation/translation/scale, and random erasing for occlusion
+                # robustness. Makes the duplicated (oversampled) minority images vary
+                # every epoch and helps the model generalise to live framing/lighting.
+                hsv_h=0.015, hsv_s=0.5, hsv_v=0.4,
+                fliplr=0.5,
+                degrees=10.0, translate=0.1, scale=0.4,
+                erasing=0.4,
+                auto_augment="randaugment",
             )
         except Exception as exc:
             return False, f"Training failed: {exc}"
@@ -283,6 +342,31 @@ class ViolationTrainer:
             print(f"[Trainer] predict error ({module}): {exc}")
             return None, 0.0
 
+    def predict_proba(self, module: str, image_bgr: np.ndarray) -> dict[str, float] | None:
+        """Return the full {label: probability} distribution, or None if unavailable.
+
+        Used by the live fusion path to get a real P(correct_uniform) rather than just the
+        top-1 class. Labels follow MODULES[module]["labels"].
+        """
+        self._validate(module)
+        model = self._get_model(module)
+        if model is None or image_bgr is None or image_bgr.size == 0:
+            return None
+        try:
+            proc = _letterbox(image_bgr, IMG_SIZE)
+            results = model.predict(proc, verbose=False)
+            if not results:
+                return None
+            res = results[0]
+            probs = getattr(res, "probs", None)
+            if probs is None:
+                return None
+            data = probs.data.tolist() if hasattr(probs.data, "tolist") else list(probs.data)
+            return {res.names[i]: float(p) for i, p in enumerate(data)}
+        except Exception as exc:
+            print(f"[Trainer] predict_proba error ({module}): {exc}")
+            return None
+
     # ------------------------------------------------------------------
     # Status
     # ------------------------------------------------------------------
@@ -303,27 +387,53 @@ class ViolationTrainer:
             "model_path": str(ROOT / MODULES[module]["model_out"]),
         }
 
+    def _held_out_files(self, module: str) -> dict[str, list[Path]]:
+        """Resolve the held-out val files per label for honest evaluation.
+
+        Prefers the manifest written at train time (the exact set the model never saw);
+        falls back to recomputing the deterministic split from current samples.
+        """
+        labels = MODULES[module]["labels"]
+        manifest_path = PREPARED_DIR / module / VAL_MANIFEST
+        if manifest_path.exists():
+            try:
+                data = json.loads(manifest_path.read_text())
+                out: dict[str, list[Path]] = {}
+                for lbl in labels:
+                    out[lbl] = [Path(p) for p in data.get(lbl, []) if Path(p).exists()]
+                if any(out.values()):
+                    return out
+            except Exception as exc:
+                print(f"[Trainer] val manifest unreadable, recomputing split: {exc}")
+        # Fallback: reconstruct the same deterministic split _prepare_split uses.
+        out = {}
+        for lbl in labels:
+            _, val = self._split_label_files(list(self.label_dir(module, lbl).glob("*.jpg")))
+            out[lbl] = val
+        return out
+
     def evaluate(
         self,
         module: str,
         on_progress: Callable[[str], None],
     ) -> dict | None:
         """
-        Run inference on all samples in the training folder and compute metrics.
-        Returns a dict with keys: accuracy, per_class (dict label->precision/recall/f1/support),
-        confusion (2x2 list), total, correct.
-        Returns None if model not trained or no samples exist.
+        Run inference on the HELD-OUT validation photos (the set the model never trained
+        on) and compute metrics. Returns a dict with keys: accuracy, per_class (dict
+        label->precision/recall/f1/support), confusion (2x2 list), total, correct, held_out.
+        Returns None if model not trained or no held-out samples exist.
         """
         self._validate(module)
         if not self.is_trained(module):
             return None
 
         labels = MODULES[module]["labels"]
+        eval_files = self._held_out_files(module)
         y_true, y_pred = [], []
 
-        on_progress("Loading test samples...")
+        on_progress("Loading held-out samples...")
         for label in labels:
-            files = list(self.label_dir(module, label).glob("*.jpg"))
+            files = eval_files.get(label, [])
             for i, f in enumerate(files):
                 if i % 5 == 0:
                     on_progress(f"Testing {label}: {i}/{len(files)}...")
@@ -367,4 +477,5 @@ class ViolationTrainer:
             "labels": labels,
             "total": total,
             "correct": correct,
+            "held_out": True,
         }
