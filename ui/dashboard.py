@@ -14,7 +14,7 @@ import cv2
 import customtkinter as ctk
 import numpy as np
 
-from core.camera import CameraCapture
+from core.camera import CAMERA_DEVICE_LOCK, CameraCapture
 from core.notifier import Notifier
 from core.person_detector import PersonDetector, skin_fraction
 from core.recognizer import FaceRecognizer
@@ -116,6 +116,16 @@ class CBVMSDashboard(ctk.CTk):
         self._feed_interval_ms = max(16, 1000 // FEED_FPS)
 
         self._camera: CameraCapture | None = None
+        # One worker owns the entire capture lifecycle (open/read/release).  Tk only
+        # consumes the newest frame, so a slow RTSP operation can never block the UI.
+        self._camera_reader: threading.Thread | None = None
+        self._camera_reader_stop: threading.Event | None = None
+        self._camera_worker_done = threading.Event()
+        self._camera_worker_done.set()
+        self._camera_events: queue.Queue = queue.Queue()
+        self._camera_generation = 0
+        self._camera_switch_job: str | None = None
+        self._discovered_usb_sources: list[dict] = []
         self._camera_index_setting = 0
         self._camera_source_url: str | None = None
         self._camera_resolution_setting = (1280, 720)
@@ -445,6 +455,7 @@ class CBVMSDashboard(ctk.CTk):
             ),
             apply_camera_settings=self._apply_camera_settings,
             on_camera_source_connected=self._on_camera_source_connected,
+            on_camera_sources_changed=self._on_camera_sources_changed,
             trainer=self._trainer,
             checker=self._checker,
             notifier=self._notifier,
@@ -573,7 +584,14 @@ class CBVMSDashboard(ctk.CTk):
         # Power saver: entering Live (re)opens the camera if it was released; leaving Live
         # is handled lazily by the idle watchdog in _update_feed (with a grace window).
         if key == "live":
+            # Apply any USB discovery results while handling the navigation button,
+            # never asynchronously while the source menu itself may be posted.
+            self._refresh_camera_switcher()
             self._acquire_camera()
+        elif key == "settings":
+            # Camera discovery opens USB devices briefly.  Stop the live owner first so
+            # the Settings scan cannot contend for the same AVFoundation device.
+            self._halt_camera()
 
         for nav_key, btn in self._nav_buttons.items():
             btn.configure(
@@ -585,6 +603,8 @@ class CBVMSDashboard(ctk.CTk):
             self._enrollment_panel.on_hide()
         if previous_nav == "training" and self._training_panel is not None:
             self._training_panel.on_hide()
+        if previous_nav == "settings" and self._settings_panel is not None:
+            self._settings_panel.on_hide()
 
         titles = {
             "live":       "Live Monitor",
@@ -613,6 +633,8 @@ class CBVMSDashboard(ctk.CTk):
                 self._records_panel.on_show()
             if key == "accounts" and self._account_manager_panel is not None:
                 self._account_manager_panel.on_show()
+            if key == "settings" and self._settings_panel is not None:
+                self._settings_panel.on_show()
             if key == "alerts" and self._notifications_panel is not None:
                 self._notifications_panel.refresh_external()
 
@@ -704,7 +726,21 @@ class CBVMSDashboard(ctk.CTk):
             self._camera_source_url = str(pref.get("url", "")).strip() or None
         self._camera_retry_count = 0
         self._refresh_camera_switcher()
-        self._deferred_start_camera()
+        if self._active_nav == "live":
+            self._deferred_start_camera()
+        else:
+            # Settings selects metadata only.  The source opens when Live is shown,
+            # keeping discovery and live capture mutually exclusive.
+            self._halt_camera()
+            self._status_camera.configure(
+                text="Camera: Source selected", text_color=COLOR_TEXT_MUTED
+            )
+
+    def _on_camera_sources_changed(self, cameras: list[dict]) -> None:
+        """Merge USB devices discovered in Settings into the quick switcher."""
+        self._discovered_usb_sources = [
+            dict(cam) for cam in cameras if str(cam.get("type", "")).lower() == "usb"
+        ]
 
     def _refresh_camera_switcher(self) -> None:
         """Repopulate the quick source dropdown from the MacBook cam + saved IP cameras."""
@@ -713,15 +749,49 @@ class CBVMSDashboard(ctk.CTk):
             saved = get_saved_ip_cameras()
         except Exception:
             saved = []
-        sources: dict[str, dict] = {
-            "MacBook Camera": {"id": "usb_0", "type": "usb", "index": 0,
-                               "label": "MacBook Camera", "status": "connected"},
+        sources: dict[str, dict] = {}
+
+        def _add_source(label: str, source: dict) -> None:
+            key = label
+            if key in sources and sources[key].get("id") != source.get("id"):
+                key = f"{label} ({str(source.get('id', ''))[-4:]})"
+            sources[key] = source
+
+        usb_by_index: dict[int, dict] = {
+            0: {"id": "usb_0", "type": "usb", "index": 0,
+                "label": "MacBook Camera", "status": "connected"},
         }
+        for cam in self._discovered_usb_sources:
+            try:
+                index = int(cam.get("index", 0))
+            except (TypeError, ValueError):
+                continue
+            usb_by_index[index] = {
+                "id": str(cam.get("id") or f"usb_{index}"),
+                "type": "usb",
+                "index": index,
+                "label": "MacBook Camera" if index == 0 else str(
+                    cam.get("label") or f"USB Camera {index}"
+                ),
+                "status": cam.get("status", "available"),
+            }
+        # Preserve a selected non-zero USB source even before the next discovery scan.
+        if self._camera_source_url is None and self._camera_index_setting not in usb_by_index:
+            index = self._camera_index_setting
+            usb_by_index[index] = {
+                "id": f"usb_{index}", "type": "usb", "index": index,
+                "label": f"USB Camera {index}", "status": "connected",
+            }
+        for index, source in sorted(usb_by_index.items()):
+            _add_source(str(source["label"]), source)
+
         for cam in saved:
             label = str(cam.get("label", "IP Camera"))
-            key = label if label not in sources else f"{label} ({str(cam.get('id',''))[:4]})"
-            sources[key] = {"id": f"ip_{cam['id']}", "type": "rj45",
-                            "label": label, "url": cam["url"]}
+            _add_source(
+                label,
+                {"id": f"ip_{cam['id']}", "type": "rj45",
+                 "label": label, "url": cam["url"]},
+            )
         self._cam_sources = sources
         values = list(sources.keys())
         try:
@@ -735,18 +805,42 @@ class CBVMSDashboard(ctk.CTk):
                 if v.get("url") == self._camera_source_url:
                     current = k
                     break
+        else:
+            for k, v in sources.items():
+                if v.get("type") == "usb" and int(v.get("index", 0)) == self._camera_index_setting:
+                    current = k
+                    break
         self._cam_source_var.set(current)
 
     def _on_switch_camera(self, choice: str) -> None:
-        """Quick-switch the live source from the dropdown (persists the choice)."""
+        """Queue a quick switch and return from the native menu callback immediately."""
         pref = self._cam_sources.get(choice)
         if not pref:
             return
-        # No-op if it's already the active source.
-        same_usb = pref["type"] == "usb" and self._camera_source_url is None
+        # A different USB index is a real switch.  A failed source may be selected
+        # again to force a retry instead of being incorrectly treated as a no-op.
+        same_usb = (
+            pref["type"] == "usb"
+            and self._camera_source_url is None
+            and int(pref.get("index", 0)) == self._camera_index_setting
+        )
         same_ip = pref["type"] == "rj45" and pref.get("url") == self._camera_source_url
-        if same_usb or same_ip:
+        healthy = self._camera is not None and self._camera.is_open
+        if (same_usb or same_ip) and healthy:
             return
+        if self._camera_switch_job is not None:
+            try:
+                self.after_cancel(self._camera_switch_job)
+            except Exception:
+                pass
+        # Reconfiguring CTkOptionMenu or laying out a toast while its native popup is
+        # executing can wedge Tk on macOS.  Run all real work after that callback exits.
+        self._camera_switch_job = self.after(
+            1, lambda: self._commit_camera_switch(choice, dict(pref))
+        )
+
+    def _commit_camera_switch(self, choice: str, pref: dict) -> None:
+        self._camera_switch_job = None
         try:
             from api.camera_store import save_camera_preference
             save_camera_preference(pref)
@@ -764,8 +858,12 @@ class CBVMSDashboard(ctk.CTk):
         self._fps_cap_setting = max(10, min(60, int(fps_cap)))
         self._feed_interval_ms = max(16, 1000 // self._fps_cap_setting)
         self._camera_retry_count = 0
-        self._deferred_start_camera()
-        show_toast(self, "Restarting camera…", type="info", duration=1800)
+        if self._active_nav == "live":
+            self._deferred_start_camera()
+            message = "Restarting camera…"
+        else:
+            message = "Stream settings saved; they will apply on Live Monitor."
+        show_toast(self, message, type="info", duration=1800)
 
     # ------------------------------------------------------------------
     # Camera lifecycle
@@ -786,16 +884,36 @@ class CBVMSDashboard(ctk.CTk):
             self._deferred_start_camera()
 
     def _deferred_start_camera(self) -> None:
-        self.update_idletasks()
+        # Invalidate earlier opens/retries and stop the old owner without waiting on Tk.
+        self._camera_generation += 1
+        generation = self._camera_generation
         self._last_frame_request = time.monotonic()  # grace window for explicit starts
         self._face_frame_counter = 0   # so the first frame after (re)start is scanned at once
-        self._stop_camera()
+        previous_done = self._stop_camera()
         try:
             self._camera_spinner.pack(side="right", padx=(0, 10), pady=14)
             self._camera_spinner.start()
         except Exception:
             pass
-        self._status_camera.configure(text="Camera: Starting…", text_color=COLOR_TEXT_MUTED)
+        self._status_camera.configure(
+            text="Camera: Switching…" if not previous_done.is_set() else "Camera: Starting…",
+            text_color=COLOR_TEXT_MUTED,
+        )
+
+        def _wait_for_previous() -> None:
+            if generation != self._camera_generation:
+                return
+            if not previous_done.is_set():
+                self.after(40, _wait_for_previous)
+                return
+            self._start_camera_worker(generation)
+
+        self.after(0, _wait_for_previous)
+
+    def _start_camera_worker(self, generation: int) -> None:
+        """Start one thread that exclusively owns open/read/release for this source."""
+        if generation != self._camera_generation:
+            return
 
         if self._camera_source_url:
             cap = CameraCapture(
@@ -812,29 +930,67 @@ class CBVMSDashboard(ctk.CTk):
                 fps_cap=self._fps_cap_setting,
             )
         self._camera = cap
+        stop = threading.Event()
+        done = threading.Event()
+        self._camera_reader_stop = stop
+        self._camera_worker_done = done
 
-        # Open on a background thread so the warmup loop (~1.2 s) doesn't block UI.
-        def _open_bg() -> None:
-            ok = cap.open()
+        def _worker() -> None:
+            ok = False
+            with CAMERA_DEVICE_LOCK:
+                try:
+                    # This worker may have waited behind a scan or an older stream.
+                    # If it was superseded meanwhile, do not open a stale source at all.
+                    if stop.is_set():
+                        return
+                    ok = cap.open()
+                    self._camera_events.put(("opened", generation, cap, ok))
+                    while ok and not stop.is_set():
+                        frame = cap.read()
+                        if frame is None:
+                            if not cap.is_open:
+                                break
+                            time.sleep(0.005)
+                except Exception as exc:
+                    cap.last_error = str(exc)
+                    self._camera_events.put(("opened", generation, cap, False))
+                finally:
+                    # The same worker that opened and read the capture also releases it.
+                    # This avoids cross-thread AVFoundation operations on macOS.
+                    try:
+                        cap.release()
+                    except Exception as exc:
+                        cap.last_error = f"Camera release failed: {exc}"
+                        self._camera_events.put(("release_error", generation, cap, False))
+                    finally:
+                        # A backend teardown error must never make all future switches
+                        # wait forever for this owner to finish.
+                        done.set()
+
+        worker = threading.Thread(target=_worker, daemon=True, name=f"camera-{generation}")
+        self._camera_reader = worker
+        worker.start()
+
+    def _drain_camera_events(self) -> None:
+        while True:
             try:
-                if self.winfo_exists():
-                    self.after(0, lambda: self._on_camera_opened(cap, ok))
-            except Exception:
-                pass
+                event, generation, cap, ok = self._camera_events.get_nowait()
+            except queue.Empty:
+                return
+            if event == "opened":
+                self._on_camera_opened(cap, ok, generation)
 
-        threading.Thread(target=_open_bg, daemon=True).start()
+    def _on_camera_opened(self, cap: CameraCapture, ok: bool, generation: int) -> None:
+        # Stale workers own and release their own capture.  Never call release() here:
+        # OpenCV teardown may block and this method always runs on Tk's UI thread.
+        if generation != self._camera_generation or self._camera is not cap:
+            return
 
-    def _on_camera_opened(self, cap: CameraCapture, ok: bool) -> None:
         try:
             self._camera_spinner.stop()
             self._camera_spinner.pack_forget()
         except Exception:
             pass
-
-        if self._camera is not cap:
-            # A newer open attempt superseded this one.
-            cap.release()
-            return
 
         if ok:
             self._camera_retry_count = 0
@@ -848,12 +1004,27 @@ class CBVMSDashboard(ctk.CTk):
             # camera nobody's watching.
             if self._camera_retry_count < 8 and self._camera_needed():
                 self._camera_retry_count += 1
-                self.after(2000, self._deferred_start_camera)
+                self.after(2000, lambda g=generation: self._retry_camera(g))
 
-    def _stop_camera(self) -> None:
-        if self._camera is not None:
-            self._camera.release()
-            self._camera = None
+    def _retry_camera(self, generation: int) -> None:
+        if generation == self._camera_generation and self._camera_needed():
+            self._deferred_start_camera()
+
+    def _stop_camera(self) -> threading.Event:
+        """Signal the camera owner and return immediately with its completion event."""
+        stop = self._camera_reader_stop
+        done = self._camera_worker_done
+        self._camera = None
+        self._camera_reader = None
+        self._camera_reader_stop = None
+        if stop is not None:
+            stop.set()
+        return done
+
+    def _halt_camera(self) -> threading.Event:
+        """Stop intentionally and invalidate every pending start or retry callback."""
+        self._camera_generation += 1
+        return self._stop_camera()
 
     def _get_camera_frame(self):
         # A consumer (enroll wizard / training capture modal) wants a frame — mark the
@@ -862,10 +1033,9 @@ class CBVMSDashboard(ctk.CTk):
         if self._camera is None:
             self._acquire_camera()
         if self._camera and self._camera.is_open:
-            # Off the Live view _update_feed no longer pumps reads, so read a FRESH frame
-            # here for the modal previews; fall back to the last good frame on a drop.
-            frame = self._camera.read()
-            return frame if frame is not None else self._camera.get_latest_frame()
+            # The reader thread owns cap.read(); calling it here too would mean two
+            # concurrent reads on one VideoCapture (unsafe). Use the latest pumped frame.
+            return self._camera.get_latest_frame()
         return None
 
     # ------------------------------------------------------------------
@@ -1285,6 +1455,10 @@ class CBVMSDashboard(ctk.CTk):
         if not self.winfo_exists():
             return
         try:
+            # Camera workers communicate only through this queue; all Tk updates stay
+            # on the main thread.
+            self._drain_camera_events()
+
             # A worker logged a violation — refresh the panel here, on the UI thread.
             if self._violation_dirty:
                 self._violation_dirty = False
@@ -1293,11 +1467,13 @@ class CBVMSDashboard(ctk.CTk):
 
             # Power saver: release the camera device when no consumer needs it.
             if self._camera is not None and not self._camera_needed():
-                self._stop_camera()
+                self._halt_camera()
 
             if self._active_nav == "live":
                 if self._camera and self._camera.is_open:
-                    frame = self._camera.read()
+                    # Non-blocking: the reader thread keeps this fresh. Never call
+                    # read() here or a slow network frame would freeze the UI.
+                    frame = self._camera.get_latest_frame()
                     if frame is not None:
                         _now = time.time()
                         self._last_frame_request = time.monotonic()  # keep camera alive
@@ -1500,6 +1676,12 @@ class CBVMSDashboard(ctk.CTk):
         self._on_close()
 
     def _on_close(self) -> None:
+        if self._camera_switch_job is not None:
+            try:
+                self.after_cancel(self._camera_switch_job)
+            except Exception:
+                pass
+            self._camera_switch_job = None
         for job_attr in ("_feed_job", "_clock_job", "_stats_job"):
             job = getattr(self, job_attr, None)
             if job:
@@ -1508,7 +1690,7 @@ class CBVMSDashboard(ctk.CTk):
                 except Exception:
                     pass
                 setattr(self, job_attr, None)
-        self._stop_camera()
+        self._halt_camera()
         self.camera_feed.cleanup()
         self.destroy()
 

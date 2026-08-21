@@ -2,14 +2,21 @@
 
 from __future__ import annotations
 
+import queue
 import threading
 from collections.abc import Callable
 from typing import Any
 
 import customtkinter as ctk
 
-from api.camera_manager import camera_manager, probe_ip_camera, scan_usb_cameras, test_ip_camera
-from api.camera_store import add_ip_camera, delete_ip_camera, get_camera_preference, get_saved_ip_cameras
+from api.camera_manager import probe_ip_camera, scan_usb_cameras, test_ip_camera
+from api.camera_store import (
+    add_ip_camera,
+    delete_ip_camera,
+    get_camera_preference,
+    get_saved_ip_cameras,
+    save_camera_preference,
+)
 from core.ip_camera import build_candidate_urls, redact
 from ui.components import (
     COLOR_ACCENT,
@@ -36,12 +43,20 @@ class CameraConfigurationSection(ctk.CTkFrame):
       *,
       on_camera_connected: Callable[[dict[str, Any]], None],
       apply_stream_settings: Callable[[int, tuple[int, int], int], None],
+      on_camera_sources_changed: Callable[[list[dict[str, Any]]], None] | None = None,
       **kwargs,
   ) -> None:
     super().__init__(master, fg_color=COLOR_SURFACE, corner_radius=CORNER_RADIUS, border_width=1, border_color=COLOR_BORDER, **kwargs)
     self._on_camera_connected = on_camera_connected
     self._apply_stream_settings = apply_stream_settings
+    self._on_camera_sources_changed = on_camera_sources_changed or (lambda _items: None)
     self._scanning = False
+    self._has_scanned = False
+    self._scan_results: queue.Queue[
+        tuple[list[dict[str, Any]], str | None, bool]
+    ] = queue.Queue(maxsize=1)
+    self._scan_cancel = threading.Event()
+    self._scan_start_job: str | None = None
     self._tab = "usb"
     self._cameras: list[dict[str, Any]] = []
     self._active: dict[str, Any] | None = get_camera_preference()
@@ -52,7 +67,33 @@ class CameraConfigurationSection(ctk.CTkFrame):
     self._fps_cap_var = ctk.IntVar(value=30)
 
     self._build()
-    self.after(200, self._run_scan)
+    self._render_list()
+
+  def on_show(self) -> None:
+    """Refresh camera discovery only when Settings is actually visible.
+
+    The section used to scan while hidden during dashboard startup, racing the live
+    monitor for the same AVFoundation device.  Delaying it also keeps the top source
+    dropdown responsive while the dashboard is being constructed.
+    """
+    self._active = get_camera_preference()
+    self._refresh_active_card()
+    if not self._has_scanned and not self._scanning:
+      if self._scan_start_job is None:
+        self._scan_start_job = self.after(500, self._run_scheduled_scan)
+
+  def on_hide(self) -> None:
+    if self._scan_start_job is not None:
+      try:
+        self.after_cancel(self._scan_start_job)
+      except Exception:
+        pass
+      self._scan_start_job = None
+    self._scan_cancel.set()
+
+  def _run_scheduled_scan(self) -> None:
+    self._scan_start_job = None
+    self._run_scan()
 
   def _build(self) -> None:
     header = ctk.CTkFrame(self, fg_color="transparent")
@@ -183,7 +224,7 @@ class CameraConfigurationSection(ctk.CTkFrame):
         self._active_sub.configure(text=redact(str(active.get("url", "")))[:80])
       else:
         self._active_sub.configure(text=f"USB index {active.get('index', 0)}")
-      self._active_badge.configure(text="Connected", text_color=COLOR_SAFE)
+      self._active_badge.configure(text="Selected", text_color=COLOR_SAFE)
     else:
       self._active_title.configure(text="No camera selected")
       self._active_sub.configure(text="Scan for cameras below and connect a source")
@@ -192,34 +233,57 @@ class CameraConfigurationSection(ctk.CTkFrame):
   def _run_scan(self) -> None:
     if self._scanning:
       return
+    self._scan_cancel.clear()
     self._scanning = True
     self._scan_btn.configure(text="Scanning…", state="disabled")
 
     def _work() -> None:
-      usb = scan_usb_cameras()
-      items = list(usb)
-      for cam in get_saved_ip_cameras():
-        url = str(cam["url"])
-        items.append(
-            {
-                "id": f"ip_{cam['id']}",
-                "type": "rj45",
-                "label": cam.get("label", "IP Camera"),
-                "url": url,
-                "status": "available" if test_ip_camera(url) else "unreachable",
-            }
-        )
-
-      def _done() -> None:
-        self._cameras = items
-        self._scanning = False
-        self._scan_btn.configure(text="Scan for Cameras", state="normal")
-        self._render_list()
-
-      if self.winfo_exists():
-        self.after(0, _done)
+      items: list[dict[str, Any]] = []
+      error: str | None = None
+      try:
+        if self._scan_cancel.is_set():
+          self._scan_results.put((items, error, True))
+          return
+        items.extend(scan_usb_cameras())
+        for cam in get_saved_ip_cameras():
+          if self._scan_cancel.is_set():
+            break
+          url = str(cam["url"])
+          items.append(
+              {
+                  "id": f"ip_{cam['id']}",
+                  "type": "rj45",
+                  "label": cam.get("label", "IP Camera"),
+                  "url": url,
+                  "status": "available" if test_ip_camera(url) else "unreachable",
+              }
+          )
+      except Exception as exc:
+        error = str(exc)
+      self._scan_results.put((items, error, self._scan_cancel.is_set()))
 
     threading.Thread(target=_work, daemon=True).start()
+    self.after(50, self._poll_scan_results)
+
+  def _poll_scan_results(self) -> None:
+    """Apply scan results on Tk's thread; workers never call Tk methods."""
+    try:
+      items, error, cancelled = self._scan_results.get_nowait()
+    except queue.Empty:
+      if self._scanning:
+        self.after(50, self._poll_scan_results)
+      return
+
+    self._scanning = False
+    self._scan_btn.configure(text="Scan for Cameras", state="normal")
+    if cancelled:
+      return
+    self._cameras = items
+    self._has_scanned = True
+    self._render_list()
+    self._on_camera_sources_changed(list(items))
+    if error:
+      show_toast(self, f"Camera scan incomplete: {error}", type="warning")
 
   def _render_list(self) -> None:
     for child in self._list_host.winfo_children():
@@ -277,34 +341,53 @@ class CameraConfigurationSection(ctk.CTkFrame):
           ).grid(row=0, column=3, padx=(6, 0))
 
   def _connect(self, cam: dict[str, Any]) -> None:
+    """Persist a source and hand it to the dashboard, the sole capture owner."""
     try:
-      result = camera_manager.select(
-          {
-              "id": cam.get("id"),
-              "type": cam.get("type"),
-              "index": cam.get("index"),
-              "label": cam.get("label"),
-              "url": cam.get("url"),
-          }
-      )
-    except ValueError as exc:
+      pref = self._preference_for(cam)
+      save_camera_preference(pref)
+    except (TypeError, ValueError) as exc:
       show_toast(self, str(exc), type="error")
       return
-    if not result.get("success"):
-      show_toast(self, result.get("message", "Failed to connect"), type="error")
-      return
-    self._active = result.get("active")
+    self._active = pref
     self._refresh_active_card()
-    if self._active:
-      self._on_camera_connected(self._active)
-      show_toast(self, f"Connected to {self._active.get('label', 'camera')}", type="success")
+    self._on_camera_connected(dict(pref))
+    show_toast(self, f"Switching to {pref.get('label', 'camera')}…", type="info")
+
+  @staticmethod
+  def _preference_for(cam: dict[str, Any]) -> dict[str, Any]:
+    cam_type = str(cam.get("type", "")).lower()
+    if cam_type == "usb":
+      index = int(cam.get("index", 0) or 0)
+      return {
+          "id": str(cam.get("id") or f"usb_{index}"),
+          "type": "usb",
+          "index": index,
+          "label": str(cam.get("label") or f"USB Camera {index}"),
+          "status": "connected",
+      }
+    if cam_type in ("rj45", "ip"):
+      url = str(cam.get("url", "")).strip()
+      if not url:
+        raise ValueError("URL is required for IP cameras")
+      return {
+          "id": str(cam.get("id", "")),
+          "type": "rj45",
+          "label": str(cam.get("label") or "IP Camera"),
+          "url": url,
+          "status": "connected",
+      }
+    raise ValueError("Unknown camera type")
 
   def _delete_ip(self, cam: dict[str, Any]) -> None:
     raw = str(cam.get("id", "")).removeprefix("ip_")
     if delete_ip_camera(raw):
-      camera_manager.clear_active_if(str(cam.get("id", "")))
       if (self._active or {}).get("id") == cam.get("id"):
-        self._active = None
+        fallback = self._preference_for(
+            {"id": "usb_0", "type": "usb", "index": 0, "label": "MacBook Camera"}
+        )
+        save_camera_preference(fallback)
+        self._active = fallback
+        self._on_camera_connected(dict(fallback))
       self._run_scan()
       self._refresh_active_card()
 
@@ -376,12 +459,43 @@ class CameraConfigurationSection(ctk.CTkFrame):
     ctk.CTkButton(btns, text="Cancel", width=80, fg_color="transparent", border_width=1,
                   border_color=COLOR_BORDER, hover_color=COLOR_BORDER, command=_close).pack(side="right")
 
+    progress_updates: queue.Queue[tuple[str, str]] = queue.Queue()
+    probe_results: queue.Queue[tuple[str, str | None]] = queue.Queue(maxsize=1)
+
     def _set_status(msg: str, color: str = COLOR_TEXT_MUTED) -> None:
+      # probe_camera invokes progress callbacks on its worker.  Queue the update;
+      # touching Tk (including after/winfo_exists) from that thread can freeze Tcl.
+      progress_updates.put((msg, color))
+
+    def _poll_probe_queues() -> None:
+      latest_status: tuple[str, str] | None = None
       try:
-        if modal.winfo_exists():
-          modal.after(0, lambda: status.configure(text=msg, text_color=color))
-      except Exception:
+        while True:
+          latest_status = progress_updates.get_nowait()
+      except queue.Empty:
         pass
+      if latest_status is not None:
+        status.configure(text=latest_status[0], text_color=latest_status[1])
+
+      try:
+        label, url = probe_results.get_nowait()
+      except queue.Empty:
+        label = ""
+        url = None
+      else:
+        test_btn.configure(state="normal", text="Test & Add")
+        manual_btn.configure(state="normal")
+        if url:
+          _persist_and_connect(label, url, connect=True)
+          return
+        status.configure(
+            text="No stream found. Check IP/credentials, paste a full rtsp:// URL "
+                 "above, or use “Add Manually”.",
+            text_color=COLOR_DANGER,
+        )
+
+      if self._add_modal is modal:
+        modal.after(50, _poll_probe_queues)
 
     def _persist_and_connect(label: str, url: str, *, connect: bool) -> None:
       """Save the camera and (optionally) connect. Runs on the UI thread."""
@@ -392,16 +506,13 @@ class CameraConfigurationSection(ctk.CTkFrame):
         return
       self._switch_tab("ip")
       if connect:
-        result = camera_manager.select(
+        pref = self._preference_for(
             {"id": f"ip_{entry['id']}", "type": "rj45", "label": label, "url": url}
         )
-        if result.get("success"):
-          self._active = result.get("active")
-          self._on_camera_connected(self._active)
-          show_toast(self, f"Connected — {label}  ({redact(url)})", type="success", duration=5000)
-        else:
-          show_toast(self, "Saved, but couldn't connect yet. Use Connect in the list to retry.",
-                     type="warning", duration=5000)
+        save_camera_preference(pref)
+        self._active = pref
+        self._on_camera_connected(dict(pref))
+        show_toast(self, f"Switching to {label}  ({redact(url)})", type="info", duration=5000)
       else:
         show_toast(self, f"Added “{label}”. Use Connect in the list when ready.",
                    type="success", duration=4000)
@@ -422,24 +533,12 @@ class CameraConfigurationSection(ctk.CTkFrame):
       _set_status("Scanning ports & probing streams…")
 
       def _work() -> None:
-        url = probe_ip_camera(host, user, pwd, path=override, on_progress=_set_status)
-
-        def _done() -> None:
-          if not modal.winfo_exists():
-            return
-          test_btn.configure(state="normal", text="Test & Add")
-          manual_btn.configure(state="normal")
-          if not url:
-            _set_status("No stream found. Check IP/credentials, paste a full rtsp:// URL "
-                        "above, or use “Add Manually”.", COLOR_DANGER)
-            return
-          _persist_and_connect(label, url, connect=True)
-
         try:
-          if modal.winfo_exists():
-            modal.after(0, _done)
-        except Exception:
-          pass
+          url = probe_ip_camera(host, user, pwd, path=override, on_progress=_set_status)
+        except Exception as exc:
+          _set_status(f"Camera probe failed: {exc}", COLOR_DANGER)
+          url = None
+        probe_results.put((label, url))
 
       threading.Thread(target=_work, daemon=True).start()
 
@@ -460,6 +559,7 @@ class CameraConfigurationSection(ctk.CTkFrame):
     test_btn.configure(command=_on_test)
     manual_btn.configure(command=_on_manual)
 
+    modal.after(50, _poll_probe_queues)
     modal.after(120, lambda: (modal.lift(), modal.grab_set(), host_entry.focus()))
 
   def _apply_stream(self) -> None:

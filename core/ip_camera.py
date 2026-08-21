@@ -190,8 +190,12 @@ def open_stream(
     Without these, OpenCV can block for 30s+ on an unreachable RTSP host. The FFMPEG
     options must be set in the environment before the capture is created.
     """
+    # nobuffer + low_delay tell FFMPEG not to pre-buffer packets, so frames reach the
+    # reader as soon as they decode (lower live latency). The reader thread then keeps
+    # the stream drained so no backlog builds up.
     os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = (
         f"rtsp_transport;{transport}|stimeout;{read_timeout_ms * 1000}"
+        f"|fflags;nobuffer|flags;low_delay"
     )
     params: list[int] = []
     if hasattr(cv2, "CAP_PROP_OPEN_TIMEOUT_MSEC"):

@@ -1,4 +1,4 @@
-"""OpenCV camera capture for CBVMS (main-thread friendly for macOS + Tk)."""
+"""OpenCV camera capture primitives for CBVMS."""
 
 from __future__ import annotations
 
@@ -9,11 +9,15 @@ import time
 import cv2
 import numpy as np
 
+# USB/AVFoundation and RTSP probes must not open a device while the live dashboard
+# owns it.  Long operations acquire this only on worker threads, never on Tk.
+CAMERA_DEVICE_LOCK = threading.Lock()
+
 
 class CameraCapture:
     """
-    Camera handle for reading on the UI thread.
-    On macOS, VideoCapture must be opened and read from the same thread as Tk.
+    Camera handle intended to be owned by one worker thread for open/read/release.
+    Keeping the full lifecycle on one thread is important for AVFoundation on macOS.
     """
 
     def __init__(
@@ -114,12 +118,9 @@ class CameraCapture:
             self.last_error = f"Could not open stream: {self._source_url}"
             return False
 
-        indices: list[int] = []
-        if self._preferred_index is not None:
-            indices.append(self._preferred_index)
-        for idx in (0, 1):
-            if idx not in indices:
-                indices.append(idx)
+        # A dropdown selection is an explicit device request: never silently show a
+        # different camera while leaving the selected label/preference unchanged.
+        indices = [self._preferred_index] if self._preferred_index is not None else [0, 1]
 
         for index in indices:
             cap = self._try_open_index(index)
@@ -131,7 +132,10 @@ class CameraCapture:
                 return True
 
         self.is_open = False
-        self.last_error = "Could not open camera (tried indices 0 and 1)"
+        if self._preferred_index is not None:
+            self.last_error = f"Could not open USB camera {self._preferred_index}"
+        else:
+            self.last_error = "Could not open camera (tried indices 0 and 1)"
         return False
 
     def read(self) -> np.ndarray | None:

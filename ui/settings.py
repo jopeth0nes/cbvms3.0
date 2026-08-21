@@ -59,6 +59,7 @@ class SettingsPanel(ctk.CTkFrame):
         get_detector_loaded: Callable[[], bool],
         apply_camera_settings: Callable[[int, tuple[int, int], int], None],
         on_camera_source_connected: Callable[[dict], None] | None = None,
+        on_camera_sources_changed: Callable[[list[dict]], None] | None = None,
         trainer: "ViolationTrainer | None" = None,
         checker: "LiveViolationChecker | None" = None,
         notifier: "Notifier | None" = None,
@@ -74,6 +75,8 @@ class SettingsPanel(ctk.CTkFrame):
         self.get_detector_loaded = get_detector_loaded
         self.apply_camera_settings = apply_camera_settings
         self.on_camera_source_connected = on_camera_source_connected or (lambda _p: None)
+        self.on_camera_sources_changed = on_camera_sources_changed or (lambda _items: None)
+        self._camera_section: CameraConfigurationSection | None = None
 
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(0, weight=1)
@@ -125,9 +128,19 @@ class SettingsPanel(ctk.CTkFrame):
             master,
             on_camera_connected=self.on_camera_source_connected,
             apply_stream_settings=self.apply_camera_settings,
+            on_camera_sources_changed=self.on_camera_sources_changed,
         )
+        self._camera_section = section
         section.grid(row=row, column=0, sticky="ew", padx=PADDING, pady=(0, 12))
         return row + 1
+
+    def on_show(self) -> None:
+        if self._camera_section is not None:
+            self._camera_section.on_show()
+
+    def on_hide(self) -> None:
+        if self._camera_section is not None:
+            self._camera_section.on_hide()
 
     @staticmethod
     def _sens_badge_style(label: str) -> tuple[str, str]:
