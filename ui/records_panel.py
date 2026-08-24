@@ -46,6 +46,18 @@ def _status_color(status: str) -> str:
     return _MUTED
 
 
+def _violation_status_label(status: str) -> str:
+    normalized = (status or "").strip().lower()
+    return {
+        "pending_review": "Pending Review",
+        "confirmed": "Confirmed",
+        "auto_confirmed": "Auto Confirmed",
+        "dismissed": "Dismissed",
+        "unreviewed": "Legacy Unreviewed",
+        "reviewed": "Legacy Reviewed",
+    }.get(normalized, normalized.replace("_", " ").title() or "Unknown")
+
+
 class RecordsPanel(ctk.CTkFrame):
     """Admin records management panel."""
 
@@ -230,7 +242,7 @@ class RecordsPanel(ctk.CTkFrame):
             sid  = r.get("student_id") or "—"
             vtype = (r.get("violation_type") or "—").replace("_", " ").title()
             ts   = _ts(r.get("timestamp", ""))
-            stat = (r.get("status") or "unreviewed").title()
+            stat = _violation_status_label(r.get("status") or "unreviewed")
             ap   = (appeals_map.get(r["id"]) or "None").title()
             if q and q not in name.lower() and q not in sid.lower() \
                     and q not in vtype.lower():
@@ -254,7 +266,9 @@ class RecordsPanel(ctk.CTkFrame):
             f"ID: {r.get('student_id') or '—'}\n"
             f"Course: {r.get('course') or '—'}  |  {r.get('year_and_section') or '—'}\n"
             f"Date: {_ts(r.get('timestamp', ''))}\n"
-            f"Status: {(r.get('status') or '').title()}"
+            f"Status: {_violation_status_label(r.get('status') or '')}\n"
+            f"Semester: {r.get('semester_name') or '—'} · {r.get('school_year') or '—'}\n"
+            f"Strike: {'Active' if r.get('strike_active') else 'Inactive / Not Awarded'}"
         )
         self._vd_info.configure(text=info)
         snap = r.get("snapshot") or r.get("violation_snapshot")
@@ -349,38 +363,48 @@ class RecordsPanel(ctk.CTkFrame):
                                         anchor="w", justify="left", wraplength=280)
         self._ap_ai_lbl.pack(anchor="w", padx=10, pady=8)
 
+        # Camera evidence associated with the original detection.
+        ctk.CTkLabel(right, text="Detection Evidence:", font=heading_font(12),
+                     text_color=COLOR_TEXT_MUTED, anchor="w").grid(
+            row=3, column=0, sticky="w", padx=PADDING, pady=(10, 2))
+        self._ap_detection_img = tk.Label(
+            right, text="No detection snapshot", bg=COLOR_SURFACE,
+            fg=COLOR_TEXT_MUTED, bd=0,
+        )
+        self._ap_detection_img.grid(row=4, column=0, sticky="w", padx=PADDING)
+
         # Student reasoning
         ctk.CTkLabel(right, text="Student Reasoning:", font=heading_font(12),
                      text_color=COLOR_TEXT_MUTED, anchor="w").grid(
-            row=3, column=0, sticky="w", padx=PADDING, pady=(10, 2))
+            row=5, column=0, sticky="w", padx=PADDING, pady=(10, 2))
         self._ap_reason = ctk.CTkLabel(right, text="", font=body_small_font(),
                                         text_color=COLOR_TEXT, anchor="w",
                                         justify="left", wraplength=300)
-        self._ap_reason.grid(row=4, column=0, sticky="w", padx=PADDING)
+        self._ap_reason.grid(row=6, column=0, sticky="w", padx=PADDING)
 
         # Evidence thumbnail
-        ctk.CTkLabel(right, text="Evidence:", font=heading_font(12),
+        ctk.CTkLabel(right, text="Student Appeal Evidence:", font=heading_font(12),
                      text_color=COLOR_TEXT_MUTED, anchor="w").grid(
-            row=5, column=0, sticky="w", padx=PADDING, pady=(10, 2))
+            row=7, column=0, sticky="w", padx=PADDING, pady=(10, 2))
         self._ap_ev_lbl = ctk.CTkLabel(right, text="No evidence attached",
                                         font=body_small_font(), text_color=COLOR_TEXT_MUTED,
                                         anchor="w")
-        self._ap_ev_lbl.grid(row=6, column=0, sticky="w", padx=PADDING)
+        self._ap_ev_lbl.grid(row=8, column=0, sticky="w", padx=PADDING)
         self._ap_ev_img = tk.Label(right, text="", bg=COLOR_SURFACE, bd=0)
-        self._ap_ev_img.grid(row=7, column=0, sticky="w", padx=PADDING, pady=(4, 0))
+        self._ap_ev_img.grid(row=9, column=0, sticky="w", padx=PADDING, pady=(4, 0))
 
         # Admin notes + action
         ctk.CTkLabel(right, text="Admin Notes:", font=heading_font(12),
                      text_color=COLOR_TEXT_MUTED, anchor="w").grid(
-            row=8, column=0, sticky="w", padx=PADDING, pady=(12, 2))
+            row=10, column=0, sticky="w", padx=PADDING, pady=(12, 2))
         self._ap_notes = ctk.CTkTextbox(right, height=80, corner_radius=8,
                                          fg_color=COLOR_BG,
                                          border_color=COLOR_BORDER, border_width=1,
                                          text_color=COLOR_TEXT)
-        self._ap_notes.grid(row=9, column=0, sticky="ew", padx=PADDING)
+        self._ap_notes.grid(row=11, column=0, sticky="ew", padx=PADDING)
 
         btn_row = ctk.CTkFrame(right, fg_color="transparent")
-        btn_row.grid(row=10, column=0, sticky="ew", padx=PADDING, pady=(10, PADDING))
+        btn_row.grid(row=12, column=0, sticky="ew", padx=PADDING, pady=(10, PADDING))
         btn_row.columnconfigure((0, 1), weight=1, uniform="ab")
         self._ap_approve_btn = ctk.CTkButton(
             btn_row, text="✓  Approve", height=38, corner_radius=CORNER_RADIUS,
@@ -395,7 +419,7 @@ class RecordsPanel(ctk.CTkFrame):
 
         self._ap_decision_lbl = ctk.CTkLabel(right, text="", font=body_small_font(),
                                               text_color=_SAFE, anchor="w")
-        self._ap_decision_lbl.grid(row=11, column=0, sticky="w", padx=PADDING, pady=(4, 0))
+        self._ap_decision_lbl.grid(row=13, column=0, sticky="w", padx=PADDING, pady=(4, 0))
 
         self._current_appeal: dict | None = None
 
@@ -429,31 +453,38 @@ class RecordsPanel(ctk.CTkFrame):
 
         vtype = (r.get("violation_type") or "—").replace("_", " ").title()
         self._ap_title.configure(text=f"Appeal: {vtype}")
-        info = (
-            f"Student: {r.get('student_name_full') or r.get('student_id') or '—'}\n"
-            f"ID: {r.get('student_id') or '—'}\n"
-            f"Violation on: {_ts(r.get('violation_ts', ''))}\n"
-            f"Appeal submitted: {_ts(r.get('submitted_at', ''))}\n"
-            f"Current status: {(r.get('status') or 'pending').title()}"
-        )
-        self._ap_info.configure(text=info)
+        self._ap_info.configure(text=self._appeal_info_text(r))
 
         ai_rec  = (r.get("ai_recommendation") or "").strip()
         ai_conf = (r.get("ai_confidence") or "").strip()
         ai_text = (r.get("ai_analysis") or "").strip()
         if ai_rec:
             rec_color = _SAFE if "Valid" in ai_rec else _DANGER if "Invalid" in ai_rec else _MUTED
-            ai_str = f"🤖  {ai_rec}"
+            ai_str = f"🤖  AI Recommendation — Advisory Only\n{ai_rec}"
             if ai_conf and ai_conf != "—":
                 ai_str += f"  ·  {ai_conf} confidence"
             if ai_text:
                 ai_str += f"\n\n{ai_text}"
             self._ap_ai_lbl.configure(text=ai_str, text_color=rec_color)
         else:
-            self._ap_ai_lbl.configure(text="🤖  AI analysis pending…",
+            self._ap_ai_lbl.configure(text="🤖  AI Recommendation — Advisory Only\nAnalysis pending…",
                                        text_color=_MUTED)
 
         self._ap_reason.configure(text=r.get("reason") or "—")
+
+        # Original camera evidence remains separate from student-uploaded evidence.
+        self._ap_detection_img.configure(image="", text="No detection snapshot")
+        detection_snapshot = r.get("violation_snapshot")
+        if detection_snapshot:
+            try:
+                img = Image.open(io.BytesIO(detection_snapshot)).convert("RGB")
+                img.thumbnail((280, 200), Image.LANCZOS)
+                ph = ImageTk.PhotoImage(img)
+                self._image_refs.append(ph)
+                self._ap_detection_img.configure(image=ph, text="")
+                self._ap_detection_img._ref = ph
+            except Exception:
+                self._ap_detection_img.configure(image="", text="Snapshot unavailable")
 
         # Evidence
         evidence = self.database.get_evidence_for_appeal(aid)
@@ -489,6 +520,19 @@ class RecordsPanel(ctk.CTkFrame):
             text="" if is_pending else f"Decision: {status.title()}",
             text_color=_SAFE if status == "approved" else _DANGER)
 
+    @staticmethod
+    def _appeal_info_text(r: dict) -> str:
+        return (
+            f"Student: {r.get('student_name_full') or r.get('student_id') or '—'}\n"
+            f"ID: {r.get('student_id') or '—'}\n"
+            f"Violation on: {_ts(r.get('violation_ts', ''))}\n"
+            f"Confirmed/delivered: {_ts(r.get('confirmed_at', ''))}\n"
+            f"Appeal deadline: {_ts(r.get('appeal_deadline', ''))}\n"
+            f"Appeal submitted: {_ts(r.get('submitted_at', ''))}\n"
+            f"Submission eligibility: Timely (validated at submission)\n"
+            f"Current status: {(r.get('status') or 'pending').title()}"
+        )
+
     def _decide_appeal(self, decision: str) -> None:
         if self._current_appeal is None:
             return
@@ -496,21 +540,17 @@ class RecordsPanel(ctk.CTkFrame):
         aid = self._current_appeal["id"]
         ok = self.database.update_appeal_decision(aid, decision, notes)
         if ok:
+            self._current_appeal["status"] = decision
+            self._current_appeal["admin_notes"] = notes
+            self._ap_info.configure(text=self._appeal_info_text(self._current_appeal))
             self._ap_approve_btn.configure(state="disabled")
             self._ap_reject_btn.configure(state="disabled")
             color = _SAFE if decision == "approved" else _DANGER
             self._ap_decision_lbl.configure(
                 text=f"✓ Marked as {decision.title()} successfully.",
                 text_color=color)
-            # Notify the student
-            student_id = self._current_appeal.get("student_id", "")
-            vtype = (self._current_appeal.get("violation_type") or "violation").replace("_", " ")
-            msg = (f"Your appeal for '{vtype}' has been {decision}."
-                   + (f" Admin note: {notes}" if notes else ""))
-            self.database.insert_notification(student_id,
-                f"Appeal {decision.title()}",
-                msg,
-                self._current_appeal.get("violation_id"))
+            # Strike update, history, and student notification are committed atomically
+            # by update_appeal_decision(); the UI must not duplicate those side effects.
             self._load_appeals()
         else:
             self._ap_decision_lbl.configure(text="Error saving decision.", text_color=_DANGER)
@@ -692,6 +732,7 @@ class RecordsPanel(ctk.CTkFrame):
         self.refresh()
 
     def refresh(self) -> None:
+        self.database.process_expired_deadlines()
         self._image_refs.clear()
         tab = self._tab_var.get()
         if tab == "violations":

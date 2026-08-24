@@ -1,33 +1,28 @@
 #!/usr/bin/env python3
-"""Prove admin-logged violations route to the correct student's portal — generally.
+"""Prove confirmed violations route to the correct student's portal.
 
-Two checks, using the REAL database functions (no reimplementation of the join):
+Two checks, using the real workflow APIs rather than reimplementing portal rules:
 
-  1. Isolation proof on a THROWAWAY temp DB (non-destructive). Enrolls TWO students A and B with
-     portal accounts + one unreviewed violation each, then exercises exactly what the apps do:
-        * portal load filter  -> [v for v in db.get_violations_for_student(sid)
-                                     if v["status"] == "reviewed"]   (student_portal.py:94-97)
-        * admin Mark Reviewed -> UPDATE violations SET status='reviewed' WHERE id=?
-                                                                       (violation_log.py:_toggle_status)
-        * login -> number     -> db.verify_student_account(username, password)  (db_manager.py:443)
-     Asserts: nothing shows until reviewed; a reviewed violation shows ONLY for its owner; the
-     other student sees zero of it; logging+reviewing a violation for B routes only to B.
-     Pure student-number matching, no per-student special-casing.
+  1. Isolation proof on a THROWAWAY temp DB. Enrolls two students with one
+     ``pending_review`` violation each, then exercises ``confirm_violation`` and
+     ``get_visible_violations_for_student``. It asserts that pending detections stay hidden and
+     each confirmed violation becomes visible only to its owner.
 
-  2. Real-DB summary (READ-ONLY by default) on data/cbvms.db: prints, per student_id, how many
-     violations exist and how many the portal filter would currently show (reviewed only). With
-     --mark-reviewed <violation_id> it performs the admin Mark-as-Reviewed on ONE real row to
-     demonstrate it then surfaces in that student's portal, and prints how to revert.
+  2. Real-DB summary on data/cbvms.db through a SQLite ``mode=ro`` connection. The real database
+     is not initialized, migrated, or changed by default. ``--confirm <violation_id>`` explicitly
+     opts into initialization/migration and confirmation of that one record.
 
 Usage:
     python scripts/verify_portal_routing.py                       # temp proof + real read-only summary
-    python scripts/verify_portal_routing.py --mark-reviewed 33    # also surface real violation id 33
+    python scripts/verify_portal_routing.py --confirm 33          # MUTATES: confirm real violation 33
+    python scripts/verify_portal_routing.py --mark-reviewed 33    # deprecated alias for --confirm
     python scripts/verify_portal_routing.py --db /path/cbvms.db
 """
 
 from __future__ import annotations
 
 import argparse
+import sqlite3
 import sys
 import tempfile
 from pathlib import Path
@@ -37,23 +32,18 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from database.db_manager import CBVMSDatabase  # noqa: E402
+from core.discipline import CONFIRMED_STATUSES, PENDING_REVIEW  # noqa: E402
 
 DEFAULT_DB = ROOT / "data" / "cbvms.db"
 
-# The portal's exact visibility rule (student_portal.py:94-97).
-REVIEWED = "reviewed"
-
-
 def portal_visible(db: CBVMSDatabase, student_id: str) -> list[dict]:
-    """What the student's 'My Violations' page would load (server-side filter + review gate)."""
-    return [v for v in db.get_violations_for_student(student_id) if v.get("status") == REVIEWED]
+    """Use the same server-side visibility API as the student portal."""
+    return db.get_visible_violations_for_student(student_id)
 
 
-def admin_mark_reviewed(db: CBVMSDatabase, violation_id: int) -> None:
-    """The admin 'Mark as Reviewed' action (same UPDATE as violation_log._toggle_status)."""
-    with db.connect() as conn:
-        conn.execute("UPDATE violations SET status = ? WHERE id = ?", (REVIEWED, violation_id))
-        conn.commit()
+def admin_confirm(db: CBVMSDatabase, violation_id: int) -> bool:
+    """Use the validated admin workflow, including its atomic side effects."""
+    return db.confirm_violation(violation_id, decided_by="verification_script")
 
 
 def _ok(cond: bool, msg: str) -> bool:
@@ -65,106 +55,206 @@ def temp_proof() -> bool:
     print("=" * 78)
     print("1) ISOLATION PROOF — throwaway temp DB, two students, pure student-number routing")
     print("=" * 78)
-    tmp = Path(tempfile.mkdtemp(prefix="cbvms_verify_")) / "tmp.db"
-    db = CBVMSDatabase(db_path=tmp)
-    db.initialize()
+    with tempfile.TemporaryDirectory(prefix="cbvms_verify_") as tmp_dir:
+        db = CBVMSDatabase(db_path=Path(tmp_dir) / "tmp.db")
+        db.initialize()
 
-    A, B = "2099-00001", "2099-00002"   # arbitrary distinct numbers — nothing hardcoded elsewhere
-    for sid, name in ((A, "Alice Test"), (B, "Bob Test")):
-        db.insert_student(student_id=sid, name=name, course="BSIT",
-                          year_and_section="3A", encoding=b"", photo=b"", gender="Unknown")
-        db.upsert_student_account(sid, sid, "pw-" + sid)   # username = student number
-        db.log_violation(student_id=sid, student_name=name,
-                         violation_type="Wrong uniform (90%)", snapshot_jpeg=None,
-                         status="unreviewed")
+        a_sid, b_sid = "2099-00001", "2099-00002"
+        violation_ids: dict[str, int] = {}
+        for sid, name in ((a_sid, "Alice Test"), (b_sid, "Bob Test")):
+            db.insert_student(
+                student_id=sid,
+                name=name,
+                course="BSIT",
+                year_and_section="3A",
+                encoding=b"",
+                photo=b"",
+                gender="Unknown",
+            )
+            db.upsert_student_account(sid, sid, "pw-" + sid)
+            violation_ids[sid] = db.log_violation(
+                student_id=sid,
+                student_name=name,
+                violation_type="Wrong uniform (90%)",
+                violation_code="wrong_uniform",
+                snapshot_jpeg=None,
+                status=PENDING_REVIEW,
+            )
 
-    va = db.get_violations_for_student(A)
-    vb = db.get_violations_for_student(B)
-    ok = True
-    ok &= _ok(len(va) == 1 and va[0]["student_id"] == A, "A has exactly 1 violation, keyed to A")
-    ok &= _ok(len(vb) == 1 and vb[0]["student_id"] == B, "B has exactly 1 violation, keyed to B")
-    ok &= _ok(portal_visible(db, A) == [] and portal_visible(db, B) == [],
-              "review gate: BOTH portals empty while unreviewed")
+        va = db.get_violations_for_student(a_sid)
+        vb = db.get_violations_for_student(b_sid)
+        ok = True
+        ok &= _ok(
+            len(va) == 1
+            and va[0]["student_id"] == a_sid
+            and va[0]["status"] == PENDING_REVIEW,
+            "A has exactly 1 pending-review violation, keyed to A",
+        )
+        ok &= _ok(
+            len(vb) == 1
+            and vb[0]["student_id"] == b_sid
+            and vb[0]["status"] == PENDING_REVIEW,
+            "B has exactly 1 pending-review violation, keyed to B",
+        )
+        ok &= _ok(
+            portal_visible(db, a_sid) == [] and portal_visible(db, b_sid) == [],
+            "review gate: both portals are empty while violations are pending review",
+        )
 
-    # login -> number mapping resolves by account, not display name
-    sess = db.verify_student_account(A, "pw-" + A)
-    ok &= _ok(sess is not None and sess["student_id"] == A,
-              f"login as A's account resolves to student_id={A} (not by name)")
+        # Login resolves through the account's student number, never a display name.
+        session = db.verify_student_account(a_sid, "pw-" + a_sid)
+        ok &= _ok(
+            session is not None and session["student_id"] == a_sid,
+            f"login as A resolves to student_id={a_sid}",
+        )
 
-    # admin reviews A's violation only
-    admin_mark_reviewed(db, va[0]["id"])
-    vis_a, vis_b = portal_visible(db, A), portal_visible(db, B)
-    ok &= _ok(len(vis_a) == 1 and vis_a[0]["student_id"] == A,
-              "after reviewing A: A's portal shows A's violation")
-    ok &= _ok(len(vis_b) == 0, "after reviewing A: B's portal still shows ZERO of A's")
+        ok &= _ok(
+            admin_confirm(db, violation_ids[a_sid]),
+            "admin workflow confirms A's pending violation",
+        )
+        vis_a, vis_b = portal_visible(db, a_sid), portal_visible(db, b_sid)
+        ok &= _ok(
+            len(vis_a) == 1 and vis_a[0]["student_id"] == a_sid,
+            "after confirmation, A sees A's violation",
+        )
+        ok &= _ok(
+            len(vis_b) == 0,
+            "after confirming A, B still sees zero of A's violations",
+        )
 
-    # now a separate violation for B, reviewed -> routes to B only
-    db.log_violation(student_id=B, student_name="Bob Test",
-                     violation_type="Wrong uniform (88%)", snapshot_jpeg=None, status="unreviewed")
-    new_b = [v for v in db.get_violations_for_student(B) if v["status"] != REVIEWED][0]
-    admin_mark_reviewed(db, new_b["id"])
-    vis_a, vis_b = portal_visible(db, A), portal_visible(db, B)
-    ok &= _ok(len(vis_b) == 1 and vis_b[0]["student_id"] == B,
-              "after reviewing B: B's portal shows B's violation")
-    ok &= _ok(all(v["student_id"] == A for v in vis_a) and len(vis_a) == 1,
-              "A's portal unchanged — never sees B's violation")
+        ok &= _ok(
+            admin_confirm(db, violation_ids[b_sid]),
+            "admin workflow confirms B's pending violation",
+        )
+        vis_a, vis_b = portal_visible(db, a_sid), portal_visible(db, b_sid)
+        ok &= _ok(
+            len(vis_b) == 1 and vis_b[0]["student_id"] == b_sid,
+            "after confirmation, B sees B's violation",
+        )
+        ok &= _ok(
+            len(vis_a) == 1 and all(v["student_id"] == a_sid for v in vis_a),
+            "A's portal remains isolated from B's violation",
+        )
 
-    try:
-        tmp.unlink(); tmp.parent.rmdir()
-    except Exception:
-        pass
     print(f"\n  => isolation proof {'PASSED' if ok else 'FAILED'} (temp DB discarded)\n")
     return ok
 
 
-def real_summary(db_path: Path, mark_reviewed: int | None) -> None:
-    print("=" * 78)
-    print(f"2) REAL DB SUMMARY — {db_path}")
-    print("=" * 78)
+def _open_read_only(db_path: Path) -> sqlite3.Connection:
+    """Open an existing SQLite file without creating, journaling, or migrating it."""
+    resolved = db_path.expanduser().resolve()
+    if not resolved.is_file():
+        raise FileNotFoundError(resolved)
+    conn = sqlite3.connect(f"{resolved.as_uri()}?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA query_only = ON")
+    return conn
+
+
+def _confirm_real_violation(db_path: Path, violation_id: int) -> bool:
+    """Explicitly migrate, then confirm one real record through the workflow API."""
+    print(
+        f"\n  --confirm {violation_id}: explicit write requested; "
+        "running idempotent migrations first."
+    )
     db = CBVMSDatabase(db_path=db_path)
+    # Apply schema migrations without processing unrelated workflow deadlines; this
+    # explicitly mutating command promises to target only the requested record.
+    db.initialize(process_deadlines=False)
     with db.connect() as conn:
+        row = conn.execute(
+            "SELECT id, student_id, status, violation_type FROM violations WHERE id = ?",
+            (violation_id,),
+        ).fetchone()
+    if row is None:
+        print(f"  No violation exists with id={violation_id}.")
+        return False
+
+    if not db.confirm_violation(violation_id, decided_by="verification_script"):
+        print(
+            f"  Confirmation rejected for id={violation_id}; "
+            f"current status is '{row['status']}'."
+        )
+        return False
+
+    with db.connect() as conn:
+        confirmed = conn.execute(
+            "SELECT status FROM violations WHERE id = ?", (violation_id,)
+        ).fetchone()
+    status = confirmed["status"] if confirmed is not None else "unknown"
+    print(
+        f"  Confirmed violation id={violation_id} ('{row['violation_type']}', "
+        f"student_id={row['student_id']}); persisted status='{status}'."
+    )
+    print("  This audited workflow transition is intentionally not reversible.")
+    return True
+
+
+def real_summary(db_path: Path, confirm_id: int | None) -> bool:
+    print("=" * 78)
+    print(f"2) REAL DB SUMMARY (READ-ONLY) — {db_path}")
+    print("=" * 78)
+    conn: sqlite3.Connection | None = None
+    try:
+        conn = _open_read_only(db_path)
+        visible_statuses = tuple(CONFIRMED_STATUSES)
+        placeholders = ",".join("?" for _ in visible_statuses)
         rows = conn.execute(
             "SELECT student_id, COUNT(*) AS n, "
-            "SUM(CASE WHEN status='reviewed' THEN 1 ELSE 0 END) AS reviewed "
-            "FROM violations GROUP BY student_id ORDER BY n DESC"
+            f"SUM(CASE WHEN status IN ({placeholders}) THEN 1 ELSE 0 END) AS visible "
+            "FROM violations GROUP BY student_id ORDER BY n DESC",
+            visible_statuses,
         ).fetchall()
         students = {r[0] for r in conn.execute("SELECT student_id FROM students")}
-    print("  student_id      | violations | reviewed(=portal-visible) | enrolled?")
-    print("  " + "-" * 70)
-    for sid, n, rev in rows:
-        print(f"  {sid:15} | {n:10} | {rev or 0:25} | {'yes' if sid in students else 'NO (orphan)'}")
+    except (FileNotFoundError, sqlite3.Error) as exc:
+        print(f"  Unable to read database without modification: {exc}")
+        return False
+    finally:
+        if conn is not None:
+            conn.close()
 
-    if mark_reviewed is not None:
-        with db.connect() as conn:
-            row = conn.execute("SELECT id, student_id, status, violation_type FROM violations WHERE id=?",
-                               (mark_reviewed,)).fetchone()
-        if row is None:
-            print(f"\n  --mark-reviewed {mark_reviewed}: no such violation id."); return
-        vid, sid, status, vtype = row
-        admin_mark_reviewed(db, vid)
-        vis = portal_visible(db, sid)
-        print(f"\n  Marked violation id={vid} ('{vtype}', student_id={sid}) REVIEWED (admin action).")
-        print(f"  Portal for {sid} now shows {len(vis)} reviewed violation(s) — "
-              f"it surfaces in their 'My Violations'.")
-        other = next((s for s in students if s != sid), None)
-        if other:
-            print(f"  Portal for a different student ({other}) shows {len(portal_visible(db, other))} "
-                  f"of {sid}'s violations.")
-        print(f"  Revert (un-review) with: UPDATE violations SET status='unreviewed' WHERE id={vid};")
+    print("  student_id      | violations | confirmed/visible | enrolled?")
+    print("  " + "-" * 70)
+    for sid, count, visible in rows:
+        sid_text = str(sid or "unknown")
+        print(
+            f"  {sid_text:15} | {count:10} | {visible or 0:17} | "
+            f"{'yes' if sid in students else 'NO (orphan)'}"
+        )
+
+    print("\n  Read-only summary complete; no initialization or migration was performed.")
+    if confirm_id is not None:
+        return _confirm_real_violation(db_path, confirm_id)
+    return True
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="Verify portal violation routing (isolation + real DB).")
     ap.add_argument("--db", default=str(DEFAULT_DB), help="real DB to summarize (default data/cbvms.db)")
-    ap.add_argument("--mark-reviewed", type=int, default=None,
-                    help="ALSO mark this real violation id reviewed to demonstrate it surfaces")
+    action = ap.add_mutually_exclusive_group()
+    action.add_argument(
+        "--confirm",
+        type=int,
+        default=None,
+        help="MUTATE the real DB by confirming this violation through the workflow API",
+    )
+    action.add_argument(
+        "--mark-reviewed",
+        type=int,
+        default=None,
+        help="deprecated alias for --confirm",
+    )
     ap.add_argument("--skip-temp", action="store_true", help="skip the throwaway isolation proof")
     args = ap.parse_args()
 
     ok = True
     if not args.skip_temp:
         ok = temp_proof()
-    real_summary(Path(args.db), args.mark_reviewed)
+    confirm_id = args.confirm
+    if args.mark_reviewed is not None:
+        print("WARNING: --mark-reviewed is deprecated; use --confirm instead.", file=sys.stderr)
+        confirm_id = args.mark_reviewed
+    ok &= real_summary(Path(args.db), confirm_id)
     return 0 if ok else 1
 
 

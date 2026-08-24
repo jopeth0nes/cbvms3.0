@@ -11,6 +11,16 @@ from tkinter import filedialog, ttk
 import customtkinter as ctk
 from PIL import Image, ImageTk
 
+from core.discipline import (
+    AUTO_CONFIRMED,
+    CONFIRMED,
+    DISMISSED,
+    PENDING_REVIEW,
+    STRIKE_LIMIT,
+    local_calendar_day_utc_bounds,
+    remaining_time_text,
+    violation_display_name,
+)
 from database.db_manager import CBVMSDatabase
 from ui.components import (
     COLOR_ACCENT,
@@ -63,17 +73,28 @@ def _human_violation_type(value: str) -> str:
     return mapping.get(v, v.replace("_", " ").title() if v else "—")
 
 
+def _status_label(value: str) -> str:
+    return {
+        PENDING_REVIEW: "Pending Review",
+        CONFIRMED: "Confirmed",
+        AUTO_CONFIRMED: "Auto Confirmed",
+        DISMISSED: "Dismissed",
+        "unreviewed": "Legacy Unreviewed",
+        "reviewed": "Legacy Reviewed",
+    }.get((value or "").strip().lower(), (value or "Unknown").replace("_", " ").title())
+
+
 def _violation_badge_color(value: str) -> str:
     v = (value or "").strip()
     if v == "face_detected":
         return COLOR_SAFE
     if v == "unknown_person":
         return COLOR_DANGER
-    if v in ("no_id_badge",):
+    if v in ("no_id_badge", "missing_id"):
         return COLOR_DANGER
     if v in ("wrong_uniform",):
         return COLOR_WARNING
-    if v in ("wrong_hair_color", "earring_violation", "with_earring"):
+    if v in ("wrong_hair_color", "improper_hair", "earring", "earring_violation", "with_earring"):
         return COLOR_ACCENT
     return COLOR_BORDER
 
@@ -211,7 +232,10 @@ class ViolationLogPanel(CBVMSCard):
 
         self._type_combo = ctk.CTkComboBox(
             filter_row,
-            values=["All", "face_detected", "unknown_person"],
+            values=[
+                "All", "wrong_uniform", "earring", "missing_id",
+                "improper_hair", "improper_footwear", "unknown_person", "face_detected",
+            ],
             variable=self._type_var,
             height=32,
             width=180,
@@ -228,7 +252,10 @@ class ViolationLogPanel(CBVMSCard):
 
         self._status_combo = ctk.CTkComboBox(
             filter_row,
-            values=["All", "Unreviewed", "Reviewed"],
+            values=[
+                "All", "Pending Review", "Confirmed", "Auto Confirmed",
+                "Dismissed", "Legacy Records",
+            ],
             variable=self._status_var,
             height=32,
             width=140,
@@ -461,8 +488,11 @@ class ViolationLogPanel(CBVMSCard):
         self._tree.grid(row=0, column=0, sticky="nsew")
         vsb.grid(row=0, column=1, sticky="ns")
 
-        self._tree.tag_configure("unreviewed", foreground=COLOR_WARNING)
-        self._tree.tag_configure("reviewed", foreground=COLOR_TEXT_MUTED)
+        self._tree.tag_configure(PENDING_REVIEW, foreground=COLOR_WARNING)
+        self._tree.tag_configure(CONFIRMED, foreground=COLOR_SAFE)
+        self._tree.tag_configure(AUTO_CONFIRMED, foreground=COLOR_SAFE)
+        self._tree.tag_configure(DISMISSED, foreground=COLOR_TEXT_MUTED)
+        self._tree.tag_configure("legacy", foreground=COLOR_TEXT_MUTED)
 
         self._tree.bind("<<TreeviewSelect>>", self._on_row_select)
 
@@ -557,30 +587,43 @@ class ViolationLogPanel(CBVMSCard):
         )
         self._detail_status.grid(row=8, column=0, sticky="w", padx=PADDING, pady=(2, 0))
 
+        self._workflow_info = ctk.CTkLabel(
+            right, text="", font=body_small_font(), text_color=COLOR_TEXT_MUTED,
+            justify="left", anchor="w", wraplength=300,
+        )
+        self._workflow_info.grid(row=9, column=0, sticky="w", padx=PADDING, pady=(6, 0))
+
         btn_row = ctk.CTkFrame(right, fg_color="transparent")
-        btn_row.grid(row=9, column=0, sticky="ew", padx=PADDING, pady=(14, PADDING))
-        btn_row.grid_columnconfigure((0, 1), weight=1, uniform="detail_btns")
+        btn_row.grid(row=10, column=0, sticky="ew", padx=PADDING, pady=(12, PADDING))
+        btn_row.grid_columnconfigure((0, 1, 2), weight=1, uniform="detail_btns")
 
         self._toggle_btn = ctk.CTkButton(
-            btn_row, text="Mark as Reviewed", height=34,
+            btn_row, text="Confirm Now", height=34,
             corner_radius=CORNER_RADIUS, fg_color=COLOR_SAFE, hover_color="#0EA371",
-            command=self._toggle_status, state="disabled",
+            command=self._confirm_selected, state="disabled",
         )
         self._toggle_btn.grid(row=0, column=0, sticky="ew", padx=(0, 4))
+
+        self._dismiss_btn = ctk.CTkButton(
+            btn_row, text="Dismiss", height=34,
+            corner_radius=CORNER_RADIUS, fg_color=COLOR_WARNING, hover_color="#D97706",
+            command=self._dismiss_selected, state="disabled",
+        )
+        self._dismiss_btn.grid(row=0, column=1, sticky="ew", padx=4)
 
         self._delete_one_btn = ctk.CTkButton(
             btn_row, text="Delete", height=34,
             corner_radius=CORNER_RADIUS, fg_color=COLOR_DANGER, hover_color="#DC2626",
             command=self._delete_current, state="disabled",
         )
-        self._delete_one_btn.grid(row=0, column=1, sticky="ew", padx=(4, 0))
+        self._delete_one_btn.grid(row=0, column=2, sticky="ew", padx=(4, 0))
 
         # --- Appeal & AI section ---
         ctk.CTkFrame(right, height=1, fg_color=COLOR_BORDER).grid(
-            row=10, column=0, sticky="ew", padx=PADDING, pady=(8, 0))
+            row=11, column=0, sticky="ew", padx=PADDING, pady=(8, 0))
 
         self._appeal_section = ctk.CTkFrame(right, fg_color="transparent")
-        self._appeal_section.grid(row=11, column=0, sticky="ew", padx=PADDING, pady=(8, PADDING))
+        self._appeal_section.grid(row=12, column=0, sticky="ew", padx=PADDING, pady=(8, PADDING))
         self._appeal_section.grid_columnconfigure(0, weight=1)
 
         ctk.CTkLabel(self._appeal_section, text="Student Appeal",
@@ -692,14 +735,20 @@ class ViolationLogPanel(CBVMSCard):
 
         vtype = (self._type_var.get() or "All").strip()
         if vtype and vtype != "All":
-            clauses.append("v.violation_type = ?")
+            clauses.append("v.violation_code = ?")
             params.append(vtype)
 
         status = (self._status_var.get() or "All").strip()
-        if status == "Unreviewed":
-            clauses.append("v.status = 'unreviewed'")
-        elif status == "Reviewed":
-            clauses.append("v.status = 'reviewed'")
+        if status == "Pending Review":
+            clauses.append("v.status = 'pending_review'")
+        elif status == "Confirmed":
+            clauses.append("v.status = 'confirmed'")
+        elif status == "Auto Confirmed":
+            clauses.append("v.status = 'auto_confirmed'")
+        elif status == "Dismissed":
+            clauses.append("v.status = 'dismissed'")
+        elif status == "Legacy Records":
+            clauses.append("v.status IN ('unreviewed', 'reviewed')")
 
         from_date = _parse_yyyy_mm_dd(self._from_var.get())
         to_date = _parse_yyyy_mm_dd(self._to_var.get())
@@ -707,11 +756,13 @@ class ViolationLogPanel(CBVMSCard):
            (self._to_var.get().strip() and not to_date):
             raise ValueError("Date range must be in YYYY-MM-DD format.")
         if from_date:
-            clauses.append("date(v.timestamp) >= date(?)")
-            params.append(from_date)
+            from_start, _ = local_calendar_day_utc_bounds(from_date)
+            clauses.append("datetime(v.timestamp) >= datetime(?)")
+            params.append(from_start)
         if to_date:
-            clauses.append("date(v.timestamp) <= date(?)")
-            params.append(to_date)
+            _, to_end = local_calendar_day_utc_bounds(to_date)
+            clauses.append("datetime(v.timestamp) < datetime(?)")
+            params.append(to_end)
 
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
         return where, params
@@ -734,7 +785,8 @@ class ViolationLogPanel(CBVMSCard):
 
             rows = conn.execute(
                 f"""
-                SELECT v.id, v.student_id, v.student_name, v.violation_type, v.timestamp, v.status
+                SELECT v.id, v.student_id, v.student_name, v.violation_type,
+                       v.violation_code, v.timestamp, v.status
                 FROM violations v
                 {where}
                 ORDER BY datetime(v.timestamp) DESC, v.id DESC
@@ -747,6 +799,7 @@ class ViolationLogPanel(CBVMSCard):
 
     def refresh(self) -> None:
         try:
+            self.database.process_expired_deadlines()
             self._fetch_page()
         except ValueError as exc:
             self._set_status(str(exc), "error")
@@ -761,7 +814,9 @@ class ViolationLogPanel(CBVMSCard):
         start_idx = (self._page - 1) * PAGE_SIZE
         for i, row in enumerate(self._rows, start=1):
             status = (row.get("status") or "unreviewed").strip().lower()
-            tag = "unreviewed" if status == "unreviewed" else "reviewed"
+            tag = status if status in (
+                PENDING_REVIEW, CONFIRMED, AUTO_CONFIRMED, DISMISSED
+            ) else "legacy"
             self._tree.insert(
                 "", "end",
                 iid=str(row["id"]),
@@ -769,9 +824,11 @@ class ViolationLogPanel(CBVMSCard):
                     start_idx + i,
                     row.get("student_name") or "—",
                     row.get("student_id") or "—",
-                    _human_violation_type(row.get("violation_type") or ""),
+                    violation_display_name(
+                        row.get("violation_code"), row.get("violation_type")
+                    ),
                     (row.get("timestamp") or "—")[:19],
-                    "Unreviewed" if status == "unreviewed" else "Reviewed",
+                    _status_label(status),
                 ),
                 tags=(tag,),
             )
@@ -830,7 +887,9 @@ class ViolationLogPanel(CBVMSCard):
         self._violation_badge.configure(text="—", fg_color=COLOR_BORDER)
         self._detail_timestamp.configure(text="Timestamp: —")
         self._detail_status.configure(text="Status: —")
-        self._toggle_btn.configure(state="disabled", text="Mark as Reviewed", fg_color=COLOR_SAFE)
+        self._workflow_info.configure(text="")
+        self._toggle_btn.configure(state="disabled", text="Confirm Now", fg_color=COLOR_SAFE)
+        self._dismiss_btn.configure(state="disabled")
         self._delete_one_btn.configure(state="disabled")
         self._appeal_status_lbl.configure(text="No appeal submitted", text_color=COLOR_TEXT_MUTED)
         self._ai_rec_lbl.grid_remove()
@@ -842,10 +901,17 @@ class ViolationLogPanel(CBVMSCard):
                 """
                 SELECT
                     v.id, v.student_id, v.student_name, v.violation_type,
-                    v.timestamp, v.snapshot, v.status,
-                    s.course AS course, s.year_and_section AS year_and_section
+                    v.violation_code, v.timestamp, v.snapshot, v.status,
+                    v.review_deadline, v.confirmed_at, v.appeal_deadline,
+                    v.dismissal_reason, v.semester_id,
+                    s.course AS course, s.year_and_section AS year_and_section,
+                    t.semester_name, t.school_year,
+                    st.is_active AS strike_active,
+                    st.deactivation_reason AS strike_removal_reason
                 FROM violations v
                 LEFT JOIN students s ON s.student_id = v.student_id
+                LEFT JOIN academic_terms t ON t.id = v.semester_id
+                LEFT JOIN strikes st ON st.violation_id = v.id
                 WHERE v.id = ?
                 """,
                 (violation_id,),
@@ -867,29 +933,78 @@ class ViolationLogPanel(CBVMSCard):
         self._detail_year.configure(text=f"Year & Section: {data.get('year_and_section') or '—'}")
 
         vtype_raw = data.get("violation_type") or ""
+        vcode = data.get("violation_code") or vtype_raw
         self._violation_badge.configure(
-            text=_human_violation_type(vtype_raw),
-            fg_color=_violation_badge_color(vtype_raw),
+            text=violation_display_name(vcode, vtype_raw),
+            fg_color=_violation_badge_color(vcode),
         )
 
         ts = (data.get("timestamp") or "—")[:19]
         self._detail_timestamp.configure(text=f"Timestamp: {ts}")
 
         status = (data.get("status") or "unreviewed").strip().lower()
-        self._detail_status.configure(
-            text=f"Status: {'Unreviewed' if status == 'unreviewed' else 'Reviewed'}"
-        )
-        if status == "unreviewed":
+        self._detail_status.configure(text=f"Status: {_status_label(status)}")
+        # Legacy ``unreviewed`` rows are historical only.  Enabling the new actions
+        # for them could create retroactive strikes and student notifications.
+        is_pending = status == PENDING_REVIEW
+        if is_pending:
             self._toggle_btn.configure(
-                state="normal", text="Mark as Reviewed",
+                state="normal", text="Confirm Now",
                 fg_color=COLOR_SAFE, hover_color="#0EA371",
             )
+            self._dismiss_btn.configure(state="normal")
         else:
-            self._toggle_btn.configure(
-                state="normal", text="Mark as Unreviewed",
-                fg_color=COLOR_WARNING, hover_color="#D97706",
+            self._toggle_btn.configure(state="disabled", text="Confirm Now")
+            self._dismiss_btn.configure(state="disabled")
+        # Preserve the old delete feature only for pre-workflow legacy rows; new
+        # workflow records remain auditable and use Dismiss instead.
+        self._delete_one_btn.configure(
+            state="normal" if status in ("unreviewed", "reviewed") else "disabled"
+        )
+
+        semester_id = data.get("semester_id")
+        strike_count = 0
+        if semester_id is not None:
+            strike_count = self.database.get_strike_count(
+                data.get("student_id") or "",
+                vcode,
+                semester_id=int(semester_id),
             )
-        self._delete_one_btn.configure(state="normal")
+        term_text = (
+            f"{data.get('semester_name') or '—'} · {data.get('school_year') or '—'}"
+        )
+        workflow_lines = [f"Semester: {term_text}"]
+        if is_pending:
+            deadline = data.get("review_deadline")
+            if deadline:
+                workflow_lines.append(
+                    f"Administrative Review: {deadline[:19]} UTC "
+                    f"({remaining_time_text(deadline)})"
+                )
+            else:
+                workflow_lines.append("Administrative Review: Legacy record · no automatic deadline")
+        elif status == "unreviewed":
+            workflow_lines.append("Legacy historical record · no automatic deadline")
+        elif status in (CONFIRMED, AUTO_CONFIRMED, "reviewed"):
+            workflow_lines.append(
+                f"Confirmed/Delivered: {(data.get('confirmed_at') or '—')[:19]} UTC"
+            )
+            if data.get("appeal_deadline"):
+                workflow_lines.append(
+                    f"Appeal Deadline: {data['appeal_deadline'][:19]} UTC"
+                )
+        elif status == DISMISSED:
+            workflow_lines.append(
+                f"Dismissal: {data.get('dismissal_reason') or 'False detection dismissed by admin'}"
+            )
+
+        strike_text = f"{violation_display_name(vcode)}: {strike_count}/{STRIKE_LIMIT} active strikes"
+        if strike_count >= STRIKE_LIMIT:
+            strike_text += " — ACTION REQUIRED"
+        if data.get("strike_active") == 0 and data.get("strike_removal_reason"):
+            strike_text += f" · selected strike removed ({data['strike_removal_reason']})"
+        workflow_lines.append(strike_text)
+        self._workflow_info.configure(text="\n".join(workflow_lines))
 
         # Appeal + AI recommendation
         self._ai_rec_lbl.grid_remove()
@@ -949,26 +1064,38 @@ class ViolationLogPanel(CBVMSCard):
     # Actions: status toggle, delete, export
     # ------------------------------------------------------------------
 
-    def _toggle_status(self) -> None:
+    def _confirm_selected(self) -> None:
         if self._selected_violation_row is None:
             return
         vid = int(self._selected_violation_row["id"])
-        current = (self._selected_violation_row.get("status") or "unreviewed").strip().lower()
-        new_status = "reviewed" if current == "unreviewed" else "unreviewed"
-        try:
-            with self.database.connect() as conn:
-                conn.execute("UPDATE violations SET status = ? WHERE id = ?", (new_status, vid))
-                conn.commit()
-        except Exception as exc:
-            self._set_status(f"Failed to update status: {exc}", "error")
+        if self.database.confirm_violation(vid, decided_by="admin"):
+            self._set_status("Violation confirmed; strike and student appeal window activated.", "success")
+        else:
+            self._set_status("Only pending-review violations can be confirmed.", "warning")
+        self.refresh()
+
+    def _dismiss_selected(self) -> None:
+        if self._selected_violation_row is None:
             return
-        self._selected_violation_row["status"] = new_status
+        vid = int(self._selected_violation_row["id"])
+        if self.database.dismiss_violation(
+            vid,
+            decided_by="admin",
+            reason="False detection dismissed during administrative review",
+        ):
+            self._set_status("Violation dismissed; no strike or appeal window was created.", "success")
+        else:
+            self._set_status("Only pending-review violations can be dismissed.", "warning")
         self.refresh()
 
     def _delete_current(self) -> None:
         if self._selected_violation_row is None:
             return
         vid = int(self._selected_violation_row["id"])
+        status = (self._selected_violation_row.get("status") or "").lower()
+        if status not in ("unreviewed", "reviewed"):
+            self._set_status("Workflow records are retained for audit; use Dismiss while pending.", "warning")
+            return
 
         def _do() -> None:
             self.database.delete_violation(vid)
@@ -985,6 +1112,18 @@ class ViolationLogPanel(CBVMSCard):
             return
         count = len(selected)
         ids = [int(s) for s in selected]
+        placeholders = ",".join("?" for _ in ids)
+        with self.database.connect() as conn:
+            legacy_rows = conn.execute(
+                f"""SELECT id FROM violations
+                    WHERE id IN ({placeholders}) AND status IN ('unreviewed', 'reviewed')""",
+                ids,
+            ).fetchall()
+        ids = [int(row["id"]) for row in legacy_rows]
+        if not ids:
+            self._set_status("Selected workflow records are retained for audit.", "warning")
+            return
+        count = len(ids)
 
         def _do() -> None:
             deleted = self.database.delete_violations(ids)
@@ -1001,8 +1140,20 @@ class ViolationLogPanel(CBVMSCard):
             self._set_status(str(exc), "error")
             return
 
-        label = "all" if not where else "filtered"
-        count = self._total_records
+        legacy_clause = "v.status IN ('unreviewed', 'reviewed')"
+        if where:
+            where = where + " AND " + legacy_clause
+        else:
+            where = "WHERE " + legacy_clause
+        label = "legacy filtered"
+        with self.database.connect() as conn:
+            count_row = conn.execute(
+                f"SELECT COUNT(*) AS count FROM violations v {where}", params
+            ).fetchone()
+        count = int(count_row["count"] if count_row else 0)
+        if count == 0:
+            self._set_status("No deletable legacy records match this filter.", "info")
+            return
 
         def _do() -> None:
             deleted = self.database.delete_all_violations(where, params)
@@ -1033,7 +1184,8 @@ class ViolationLogPanel(CBVMSCard):
             with self.database.connect() as conn:
                 rows = conn.execute(
                     f"""
-                    SELECT v.student_name, v.student_id, v.violation_type, v.timestamp, v.status
+                    SELECT v.student_name, v.student_id, v.violation_type,
+                           v.violation_code, v.timestamp, v.status
                     FROM violations v
                     {where}
                     ORDER BY datetime(v.timestamp) DESC, v.id DESC
@@ -1049,9 +1201,9 @@ class ViolationLogPanel(CBVMSCard):
                     writer.writerow([
                         r["student_name"] or "—",
                         r["student_id"] or "—",
-                        _human_violation_type(r["violation_type"] or ""),
+                        violation_display_name(r["violation_code"], r["violation_type"]),
                         (r["timestamp"] or "—")[:19],
-                        "Unreviewed" if status == "unreviewed" else "Reviewed",
+                        _status_label(status),
                     ])
         except Exception as exc:
             self._set_status(f"Export failed: {exc}", "error")

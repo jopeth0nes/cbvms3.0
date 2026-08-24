@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import queue
 import threading
 import time
 import types
@@ -444,6 +445,8 @@ class DashboardSwitchRegressionTests(unittest.TestCase):
         harness = types.SimpleNamespace(
             winfo_exists=lambda: True,
             _drain_camera_events=lambda: None,
+            _notification_out=queue.Queue(),
+            _on_notification=lambda _notification: None,
             _violation_dirty=False,
             _camera=Capture(),
             _camera_needed=lambda: True,

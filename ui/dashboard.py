@@ -8,13 +8,14 @@ import threading
 import time
 import tkinter as tk
 from collections import deque
-from datetime import datetime
+from datetime import date, datetime
 
 import cv2
 import customtkinter as ctk
 import numpy as np
 
 from core.camera import CAMERA_DEVICE_LOCK, CameraCapture
+from core.discipline import local_calendar_day_utc_bounds
 from core.notifier import Notifier
 from core.person_detector import PersonDetector, skin_fraction
 from core.recognizer import FaceRecognizer
@@ -188,6 +189,7 @@ class CBVMSDashboard(ctk.CTk):
         self._boxes_out: queue.Queue = queue.Queue(maxsize=1)     # detect → tracker.update
         self._ident_out: queue.Queue = queue.Queue(maxsize=1)     # recog → identities + alerts
         self._violen_out: queue.Queue = queue.Queue(maxsize=1)    # recog → violation overlay
+        self._notification_out: queue.Queue = queue.Queue()       # any worker → admin UI
         self._violation_dirty = False                              # set by worker, read by UI
         # Cap OpenCV's thread pool so continuous background detection can't peg every core
         # and starve the Tk main thread (keeps the UI snappy).
@@ -233,8 +235,9 @@ class CBVMSDashboard(ctk.CTk):
 
         self._build_ui()
         self._refresh_camera_switcher()   # populate quick source dropdown
-        # Deliver notifications to the UI thread (toast + bell badge).
-        self._notifier.subscribe(lambda n: self.after(0, self._on_notification, n))
+        # Listeners may run on recognition workers.  Queue the payload and let the
+        # feed loop perform every Tk/CTk operation on the UI thread.
+        self._notifier.subscribe(self._notification_out.put)
         self._build_menubar()
         self._tick_clock()
         self._schedule_feed_update()
@@ -507,7 +510,7 @@ class CBVMSDashboard(ctk.CTk):
             return value
 
         self._stat_today_value    = _card(0, label="Total Violations Today", accent=COLOR_DANGER)
-        self._stat_unreviewed_value = _card(1, label="Unreviewed",           accent=COLOR_WARNING)
+        self._stat_unreviewed_value = _card(1, label="Pending Review",       accent=COLOR_WARNING)
         self._stat_students_value = _card(2, label="Students Enrolled",       accent=COLOR_ACCENT)
         self._stat_last_value     = _card(3, label="Last Detection",          accent=COLOR_SAFE)
         return row
@@ -1180,10 +1183,17 @@ class CBVMSDashboard(ctk.CTk):
 
             if not det.get("matched"):
                 # Unknown person: log for security (no classifier run).
-                self._log_db(det, frame, [x1, y1, x2, y2], "unknown_person")
+                self._log_db(
+                    det,
+                    frame,
+                    [x1, y1, x2, y2],
+                    "unknown_person",
+                    violation_code="unknown_person",
+                )
                 continue
 
             parts: list[str] = []
+            violation_events: list[tuple[str, str]] = []
             person_box = None
 
             # --- Uniform check (torso/shirt region) ---
@@ -1261,7 +1271,9 @@ class CBVMSDashboard(ctk.CTk):
                                 # Show the wrong verdict at MIN_CONF, but only log/alert above the
                                 # stricter VIOLATION_CONF bar to avoid borderline false alarms.
                                 if not is_correct and confidence >= UNIFORM_VIOLATION_CONF:
-                                    parts.append(f"Wrong uniform ({confidence:.0%})")
+                                    display_text = f"Wrong uniform ({confidence:.0%})"
+                                    parts.append(display_text)
+                                    violation_events.append(("wrong_uniform", display_text))
 
             # --- Earring check (face crop, male only) ---
             if earring_on and (det.get("gender", "") or "").lower() == "male":
@@ -1271,22 +1283,43 @@ class CBVMSDashboard(ctk.CTk):
                     print(f"[CBVMS] earring predict error: {exc}")
                     label, conf = None, 0.0
                 if label == "with_earring" and conf >= 0.65:
-                    parts.append(f"Earring detected ({conf:.0%})")
+                    display_text = f"Earring detected ({conf:.0%})"
+                    parts.append(display_text)
+                    violation_events.append(("earring", display_text))
 
             det["violation"] = ", ".join(parts) if parts else None
-            if det["violation"]:
+            if violation_events:
                 # Snapshot: full person box if known, else the face box.
                 snap_box = person_box if person_box is not None else [x1, y1, x2, y2]
-                self._log_db(det, frame, snap_box, det["violation"])
+                # Keep one joined string for the live overlay, but persist each category as
+                # its own violation so category-specific strikes remain independently auditable.
+                for violation_code, display_text in violation_events:
+                    self._log_db(
+                        det,
+                        frame,
+                        snap_box,
+                        display_text,
+                        violation_code=violation_code,
+                    )
 
-    def _log_db(self, det: dict, frame: np.ndarray, box: list[int], violation_type: str) -> None:
-        """Persist a violation / unknown person with a 300s per-person cooldown."""
+    def _log_db(
+        self,
+        det: dict,
+        frame: np.ndarray,
+        box: list[int],
+        violation_type: str,
+        violation_code: str | None = None,
+    ) -> None:
+        """Persist one violation category with a 300s per-student/category cooldown."""
         key = det.get("student_id") or "unknown"
-        cooldown_key = f"{key}:{'unknown' if violation_type == 'unknown_person' else 'violation'}"
+        code = (violation_code or "").strip() or (
+            "unknown_person" if violation_type == "unknown_person" else "unknown_violation"
+        )
+        cooldown_key = f"{key}:{code}"
         now = time.monotonic()
-        if now - self._db_log_cooldowns.get(cooldown_key, 0.0) < DB_LOG_COOLDOWN_SECS:
+        last_logged = self._db_log_cooldowns.get(cooldown_key)
+        if last_logged is not None and now - last_logged < DB_LOG_COOLDOWN_SECS:
             return
-        self._db_log_cooldowns[cooldown_key] = now
 
         snapshot_jpeg: bytes | None = None
         try:
@@ -1303,16 +1336,21 @@ class CBVMSDashboard(ctk.CTk):
             pass
 
         try:
-            self._database.log_violation(
+            violation_id = self._database.log_violation(
                 student_id=key,
                 student_name=det.get("name", "Unknown"),
                 violation_type=violation_type,
+                violation_code=code,
                 snapshot_jpeg=snapshot_jpeg,
-                status="unreviewed",
+                status="pending_review",
             )
         except Exception as exc:
             print(f"[CBVMS] log_violation error: {exc}")
             return
+        if violation_id is None:
+            return
+        # A failed insert must remain retryable; start the cooldown only after persistence.
+        self._db_log_cooldowns[cooldown_key] = now
 
         # Fire a real-time notification (sound + toast + bell badge + log panel).
         # Cooldown above already de-duplicates, so this won't spam per frame.
@@ -1459,6 +1497,15 @@ class CBVMSDashboard(ctk.CTk):
             # on the main thread.
             self._drain_camera_events()
 
+            notification_queue = getattr(self, "_notification_out", None)
+            if notification_queue is not None:
+                while True:
+                    try:
+                        notification = notification_queue.get_nowait()
+                    except queue.Empty:
+                        break
+                    self._on_notification(notification)
+
             # A worker logged a violation — refresh the panel here, on the UI thread.
             if self._violation_dirty:
                 self._violation_dirty = False
@@ -1550,16 +1597,29 @@ class CBVMSDashboard(ctk.CTk):
 
     def _refresh_stats(self) -> None:
         try:
+            self._database.process_expired_deadlines()
+            today_start, tomorrow_start = local_calendar_day_utc_bounds(
+                date.today().isoformat()
+            )
             with self._database.connect() as conn:
-                today      = conn.execute("SELECT COUNT(*) AS c FROM violations WHERE date(timestamp) = date('now')").fetchone()
-                unreviewed = conn.execute("SELECT COUNT(*) AS c FROM violations WHERE status = 'unreviewed'").fetchone()
+                today = conn.execute(
+                    """SELECT COUNT(*) AS c FROM violations
+                       WHERE datetime(timestamp) >= datetime(?)
+                         AND datetime(timestamp) < datetime(?)""",
+                    (today_start, tomorrow_start),
+                ).fetchone()
+                pending_review = conn.execute(
+                    "SELECT COUNT(*) AS c FROM violations WHERE status = 'pending_review'"
+                ).fetchone()
                 students   = conn.execute("SELECT COUNT(*) AS c FROM students").fetchone()
                 last       = conn.execute("SELECT MAX(timestamp) AS ts FROM violations").fetchone()
 
             if self._stat_today_value:
                 self._stat_today_value.configure(text=str(int(today["c"] if today else 0)))
             if self._stat_unreviewed_value:
-                self._stat_unreviewed_value.configure(text=str(int(unreviewed["c"] if unreviewed else 0)))
+                self._stat_unreviewed_value.configure(
+                    text=str(int(pending_review["c"] if pending_review else 0))
+                )
             if self._stat_students_value:
                 self._stat_students_value.configure(text=str(int(students["c"] if students else 0)))
             if self._stat_last_value:

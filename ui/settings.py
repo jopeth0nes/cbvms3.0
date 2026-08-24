@@ -101,6 +101,7 @@ class SettingsPanel(ctk.CTkFrame):
         row = self._camera_configuration_section(scroll, row=row)
         row = self._recognition_section(scroll, row=row)
         row = self._violation_section(scroll, row=row)
+        row = self._academic_term_section(scroll, row=row)
         row = self._notifications_section(scroll, row=row)
         row = self._model_status_section(scroll, row=row)
         row = self._admin_section(scroll, row=row)
@@ -137,6 +138,7 @@ class SettingsPanel(ctk.CTkFrame):
     def on_show(self) -> None:
         if self._camera_section is not None:
             self._camera_section.on_show()
+        self._refresh_academic_term()
 
     def on_hide(self) -> None:
         if self._camera_section is not None:
@@ -349,6 +351,111 @@ class SettingsPanel(ctk.CTkFrame):
                 setattr(self.checker, attr, bool(var.get()))
             except Exception:
                 pass
+
+    def _academic_term_section(self, master, *, row: int) -> int:
+        card = self._section_card(master, "Current Semester")
+        card.grid(row=row, column=0, sticky="ew", padx=PADDING, pady=(0, 12))
+        card.grid_columnconfigure(0, weight=1)
+
+        self._term_current_label = ctk.CTkLabel(
+            card, text="", font=body_small_font(), text_color=COLOR_ACCENT,
+            anchor="w",
+        )
+        self._term_current_label.pack(fill="x", padx=PADDING, pady=(0, 8))
+        ctk.CTkLabel(
+            card,
+            text=(
+                "New detections and strikes are assigned to this semester. Changing it "
+                "starts a fresh logical strike period and preserves all prior history."
+            ),
+            font=body_small_font(), text_color=COLOR_TEXT_MUTED,
+            wraplength=620, justify="left",
+        ).pack(anchor="w", padx=PADDING, pady=(0, 10))
+
+        form = ctk.CTkFrame(card, fg_color="transparent")
+        form.pack(fill="x", padx=PADDING, pady=(0, 8))
+        form.grid_columnconfigure(1, weight=1)
+        form.grid_columnconfigure(3, weight=1)
+
+        term = self.database.get_current_academic_term()
+        self._term_name_var = ctk.StringVar(
+            value=term.get("semester_name", "Semester 1")
+        )
+        self._term_year_var = ctk.StringVar(
+            value=term.get("school_year", "")
+        )
+        ctk.CTkLabel(
+            form, text="Semester", font=body_small_font(), text_color=COLOR_TEXT_MUTED,
+        ).grid(row=0, column=0, sticky="w", padx=(0, 8))
+        ctk.CTkComboBox(
+            form,
+            values=["Semester 1", "Semester 2", "Summer"],
+            variable=self._term_name_var,
+            height=34,
+            fg_color=COLOR_BG,
+            border_color=COLOR_BORDER,
+            button_color=COLOR_BORDER,
+            button_hover_color=COLOR_ACCENT_HOVER,
+        ).grid(row=0, column=1, sticky="ew", padx=(0, 14))
+        ctk.CTkLabel(
+            form, text="School Year", font=body_small_font(), text_color=COLOR_TEXT_MUTED,
+        ).grid(row=0, column=2, sticky="w", padx=(0, 8))
+        ctk.CTkEntry(
+            form,
+            textvariable=self._term_year_var,
+            placeholder_text="2026-2027",
+            height=34,
+            fg_color=COLOR_BG,
+            border_color=COLOR_BORDER,
+        ).grid(row=0, column=3, sticky="ew")
+
+        self._term_msg = ctk.CTkLabel(
+            card, text="", font=body_small_font(), text_color=COLOR_TEXT_MUTED,
+        )
+        self._term_msg.pack(anchor="w", padx=PADDING, pady=(0, 6))
+        ctk.CTkButton(
+            card,
+            text="Set Current Semester",
+            height=36,
+            corner_radius=CORNER_RADIUS,
+            fg_color=COLOR_ACCENT,
+            hover_color=COLOR_ACCENT_HOVER,
+            command=self._save_academic_term,
+        ).pack(anchor="e", padx=PADDING, pady=(0, PADDING))
+        self._refresh_academic_term()
+        return row + 1
+
+    def _refresh_academic_term(self) -> None:
+        if not hasattr(self, "_term_current_label"):
+            return
+        term = self.database.get_current_academic_term()
+        self._term_current_label.configure(
+            text=(
+                f"Active: {term.get('semester_name', '—')} · "
+                f"School Year {term.get('school_year', '—')}"
+            )
+        )
+
+    def _save_academic_term(self) -> None:
+        name = self._term_name_var.get().strip()
+        school_year = self._term_year_var.get().strip()
+        if not name or not school_year:
+            self._term_msg.configure(
+                text="Enter both a semester and school year.", text_color=COLOR_WARNING,
+            )
+            return
+        result = self.database.set_current_academic_term(name, school_year)
+        if result is None:
+            self._term_msg.configure(
+                text="Could not update the current semester.", text_color=COLOR_DANGER,
+            )
+            return
+        self._term_msg.configure(
+            text="Current semester updated; prior records were preserved.",
+            text_color=COLOR_SAFE,
+        )
+        self._refresh_academic_term()
+        show_toast(self, "Current semester updated.", type="success")
 
     def _notifications_section(self, master, *, row: int) -> int:
         card = self._section_card(master, "Notifications")

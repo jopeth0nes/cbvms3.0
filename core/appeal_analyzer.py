@@ -110,6 +110,13 @@ _RULES: dict[str, list[tuple[list[str], int, str]]] = {
     ],
 }
 
+# Stable discipline codes used by the strike ledger. Keep the older classifier
+# labels above as aliases so historical appeals and new submissions receive the
+# same advisory analysis.
+_RULES["earring"] = _RULES["with_earring"]
+_RULES["missing_id"] = _RULES["no_id_badge"]
+_RULES["improper_hair"] = _RULES["wrong_hair_color"]
+
 # Generic rules applied to every violation type
 _GENERIC_RULES: list[tuple[list[str], int, str]] = [
     (["proof", "evidence", "receipt", "certificate", "letter", "note",
