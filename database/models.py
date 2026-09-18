@@ -92,6 +92,15 @@ CREATE TABLE IF NOT EXISTS strike_events (
 """
 
 ALL_TABLES = (
+    """CREATE TABLE IF NOT EXISTS attendance (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        student_id TEXT NOT NULL,
+        student_name TEXT NOT NULL,
+        attendance_date TEXT NOT NULL,
+        first_seen TEXT NOT NULL,
+        last_seen TEXT NOT NULL,
+        UNIQUE(student_id, attendance_date)
+    );""",
     USERS_TABLE,
     STUDENTS_TABLE,
     ACADEMIC_TERMS_TABLE,

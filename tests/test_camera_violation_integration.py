@@ -32,6 +32,20 @@ class _ViolationTrainer:
 
 
 class CameraViolationIntegrationTests(unittest.TestCase):
+    def test_attendance_records_recognized_presence_without_a_violation_and_throttles(self) -> None:
+        database = MagicMock()
+        database.record_attendance.return_value = True
+        harness = types.SimpleNamespace(_database=database)
+        detections = [{"student_id": "S-001", "violation": None},
+                      {"student_id": "unknown"}, {"student_id": None}]
+        with patch("ui.dashboard.time.monotonic", return_value=100.0):
+            CBVMSDashboard._record_attendance(harness, detections)
+            CBVMSDashboard._record_attendance(harness, detections)
+        database.record_attendance.assert_called_once_with("S-001")
+        with patch("ui.dashboard.time.monotonic", return_value=131.0):
+            CBVMSDashboard._record_attendance(harness, detections)
+        self.assertEqual(database.record_attendance.call_count, 2)
+
     def test_log_db_persists_real_pending_workflow_record_for_recognized_student(self) -> None:
         with tempfile.TemporaryDirectory(prefix="cbvms_camera_integration_") as tmp_dir:
             database = CBVMSDatabase(Path(tmp_dir) / "cbvms.db")

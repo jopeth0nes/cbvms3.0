@@ -138,6 +138,16 @@ def hash_password(password: str) -> str:
     return hashlib.sha256(password.encode("utf-8")).hexdigest()
 
 
+class _ClosingConnection(sqlite3.Connection):
+    """Commit/rollback a transaction and release its Windows file handle."""
+
+    def __exit__(self, *args):
+        try:
+            return super().__exit__(*args)
+        finally:
+            self.close()
+
+
 class CBVMSDatabase:
     def __init__(self, db_path: Path | str | None = None) -> None:
         if db_path is None:
@@ -147,7 +157,7 @@ class CBVMSDatabase:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
 
     def connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path, timeout=30.0)
+        conn = sqlite3.connect(self.db_path, timeout=30.0, factory=_ClosingConnection)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute("PRAGMA busy_timeout = 30000")
@@ -1892,6 +1902,45 @@ class CBVMSDatabase:
                    ORDER BY v.timestamp DESC""",
             ).fetchall()
         return [dict(r) for r in rows]
+
+    def record_attendance(self, student_id: str, *, observed_at=None) -> bool:
+        """Record a recognized enrolled student's presence once per local day.
+
+        Preserve the earliest/latest sightings even if workers finish out of order.
+        Unknown people never create attendance records.
+        """
+        observed = parse_db_datetime(observed_at) if observed_at is not None else utc_now()
+        if observed is None:
+            raise ValueError("Invalid attendance observation time")
+        day = observed.astimezone().date().isoformat()
+        timestamp = format_db_datetime(observed)
+        with self.connect() as conn:
+            student = conn.execute("SELECT name FROM students WHERE student_id = ?",
+                                   (student_id,)).fetchone()
+            if student is None:
+                return False
+            conn.execute("""INSERT INTO attendance
+                (student_id, student_name, attendance_date, first_seen, last_seen)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(student_id, attendance_date) DO UPDATE SET
+                    first_seen = MIN(attendance.first_seen, excluded.first_seen),
+                    last_seen = MAX(attendance.last_seen, excluded.last_seen)
+                """, (student_id, student["name"], day, timestamp, timestamp))
+        return True
+
+    def get_attendance_report(self, start: str = "", end: str = "",
+                              search: str = "") -> list[dict]:
+        with self.connect() as conn:
+            rows = conn.execute("""SELECT a.*, s.course, s.year_and_section
+                FROM attendance a LEFT JOIN students s ON s.student_id = a.student_id
+                WHERE (? = '' OR a.attendance_date >= ?)
+                  AND (? = '' OR a.attendance_date <= ?)
+                ORDER BY a.attendance_date DESC, a.student_name, a.student_id
+                """, (start, start, end, end)).fetchall()
+        query = search.strip().casefold()
+        return [dict(r) for r in rows if not query or any(
+            query in str(r[k] or "").casefold()
+            for k in ("student_name", "student_id", "course", "year_and_section"))]
 
     def insert_system_report(
         self,

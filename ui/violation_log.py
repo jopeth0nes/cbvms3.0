@@ -22,6 +22,8 @@ from core.discipline import (
     violation_display_name,
 )
 from database.db_manager import CBVMSDatabase
+from core.reports import VIOLATION_HEADERS, violation_values, report_html, open_print_preview
+from pathlib import Path
 from ui.components import (
     COLOR_ACCENT,
     COLOR_ACCENT_HOVER,
@@ -321,6 +323,14 @@ class ViolationLogPanel(CBVMSCard):
             font=body_small_font(),
             command=self._export_csv,
         ).pack(side="right")
+
+        report_row = ctk.CTkFrame(top, fg_color="transparent")
+        report_row.grid(row=3, column=0, sticky="ew", pady=(6, 0))
+        ctk.CTkLabel(report_row, text="Report includes all records matching the filters above.",
+                     font=body_small_font(), text_color=COLOR_TEXT_MUTED).pack(side="left")
+        for label, printing in (("Print Report", True), ("Download Report", False)):
+            ctk.CTkButton(report_row, text=label, width=135, height=32,
+                          command=lambda p=printing: self._export_report(p)).pack(side="right", padx=(6, 0))
 
         # Wire live search (debounced 400 ms)
         for var in (self._search_var, self._type_var, self._status_var, self._from_var, self._to_var):
@@ -1210,3 +1220,28 @@ class ViolationLogPanel(CBVMSCard):
             return
 
         self._set_status(f"Exported {len(rows)} records to CSV.", "success")
+
+    def _export_report(self, printing: bool) -> None:
+        try:
+            where, params = self._filters_to_where()
+            with self.database.connect() as conn:
+                ids = {r["id"] for r in conn.execute(
+                    f"SELECT v.id FROM violations v {where}", params).fetchall()}
+            rows = violation_values([r for r in self.database.get_all_violations_full()
+                                     if r["id"] in ids])
+            description = (f"Dates: {self._from_var.get().strip() or 'All'} to "
+                f"{self._to_var.get().strip() or 'All'} · Search: {self._search_var.get().strip() or 'All'} · "
+                f"Type: {self._type_var.get()} · Status: {self._status_var.get()}")
+            if printing:
+                open_print_preview("Violation Report", VIOLATION_HEADERS, rows, description)
+                self._set_status("Print preview opened. Use Print / Save as PDF in your browser.", "success")
+            else:
+                path = filedialog.asksaveasfilename(parent=self, title="Download Violation Report",
+                    defaultextension=".html", initialfile="violation_report.html",
+                    filetypes=[("Printable HTML report", "*.html")])
+                if path:
+                    Path(path).write_text(report_html("Violation Report", VIOLATION_HEADERS,
+                                                     rows, description), encoding="utf-8")
+                    self._set_status(f"Downloaded report with {len(rows)} records.", "success")
+        except Exception as exc:
+            self._set_status(f"Report failed: {exc}", "error")

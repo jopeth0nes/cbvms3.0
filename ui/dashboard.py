@@ -1118,6 +1118,7 @@ class CBVMSDashboard(ctk.CTk):
             try:
                 frame = self._recog_queue.get(timeout=1.0)
                 detections = self._recognizer.recognize_faces(frame)
+                self._record_attendance(detections)
                 # Identity + alerts first (fast label), then enrich with violations.
                 # All applied on the UI thread — never call Tk from here.
                 _put_latest(self._ident_out, detections)
@@ -1145,6 +1146,24 @@ class CBVMSDashboard(ctk.CTk):
             if ov > best_ov:
                 best_ov, best = ov, pb
         return best if best_ov >= 0.5 else None
+
+    def _record_attendance(self, detections: list[dict]) -> None:
+        """Background-thread: capture recognized presence independently of violations."""
+        for det in detections:
+            student_id = det.get("student_id")
+            if student_id and student_id != "unknown":
+                # Persist independently of whether this student has a violation.
+                # Limit writes while a recognized face remains in the camera.
+                if not hasattr(self, "_attendance_cooldowns"):
+                    self._attendance_cooldowns = {}
+                now = time.monotonic()
+                attendance_key = (student_id, date.today().isoformat())
+                if now - self._attendance_cooldowns.get(attendance_key, -30) >= 30:
+                    try:
+                        if self._database.record_attendance(student_id):
+                            self._attendance_cooldowns[attendance_key] = now
+                    except Exception as exc:
+                        print(f"[CBVMS] attendance recording failed: {exc}")
 
     def _check_violations(self, detections: list[dict], frame: np.ndarray | None) -> None:
         """Background-thread: run uniform/earring classifiers on each enrolled person.

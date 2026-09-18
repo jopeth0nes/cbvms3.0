@@ -12,12 +12,15 @@ from __future__ import annotations
 import io
 import tkinter as tk
 from datetime import datetime
-from tkinter import filedialog, ttk
+from tkinter import filedialog, ttk, messagebox
 
 import customtkinter as ctk
 from PIL import Image, ImageTk
 
 from database.db_manager import CBVMSDatabase
+from core.reports import (VIOLATION_HEADERS, violation_values, write_csv,
+                          report_html, open_print_preview)
+from ui.attendance_panel import AttendancePanel
 from ui.components import (
     COLOR_ACCENT, COLOR_ACCENT_HOVER, COLOR_BG, COLOR_BORDER,
     COLOR_DANGER, COLOR_SAFE, COLOR_SURFACE, COLOR_TEXT, COLOR_TEXT_MUTED,
@@ -81,7 +84,7 @@ class RecordsPanel(ctk.CTkFrame):
                      font=heading_font(20), text_color=COLOR_TEXT).grid(
             row=0, column=0, sticky="w")
         ctk.CTkLabel(hdr,
-                     text="Violation reports · evidence files · appeal decisions · history",
+                     text="Attendance · violation reports · evidence · appeal decisions · history",
                      font=body_small_font(), text_color=COLOR_TEXT_MUTED).grid(
             row=1, column=0, sticky="w")
         ctk.CTkButton(hdr, text="↻  Refresh", width=100, height=32,
@@ -95,6 +98,7 @@ class RecordsPanel(ctk.CTkFrame):
         tab_row.grid(row=1, column=0, sticky="ew", padx=PADDING, pady=(10, 0))
         self._tab_btns: dict[str, ctk.CTkButton] = {}
         tabs = [
+            ("attendance", "Attendance Report"),
             ("violations", "📋  Violation Reports"),
             ("appeals",    "📝  Appeals Management"),
             ("evidence",   "📎  Evidence Files"),
@@ -121,6 +125,7 @@ class RecordsPanel(ctk.CTkFrame):
 
         self._configure_tree_style()
         self._build_violations_tab()
+        self._attendance_frame = AttendancePanel(self._content, database=self.database)
         self._build_appeals_tab()
         self._build_evidence_tab()
         self._build_history_tab()
@@ -132,10 +137,11 @@ class RecordsPanel(ctk.CTkFrame):
         self._tab_var.set(key)
         for k, btn in self._tab_btns.items():
             btn.configure(fg_color=COLOR_ACCENT if k == key else COLOR_SURFACE)
-        for frame in (self._viol_frame, self._appeals_frame,
+        for frame in (self._attendance_frame, self._viol_frame, self._appeals_frame,
                       self._evidence_frame, self._history_frame):
             frame.grid_remove()
         {
+            "attendance": self._attendance_frame,
             "violations": self._viol_frame,
             "appeals":    self._appeals_frame,
             "evidence":   self._evidence_frame,
@@ -194,6 +200,12 @@ class RecordsPanel(ctk.CTkFrame):
                       corner_radius=CORNER_RADIUS, fg_color=_SAFE,
                       hover_color="#0EA371", font=body_small_font(),
                       command=self._export_violations).grid(row=0, column=1, padx=(8, 0))
+        ctk.CTkButton(sbar, text="Download Report", width=130, height=34,
+                      command=lambda: self._violation_report(False)).grid(
+                          row=0, column=2, padx=(8, 0))
+        ctk.CTkButton(sbar, text="Print Report", width=110, height=34,
+                      command=lambda: self._violation_report(True)).grid(
+                          row=0, column=3, padx=(8, 0))
 
         # Left: list
         left = ctk.CTkFrame(self._viol_frame, fg_color=COLOR_SURFACE,
@@ -286,21 +298,39 @@ class RecordsPanel(ctk.CTkFrame):
             self._vd_snapshot.configure(image="", text="No snapshot")
 
     def _export_violations(self) -> None:
-        import csv
         path = filedialog.asksaveasfilename(
             defaultextension=".csv", filetypes=[("CSV", "*.csv")],
             title="Export Violation Reports")
         if not path:
             return
-        rows = self.database.get_all_violations_full()
-        with open(path, "w", newline="", encoding="utf-8") as f:
-            w = csv.writer(f)
-            w.writerow(["ID", "Student Name", "Student ID", "Course",
-                        "Year & Section", "Violation Type", "Timestamp", "Status"])
-            for r in rows:
-                w.writerow([r.get("id"), r.get("student_name"), r.get("student_id"),
-                            r.get("course"), r.get("year_and_section"),
-                            r.get("violation_type"), r.get("timestamp"), r.get("status")])
+        try:
+            write_csv(path, VIOLATION_HEADERS, violation_values(self._report_violations()))
+            messagebox.showinfo("Report saved", "Violation report saved successfully.", parent=self)
+        except Exception as exc:
+            messagebox.showerror("Report failed", str(exc), parent=self)
+
+    def _report_violations(self):
+        self._load_violations()
+        visible = set(self._viol_tree.get_children())
+        return [r for r in self.database.get_all_violations_full() if str(r["id"]) in visible]
+
+    def _violation_report(self, printing):
+        try:
+            rows = violation_values(self._report_violations())
+            description = "Search: " + (self._viol_search.get().strip() or "All records")
+            if printing:
+                open_print_preview("Violation Report", VIOLATION_HEADERS, rows, description)
+            else:
+                path = filedialog.asksaveasfilename(parent=self, title="Download Violation Report",
+                    defaultextension=".html", initialfile="violation_report.html",
+                    filetypes=[("Printable HTML report", "*.html")])
+                if path:
+                    from pathlib import Path
+                    Path(path).write_text(report_html("Violation Report", VIOLATION_HEADERS,
+                                                     rows, description), encoding="utf-8")
+                    messagebox.showinfo("Report saved", "Open the report in a browser to print or save as PDF.", parent=self)
+        except Exception as exc:
+            messagebox.showerror("Report failed", str(exc), parent=self)
 
     # ================================================================== TAB 2: Appeals
 
@@ -737,6 +767,8 @@ class RecordsPanel(ctk.CTkFrame):
         tab = self._tab_var.get()
         if tab == "violations":
             self._load_violations()
+        elif tab == "attendance":
+            self._attendance_frame.refresh()
         elif tab == "appeals":
             self._load_appeals()
         elif tab == "evidence":
