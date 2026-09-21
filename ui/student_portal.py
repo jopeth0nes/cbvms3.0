@@ -18,6 +18,7 @@ import os
 from tkinter import filedialog
 
 from core.appeal_analyzer import analyze_appeal
+from core.student_status import CONTACT_FIELDS, standing_label, suspension_label
 from core.discipline import (
     STUDENT_APPEAL_DAYS,
     parse_db_datetime,
@@ -152,6 +153,16 @@ class StudentPortal(ctk.CTk):
     def _poll_ai_updates(self) -> None:
         """Apply completed AI-analysis UI updates only from Tk's main thread."""
 
+        import time
+        if time.monotonic() - getattr(self, "_last_standing_refresh", 0) >= 5:
+            self._last_standing_refresh = time.monotonic()
+            for label, kind in getattr(self, "_standing_labels", []):
+                if label.winfo_exists():
+                    student = self.db.get_student_by_student_id(self.student_id) or {}
+                    active = self.db.get_active_suspension(self.student_id)
+                    label.configure(text=(standing_label(student) if kind == "status" else
+                        suspension_label(active) if kind == "suspension" else
+                        standing_label(student) + " · " + suspension_label(active)))
         refreshed = False
         while True:
             try:
@@ -278,9 +289,10 @@ class StudentPortal(ctk.CTk):
     # ------------------------------------------------------------------
 
     def _show(self, key: str) -> None:
-        if key in {"dashboard", "violations", "notifications", "appeals"}:
+        if key in {"dashboard", "violations", "notifications", "appeals", "profile"}:
             self._reload_workflow_data()
         self._active = key
+        self._standing_labels = []
         self._set_active_nav()
         for w in self._content.winfo_children():
             w.destroy()
@@ -365,6 +377,11 @@ class StudentPortal(ctk.CTk):
             f"Welcome back, {self.display_name}.  Current semester: {self._current_term_label()}.",
         )
 
+        standing = ctk.CTkLabel(scroll,
+            text=standing_label(self._student) + " · " + suspension_label(self.db.get_active_suspension(self.student_id)),
+            font=_f(13, "bold"), text_color=SP_WARNING, anchor="w")
+        standing.grid(row=3, column=0, sticky="ew", padx=30, pady=(0, 12))
+        self._standing_labels.append((standing, "combined"))
         cards = ctk.CTkFrame(scroll, fg_color="transparent")
         cards.grid(row=1, column=0, sticky="ew", padx=30, pady=(14, 8))
         for c in range(4):
@@ -1128,7 +1145,7 @@ class StudentPortal(ctk.CTk):
         fields = ctk.CTkFrame(card, fg_color="transparent")
         fields.grid(row=1, column=1, sticky="new", padx=(10, 20), pady=(0, 16))
         fields.grid_columnconfigure(0, weight=1)
-        s = self._student
+        s = self.db.get_student_by_student_id(self.student_id) or self._student
         enr = _parse_ts(s.get("enrolled_at", ""))
         rows = [
             ("STUDENT ID", s.get("student_id", self.student_id)),
@@ -1136,13 +1153,19 @@ class StudentPortal(ctk.CTk):
             ("COURSE", s.get("course") or "—"),
             ("YEAR & SECTION", s.get("year_and_section") or "—"),
             ("GENDER", s.get("gender") or "—"),
+            ("ACADEMIC STATUS", standing_label(s)),
+            ("SUSPENSION", suspension_label(self.db.get_active_suspension(self.student_id))),
+            *((label.upper(), s.get(key) or "—") for label, key in CONTACT_FIELDS),
             ("ENROLLED ON", enr.strftime("%b %d, %Y") if enr else (s.get("enrolled_at") or "—")),
         ]
         for i, (label, value) in enumerate(rows):
             ctk.CTkLabel(fields, text=label, font=_f(10, "bold"), text_color=SP_MUTED,
                          anchor="w").grid(row=i * 2, column=0, sticky="w", pady=(8 if i else 0, 0))
-            ctk.CTkLabel(fields, text=str(value), font=_f(14, "bold"), text_color=SP_TEXT,
-                         anchor="w").grid(row=i * 2 + 1, column=0, sticky="w")
+            value_label = ctk.CTkLabel(fields, text=str(value), font=_f(14, "bold"), text_color=SP_TEXT,
+                         anchor="w", wraplength=500, justify="left")
+            value_label.grid(row=i * 2 + 1, column=0, sticky="w")
+            if label in ("ACADEMIC STATUS", "SUSPENSION"):
+                self._standing_labels.append((value_label, "status" if label == "ACADEMIC STATUS" else "suspension"))
 
         # Change Password section
         pwd = ctk.CTkFrame(card, fg_color="transparent")

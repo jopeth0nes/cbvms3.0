@@ -27,6 +27,7 @@ from core.violation_engine import LiveViolationChecker
 from database.db_manager import CBVMSDatabase
 from ui.camera_feed import CameraFeed
 from ui.enrollment import EnrollmentPanel
+from core.student_status import standing_label, suspension_label
 from ui.notifications_panel import NotificationsPanel
 from ui.settings import SettingsPanel
 from ui.training_panel import TrainingPanel
@@ -296,7 +297,7 @@ class CBVMSDashboard(ctk.CTk):
 
         nav_items = [
             ("live",       "📹  Live Monitor"),
-            ("enrollment", "👤  Student Enrollment"),
+            ("enrollment", "👤  Student Management"),
             ("violations", "⚠  Violation Log"),
             ("records",    "🗄  Records"),
             ("training",   "🎓  Training"),
@@ -434,6 +435,7 @@ class CBVMSDashboard(ctk.CTk):
             database=self._database,
             recognizer=self._recognizer,
             get_frame=self._get_camera_frame,
+            username=self.username,
         )
         self._enrollment_panel.grid_remove()
 
@@ -611,7 +613,7 @@ class CBVMSDashboard(ctk.CTk):
 
         titles = {
             "live":       "Live Monitor",
-            "enrollment": "Student Enrollment",
+            "enrollment": "Student Management",
             "violations": "Violation Log",
             "records":    "Database & Record Management",
             "training":   "Training",
@@ -1118,6 +1120,7 @@ class CBVMSDashboard(ctk.CTk):
             try:
                 frame = self._recog_queue.get(timeout=1.0)
                 detections = self._recognizer.recognize_faces(frame)
+                self._refresh_student_standing(detections)
                 self._record_attendance(detections)
                 # Identity + alerts first (fast label), then enrich with violations.
                 # All applied on the UI thread — never call Tk from here.
@@ -1147,11 +1150,38 @@ class CBVMSDashboard(ctk.CTk):
                 best_ov, best = ov, pb
         return best if best_ov >= 0.5 else None
 
+    def _refresh_student_standing(self, detections):
+        """Read current standing each recognition cycle; never cache suspension expiry."""
+        for det in detections:
+            if not det.get("matched"):
+                continue
+            student = self._database.get_student_by_student_id(det.get("student_id"))
+            if not student:
+                det["discipline_eligible"] = False
+                det["student_status"] = "Unrecognized / Possible Visitor"
+                continue
+            det["student_status"] = standing_label(student)
+            det["discipline_eligible"] = (student["student_status"] == "Enrolled"
+                                          and not student["registration_pending"])
+            det["suspension"] = self._database.get_active_suspension(student["student_id"])
+            det["suspension_tag"] = suspension_label(det["suspension"]) if det["suspension"] else ""
+
     def _record_attendance(self, detections: list[dict]) -> None:
         """Background-thread: capture recognized presence independently of violations."""
         for det in detections:
             student_id = det.get("student_id")
             if student_id and student_id != "unknown":
+                if det.get("student_status") in ("Graduate", "Unenrolled"):
+                    if not hasattr(self, "_entry_cooldowns"):
+                        self._entry_cooldowns = {}
+                    key = (student_id, det["student_status"])
+                    now = time.monotonic()
+                    if now - self._entry_cooldowns.get(key, -30) >= 30:
+                        self._database.record_premises_entry(student_id)
+                        self._entry_cooldowns[key] = now
+                    continue
+                if not det.get("discipline_eligible", True):
+                    continue
                 # Persist independently of whether this student has a violation.
                 # Limit writes while a recognized face remains in the camera.
                 if not hasattr(self, "_attendance_cooldowns"):
@@ -1188,12 +1218,15 @@ class CBVMSDashboard(ctk.CTk):
             and self._checker.check_uniform
             and (self._trainer.is_trained("uniform") or self._uniform_matcher.is_loaded())
         )
-        if uniform_on and any(d.get("matched") for d in detections):
+        if uniform_on and any(d.get("matched") and d.get("discipline_eligible", True) for d in detections):
             person_boxes = self._person_detector.detect_persons(frame)
 
         earring_on = self._checker.check_earring and self._trainer.is_trained("earring")
 
         for det in detections:
+            if det.get("matched") and not det.get("discipline_eligible", True):
+                self._uniform_ema.pop(det.get("student_id"), None)
+                continue
             x1, y1, x2, y2 = [int(v) for v in det["box"]]
             x1, y1 = max(0, x1), max(0, y1)
             x2, y2 = min(w, x2), min(h, y2)
@@ -1401,8 +1434,15 @@ class CBVMSDashboard(ctk.CTk):
 
             self._face_presence[key] = now   # always refresh last-seen timestamp
 
-            if is_new_appearance:
+            if not hasattr(self, "_standing_alert_state"):
+                self._standing_alert_state = {}
+            state = (det.get("student_status"), det.get("suspension_tag", ""))
+            changed = self._standing_alert_state.get(key) != state
+            self._standing_alert_state[key] = state
+            if is_new_appearance or changed:
                 self._push_alert(det)
+                if det.get("suspension_tag"):
+                    self._notifier.notify(det["name"], det["suspension_tag"])
 
         # Remove identities that have left the frame long enough
         stale = [
@@ -1419,6 +1459,8 @@ class CBVMSDashboard(ctk.CTk):
             "name": det["name"],
             "student_id": det["student_id"] or "—",
             "gender": det.get("gender", "—"),
+            "student_status": det.get("student_status", "Enrolled"),
+            "suspension_tag": det.get("suspension_tag", ""),
             "matched": det["matched"],
             "violation": det.get("violation"),
             "time": datetime.now().strftime("%H:%M:%S"),
@@ -1474,7 +1516,7 @@ class CBVMSDashboard(ctk.CTk):
             # (e.g. earring) still come from the raw violation string.
             uniform_wrong = (tr.stable_uniform_label == "wrong_uniform")
             other_violation = bool(tr.violation) and "uniform" not in (tr.violation or "").lower()
-            has_violation = uniform_wrong or other_violation
+            has_violation = uniform_wrong or other_violation or bool(tr.suspension_tag)
 
             # Face box: green (OK) / red (violation) / blue (unknown)
             if not matched:
@@ -1484,7 +1526,10 @@ class CBVMSDashboard(ctk.CTk):
             else:
                 face_color = (16, 185, 129)        # BGR green
             cv2.rectangle(out, (x1, y1), (x2, y2), face_color, 2)
-            self._draw_pill(out, x1, y1, tr.name if matched else "Unknown", face_color)
+            label = (f"{tr.name} | {tr.student_status}" if matched else "Unrecognized / Possible Visitor")
+            if tr.suspension_tag:
+                label += " | SUSPENDED"
+            self._draw_pill(out, x1, y1, label, face_color)
 
             # Torso box: orange + uniform prediction label
             torso_box = tr.torso_box
@@ -1630,7 +1675,7 @@ class CBVMSDashboard(ctk.CTk):
                 pending_review = conn.execute(
                     "SELECT COUNT(*) AS c FROM violations WHERE status = 'pending_review'"
                 ).fetchone()
-                students   = conn.execute("SELECT COUNT(*) AS c FROM students").fetchone()
+                students   = conn.execute("SELECT COUNT(*) AS c FROM students WHERE student_status='Enrolled' AND registration_pending=0").fetchone()
                 last       = conn.execute("SELECT MAX(timestamp) AS ts FROM violations").fetchone()
 
             if self._stat_today_value:
@@ -1680,7 +1725,7 @@ class CBVMSDashboard(ctk.CTk):
             # Dot: yellow = unknown, red = violation(s), green = clean
             if not matched:
                 dot_color = COLOR_WARNING
-            elif violations:
+            elif violations or entry.get("suspension_tag"):
                 dot_color = COLOR_DANGER
             else:
                 dot_color = COLOR_SAFE
@@ -1719,10 +1764,16 @@ class CBVMSDashboard(ctk.CTk):
                 font=body_small_font(), text_color=COLOR_TEXT_MUTED, anchor="w",
             ).pack(side="left")
 
+            if matched:
+                ctk.CTkLabel(card, text=entry.get("student_status", "Enrolled"),
+                    font=body_small_font(), text_color=COLOR_TEXT_MUTED).pack(anchor="w", padx=10)
+            if entry.get("suspension_tag"):
+                ctk.CTkLabel(card, text=entry["suspension_tag"], wraplength=280,
+                    font=body_small_font(), text_color=COLOR_DANGER).pack(anchor="w", padx=10, pady=4)
             # Violation / status row
             if not matched:
                 ctk.CTkLabel(
-                    card, text="Not enrolled", font=body_small_font(),
+                    card, text="Unrecognized / Possible Visitor", font=body_small_font(),
                     text_color=COLOR_TEXT_MUTED, anchor="w",
                 ).pack(anchor="w", padx=10, pady=(0, 8))
             elif violations:
@@ -1736,7 +1787,9 @@ class CBVMSDashboard(ctk.CTk):
                     ).pack(side="left", padx=(0, 4), pady=2)
             else:
                 ctk.CTkLabel(
-                    card, text="✓ OK", font=body_small_font(),
+                    card, text=("Entry observed" if entry.get("student_status") in ("Graduate", "Unenrolled")
+                                else "Pending verification" if entry.get("student_status") == "Pending verification"
+                                else "Suspension alert" if entry.get("suspension_tag") else "✓ OK"), font=body_small_font(),
                     text_color=COLOR_SAFE, anchor="w",
                 ).pack(anchor="w", padx=10, pady=(0, 8))
 

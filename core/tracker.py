@@ -60,6 +60,8 @@ class Track:
     student_id: str = ""
     gender: str = "—"
     matched: bool = False
+    student_status: str = "Enrolled"
+    suspension_tag: str = ""
 
     # Violation overlay (set on the recognition path)
     violation: str | None = None
@@ -201,6 +203,16 @@ class FaceTracker:
             tr.gender = r.get("gender", "—") or "—"
             tr.matched = bool(r.get("matched", False))
             tr.violation = r.get("violation")
+            tr.student_status = r.get("student_status", "Enrolled")
+            tr.suspension_tag = r.get("suspension_tag", "")
+            if not r.get("discipline_eligible", True):
+                tr.violation = None
+                tr.uniform_buf.clear()
+                tr.uniform_label = tr.stable_uniform_label = None
+                tr.uniform_conf = tr.stable_uniform_conf = 0.0
+                tr.torso_box = None
+                tr.torso_coast = 0
+                continue
 
             # Uniform smoothing only on the enriched recognition path (the fast identity-only
             # path has no "uniform_label" key, so it must not push empty verdicts or clear the

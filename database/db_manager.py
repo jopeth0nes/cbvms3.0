@@ -27,6 +27,8 @@ from core.discipline import (
     violation_display_name,
 )
 from database.models import ALL_TABLES
+from database.student_management import StudentManagement, migrate_student_management
+from core.student_status import validate_contacts
 
 DEFAULT_ADMIN_USERNAME = "admin"
 DEFAULT_ADMIN_PASSWORD = "admin123"
@@ -148,7 +150,7 @@ class _ClosingConnection(sqlite3.Connection):
             self.close()
 
 
-class CBVMSDatabase:
+class CBVMSDatabase(StudentManagement):
     def __init__(self, db_path: Path | str | None = None) -> None:
         if db_path is None:
             root = Path(__file__).resolve().parent.parent
@@ -167,6 +169,7 @@ class CBVMSDatabase:
         with self.connect() as conn:
             for ddl in ALL_TABLES:
                 conn.execute(ddl)
+            migrate_student_management(conn)
             conn.execute(SYSTEM_REPORTS_TABLE)
             conn.execute(STUDENT_ACCOUNTS_TABLE)
             conn.execute(STUDENT_NOTIFICATIONS_TABLE)
@@ -453,7 +456,7 @@ class CBVMSDatabase:
         with self.connect() as conn:
             rows = conn.execute(
                 """
-                SELECT id, student_id, name, course, year_and_section, gender, email, encoding, photo, enrolled_at
+                SELECT *
                 FROM students
                 ORDER BY name COLLATE NOCASE
                 """
@@ -464,7 +467,7 @@ class CBVMSDatabase:
         with self.connect() as conn:
             return conn.execute(
                 """
-                SELECT id, student_id, name, course, year_and_section, gender, email, encoding, photo, enrolled_at
+                SELECT *
                 FROM students WHERE id = ?
                 """,
                 (student_pk,),
@@ -488,7 +491,9 @@ class CBVMSDatabase:
         photo: bytes,
         gender: str = "Unknown",
         email: str = "",
+        *, contacts: dict | None = None, registration_pending: bool = False,
     ) -> int:
+        contact_values = validate_contacts({**(contacts or {}), "email": email})
         with self.connect() as conn:
             cursor = conn.execute(
                 """
@@ -506,8 +511,12 @@ class CBVMSDatabase:
                     photo,
                 ),
             )
+            pk = int(cursor.lastrowid)
+            assignments = ", ".join(f"{key}=?" for key in contact_values)
+            conn.execute(f"UPDATE students SET {assignments}, registration_pending=? WHERE id=?",
+                         (*contact_values.values(), int(registration_pending), pk))
             conn.commit()
-            return int(cursor.lastrowid)
+            return pk
 
     def update_student_encoding(self, student_pk: int, encoding: bytes, photo: bytes) -> bool:
         with self.connect() as conn:
@@ -563,9 +572,14 @@ class CBVMSDatabase:
         review_deadline = format_db_datetime(add_calendar_days(detected_dt, ADMIN_REVIEW_DAYS))
 
         with self.connect() as conn:
+            # Check current standing inside the same write transaction.
+            # Historical violations and their appeal/strike effects remain intact.
             # Serialize term selection with semester switches so every detection
             # permanently captures exactly one authoritative current term.
             conn.execute("BEGIN IMMEDIATE")
+            standing = conn.execute("SELECT student_status, registration_pending FROM students WHERE student_id=?", (safe_student_id,)).fetchone()
+            if standing and (standing["student_status"] != "Enrolled" or standing["registration_pending"]):
+                return None
             if semester_id is None:
                 term_row = conn.execute(
                     "SELECT id FROM academic_terms WHERE is_current = 1 LIMIT 1"
@@ -1915,9 +1929,10 @@ class CBVMSDatabase:
         day = observed.astimezone().date().isoformat()
         timestamp = format_db_datetime(observed)
         with self.connect() as conn:
-            student = conn.execute("SELECT name FROM students WHERE student_id = ?",
+            conn.execute("BEGIN IMMEDIATE")
+            student = conn.execute("SELECT name, student_status, registration_pending FROM students WHERE student_id = ?",
                                    (student_id,)).fetchone()
-            if student is None:
+            if student is None or student["student_status"] != "Enrolled" or student["registration_pending"]:
                 return False
             conn.execute("""INSERT INTO attendance
                 (student_id, student_name, attendance_date, first_seen, last_seen)

@@ -18,6 +18,9 @@ CREATE TABLE IF NOT EXISTS students (
     year_and_section TEXT,
     gender TEXT DEFAULT 'Unknown',
     email TEXT DEFAULT '',
+    student_status TEXT NOT NULL DEFAULT 'Enrolled',
+    registration_pending INTEGER NOT NULL DEFAULT 0,
+    mobile_number TEXT NOT NULL DEFAULT '',
     encoding BLOB,
     photo BLOB,
     enrolled_at TEXT NOT NULL DEFAULT (datetime('now'))

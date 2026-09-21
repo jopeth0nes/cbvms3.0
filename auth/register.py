@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import io
+from core.student_status import CONTACT_FIELDS, validate_contacts
+
 import pickle
 import threading
 import tkinter as tk
@@ -223,7 +225,7 @@ class StudentRegistrationWindow(ctk.CTkToplevel):
     # ── Left: registration form ─────────────────────────────────────────
 
     def _build_form(self, parent) -> None:
-        card = ctk.CTkFrame(parent, fg_color=COLOR_SURFACE,
+        card = ctk.CTkScrollableFrame(parent, fg_color=COLOR_SURFACE,
                             corner_radius=CORNER_RADIUS,
                             border_width=1, border_color=COLOR_BORDER)
         card.grid(row=0, column=0, sticky="nsew", padx=(0, 6), pady=(0, 0))
@@ -258,9 +260,12 @@ class StudentRegistrationWindow(ctk.CTkToplevel):
                                variable=self._gender_var, height=36).grid(
             row=6, column=1, sticky="ew", padx=(0, PADDING), pady=(12, 0))
 
+        self._contact_entries = {}
+        for index, (label, key) in enumerate(CONTACT_FIELDS, start=7):
+            self._contact_entries[key] = row(index, label, lambda p: ctk.CTkEntry(p, height=36))
         # spacer
         ctk.CTkFrame(card, fg_color="transparent", height=12).grid(
-            row=7, column=0, columnspan=2)
+            row=7 + len(CONTACT_FIELDS), column=0, columnspan=2)
 
     # ── Right: face capture ─────────────────────────────────────────────
 
@@ -432,6 +437,11 @@ class StudentRegistrationWindow(ctk.CTkToplevel):
         course   = self._e_course.get().strip()
         year     = self._e_year.get().strip()
         gender   = self._gender_var.get()
+        try:
+            contacts = validate_contacts({key: entry.get() for key, entry in self._contact_entries.items()})
+        except ValueError as exc:
+            self._set_err(str(exc))
+            return
 
         if not all([name, username, password, sid, course, year]):
             self._set_err("Please fill in all fields.")
@@ -504,7 +514,8 @@ class StudentRegistrationWindow(ctk.CTkToplevel):
                 self.database.insert_student(
                     student_id=sid, name=name, course=course,
                     year_and_section=year, gender=gender,
-                    encoding=blob, photo=photo_bytes,
+                    encoding=blob, photo=photo_bytes, email=contacts["email"],
+                    contacts=contacts, registration_pending=True,
                 )
                 self.database.insert_student_account(sid, username, password)
                 if self._recognizer and blob:
@@ -519,7 +530,7 @@ class StudentRegistrationWindow(ctk.CTkToplevel):
         threading.Thread(target=_do, daemon=True).start()
 
     def _on_success(self) -> None:
-        self._set_err("✓  Registered successfully! You can now log in.", ok=True)
+        self._set_err("✓ Registered! You can log in; OSA must verify your enrollment.", ok=True)
         self._cap_btn.configure(state="disabled")
         self.after(2000, self._close)
 

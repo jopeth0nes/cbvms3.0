@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from core.student_status import CONTACT_FIELDS, validate_contacts, standing_label, suspension_label
+from ui.student_management import open_student_details, open_premises_log
+
 import pickle
 import re
 import threading
@@ -70,9 +73,11 @@ class EnrollmentPanel(ctk.CTkFrame):
         database: CBVMSDatabase,
         recognizer: Recognizer,
         get_frame: Callable[[], np.ndarray | None],
+        username: str = "admin",
         **kwargs,
     ) -> None:
         super().__init__(master, fg_color=COLOR_BG, **kwargs)
+        self.username = username
         self.database = database
         self.recognizer = recognizer
         self.get_frame = get_frame
@@ -103,6 +108,12 @@ class EnrollmentPanel(ctk.CTkFrame):
         self._build_preview_panel()
         self._reload_students()
         self.grid_remove()
+        self.after(15000, self._refresh_standing_tags)
+
+    def _refresh_standing_tags(self):
+        if self.winfo_ismapped() and self._enroll_screen is None:
+            self._reload_students()
+        self.after(15000, self._refresh_standing_tags)
 
     # ------------------------------------------------------------------
     # Left panel — student list
@@ -124,7 +135,7 @@ class EnrollmentPanel(ctk.CTkFrame):
         header.grid(row=0, column=0, sticky="ew", padx=PADDING, pady=(PADDING, 8))
         header.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(
-            header, text="Enrolled Students", font=heading_font(16), text_color=COLOR_TEXT,
+            header, text="Student Management", font=heading_font(16), text_color=COLOR_TEXT,
         ).grid(row=0, column=0, sticky="w")
         ctk.CTkButton(
             header,
@@ -144,6 +155,14 @@ class EnrollmentPanel(ctk.CTkFrame):
             textvariable=self._search_var,
         )
         search.grid(row=1, column=0, sticky="ew", padx=PADDING, pady=(0, 8))
+        filters = ctk.CTkFrame(left, fg_color="transparent")
+        filters.grid(row=3, column=0, sticky="ew", padx=PADDING, pady=(0, 8))
+        self._status_filter = ctk.CTkOptionMenu(filters,
+            values=["All", "Enrolled", "Graduate", "Unenrolled", "Pending verification"],
+            command=lambda _: self._apply_filter())
+        self._status_filter.pack(side="left")
+        ctk.CTkButton(filters, text="Premises Entry Log", width=145,
+            command=lambda: open_premises_log(self, self.database)).pack(side="right")
 
         tree_wrap = ctk.CTkFrame(left, fg_color=COLOR_BG, corner_radius=CORNER_RADIUS)
         tree_wrap.grid(row=2, column=0, sticky="nsew", padx=PADDING, pady=(0, 8))
@@ -151,7 +170,7 @@ class EnrollmentPanel(ctk.CTkFrame):
         tree_wrap.grid_columnconfigure(0, weight=1)
 
         self._configure_tree_style()
-        columns = ("name", "student_id", "course", "year_and_section", "gender", "enrolled_at")
+        columns = ("name", "student_id", "course", "year_and_section", "gender", "student_status", "suspension", "enrolled_at")
         self._tree = ttk.Treeview(
             tree_wrap,
             columns=columns,
@@ -165,10 +184,12 @@ class EnrollmentPanel(ctk.CTkFrame):
             "course": "Course",
             "year_and_section": "Year & Section",
             "gender": "Gender",
+            "student_status": "Status",
+            "suspension": "Suspension",
             "enrolled_at": "Date Enrolled",
         }
         widths = {"name": 130, "student_id": 90, "course": 90,
-                  "year_and_section": 100, "gender": 65, "enrolled_at": 100}
+                  "year_and_section": 100, "gender": 65, "student_status": 110, "suspension": 210, "enrolled_at": 100}
         for col in columns:
             self._tree.heading(col, text=headings[col])
             self._tree.column(col, width=widths[col], anchor="w")
@@ -177,6 +198,9 @@ class EnrollmentPanel(ctk.CTkFrame):
         self._tree.configure(yscrollcommand=scroll_y.set)
         self._tree.grid(row=0, column=0, sticky="nsew")
         scroll_y.grid(row=0, column=1, sticky="ns")
+        scroll_x = ttk.Scrollbar(tree_wrap, orient="horizontal", command=self._tree.xview)
+        scroll_x.grid(row=1, column=0, sticky="ew")
+        self._tree.configure(xscrollcommand=scroll_x.set)
         self._tree.bind("<<TreeviewSelect>>", self._on_row_select)
 
         footer = ctk.CTkFrame(left, fg_color="transparent")
@@ -208,6 +232,20 @@ class EnrollmentPanel(ctk.CTkFrame):
             btn_row, text="Delete Selected", height=32, corner_radius=CORNER_RADIUS,
             fg_color=COLOR_DANGER, hover_color="#DC2626", command=self._delete_selected,
         ).grid(row=0, column=2, sticky="ew")
+
+        ctk.CTkButton(btn_row, text="Edit Details / Suspension", height=32,
+            corner_radius=CORNER_RADIUS, fg_color=COLOR_ACCENT,
+            command=self._edit_selected_details).grid(row=1, column=0, columnspan=3, sticky="ew", pady=(8, 0))
+
+    def _edit_selected_details(self):
+        if not self._tree.selection():
+            self._set_status("Select a student first.", error=True)
+            return
+        student = self._resolve_selected_student()
+        if not student:
+            self._set_status("Select a student first.", error=True)
+            return
+        open_student_details(self, self.database, student["student_id"], self.username, self._reload_students)
 
     # ------------------------------------------------------------------
     # Right panel — selected student photo preview
@@ -297,21 +335,30 @@ class EnrollmentPanel(ctk.CTkFrame):
     # ------------------------------------------------------------------
 
     def _reload_students(self) -> None:
+        selection = self._tree.selection()
         rows = self.database.get_all_students()
         self._students = [dict(row) for row in rows]
         self._apply_filter()
-        self._count_label.configure(text=f"{len(self._students)} students enrolled")
+        if selection and self._tree.exists(selection[0]):
+            self._tree.selection_set(selection[0])
+            self._on_row_select()
 
     def _apply_filter(self) -> None:
         query = self._search_var.get().strip().lower()
         for item in self._tree.get_children():
             self._tree.delete(item)
 
+        shown = 0
         for student in self._students:
+            status_filter = self._status_filter.get()
+            if status_filter != "All" and standing_label(student) != status_filter:
+                continue
             name = (student.get("name") or "").lower()
             sid = (student.get("student_id") or "").lower()
             if query and query not in name and query not in sid:
                 continue
+            shown += 1
+            active_suspension = self.database.get_active_suspension(student["student_id"])
             enrolled = student.get("enrolled_at") or ""
             if enrolled and "T" not in enrolled:
                 enrolled = enrolled.replace(" ", " ")[:16]
@@ -323,9 +370,13 @@ class EnrollmentPanel(ctk.CTkFrame):
                     student.get("course", "") or "—",
                     student.get("year_and_section", "") or "—",
                     student.get("gender", "") or "—",
+                    standing_label(student),
+                    suspension_label(active_suspension),
                     enrolled or "—",
                 ),
             )
+
+        self._count_label.configure(text=f"{shown} of {len(self._students)} students")
 
     def _on_row_select(self, _event: tk.Event | None = None) -> None:
         selection = self._tree.selection()
@@ -433,6 +484,7 @@ class EnrollmentPanel(ctk.CTkFrame):
     def on_show(self) -> None:
         # Always land on the student list when the panel is (re)opened.
         if self._enroll_screen is None:
+            self._reload_students()
             self._list_screen.grid()
 
     def on_hide(self) -> None:
@@ -580,8 +632,9 @@ class EnrollmentPanel(ctk.CTkFrame):
             font=body_font(12), text_color=COLOR_TEXT_MUTED,
         ).grid(row=1, column=0, sticky="w", padx=PADDING_LG, pady=(2, 14))
 
-        form = ctk.CTkFrame(card, fg_color="transparent")
-        form.grid(row=2, column=0, sticky="ew", padx=PADDING_LG, pady=(0, 4))
+        card.grid_rowconfigure(2, weight=1)
+        form = ctk.CTkScrollableFrame(card, fg_color="transparent", height=310)
+        form.grid(row=2, column=0, sticky="nsew", padx=PADDING_LG, pady=(0, 4))
         form.grid_columnconfigure(1, weight=1)
 
         fields = [
@@ -589,7 +642,7 @@ class EnrollmentPanel(ctk.CTkFrame):
             ("Student ID", "student_id"),
             ("Course", "course"),
             ("Year and Section", "year_and_section"),
-            ("Email Address", "email"),
+            *CONTACT_FIELDS,
         ]
         self._entries = {}
         for r, (label, key) in enumerate(fields):
@@ -602,12 +655,12 @@ class EnrollmentPanel(ctk.CTkFrame):
             self._entries[key] = entry
 
         ctk.CTkLabel(form, text="Gender", font=body_font(13), text_color=COLOR_TEXT_MUTED).grid(
-            row=5, column=0, sticky="w", pady=9, padx=(0, 16)
+            row=len(fields), column=0, sticky="w", pady=9, padx=(0, 16)
         )
         self._gender_var = ctk.StringVar(value="Male")
         ctk.CTkSegmentedButton(
             form, values=["Male", "Female"], variable=self._gender_var, height=36,
-        ).grid(row=5, column=1, sticky="ew", pady=9)
+        ).grid(row=len(fields), column=1, sticky="ew", pady=9)
 
         btns = ctk.CTkFrame(card, fg_color="transparent")
         btns.grid(row=3, column=0, sticky="ew", padx=PADDING_LG, pady=(14, PADDING_LG))
@@ -671,7 +724,7 @@ class EnrollmentPanel(ctk.CTkFrame):
         email = self._entries["email"].get().strip()
 
         if not all([name, student_id, course, year_and_section]):
-            self._set_enroll_status("Please fill in all fields (email is optional).", error=True)
+            self._set_enroll_status("Name, student ID, course, and year/section are required. Contacts are optional.", error=True)
             return
         if email and not _EMAIL_RE.match(email):
             self._set_enroll_status(
@@ -681,6 +734,11 @@ class EnrollmentPanel(ctk.CTkFrame):
             self._set_enroll_status(f"Student ID '{student_id}' is already enrolled.", error=True)
             return
 
+        try:
+            validate_contacts({key: self._entries[key].get() for _, key in CONTACT_FIELDS})
+        except ValueError as exc:
+            self._set_enroll_status(str(exc), error=True)
+            return
         self._set_enroll_status("")
         self._build_enroll_capture(state)
 
@@ -1051,6 +1109,7 @@ class EnrollmentPanel(ctk.CTkFrame):
         year_and_section = self._entries["year_and_section"].get().strip()
         email = self._entries.get("email", None)
         email = email.get().strip() if email else ""
+        contacts = {key: self._entries[key].get() for _, key in CONTACT_FIELDS}
         gender = self._gender_var.get()
 
         def _rearm(msg: str) -> None:
@@ -1061,7 +1120,7 @@ class EnrollmentPanel(ctk.CTkFrame):
                 self._wizard_refresh(state, _ENROLL_FINISH_TEXT)
 
         if not all([name, student_id, course, year_and_section]):
-            _rearm("Please fill in all fields (email is optional).")
+            _rearm("Name, student ID, course, and year/section are required. Contacts are optional.")
             return
         if self.database.student_id_exists(student_id):
             _rearm(f"Student ID '{student_id}' is already enrolled.")
@@ -1091,7 +1150,7 @@ class EnrollmentPanel(ctk.CTkFrame):
                 self.database.insert_student(
                     student_id=student_id, name=name, course=course,
                     year_and_section=year_and_section, gender=gender,
-                    encoding=blob, photo=photo, email=email,
+                    encoding=blob, photo=photo, email=email, contacts=contacts,
                 )
             except Exception as exc:
                 modal.after(0, lambda e=exc: _rearm(f"Enrollment failed: {e}"))
