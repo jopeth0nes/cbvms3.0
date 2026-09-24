@@ -1,0 +1,241 @@
+DATABASE AND CODE CHANGES
+
+DATABASE FIELDS AND TABLES
+
+- Added to students: student_status, registration_pending, mobile_number.
+- Reused the existing email field.
+- Added tables: student_status_history, student_suspensions, premises_entries.
+- Guardian fields are not included in the current forms or database setup.
+
+NEW DATABASE CRUD CALLS
+File: database/student_management.py
+These methods are available through the CBVMSDatabase object (db).
+
+1. UPDATE: db.update_student_details(...)
+   Saves academic status, student email, mobile number, and verification state.
+   Also INSERTS a status-history record when status or verification changes.
+
+2. READ: db.get_student_status_history(student_id)
+   Retrieves status changes, reasons, administrator names, and timestamps.
+
+3. CREATE: db.impose_suspension(...)
+   INSERTS a suspension with its reason, start/end dates, assigning administrator,
+   and optional related violation ID.
+
+4. UPDATE: db.lift_suspension(...)
+   Records who lifted/cancelled a suspension, when, and why.
+   Keeps the original suspension record.
+
+5. READ: db.get_active_suspension(student_id)
+   Retrieves the suspension active at the current time.
+   Timed suspensions stop being active at their end time without deleting history.
+
+6. READ: db.get_suspension_history(student_id)
+   Retrieves active, scheduled, expired, and lifted suspension records.
+
+7. CREATE / UPDATE: db.record_premises_entry(student_id)
+   INSERTS a Graduate/Unenrolled premises entry or UPDATES its last-seen time
+   when repeated camera sightings belong to the same visit.
+
+8. READ: db.get_premises_entries(search="", status="All")
+   Retrieves the latest 1,000 matching premises entries.
+
+9. DELETE: No new delete commands were added.
+
+EDITED DATABASE CALLS
+File: database/db_manager.py
+
+1. db.initialize()
+   Calls migrate_student_management(conn).
+   Adds missing fields/tables using ALTER TABLE and CREATE TABLE IF NOT EXISTS.
+
+2. db.insert_student(...)
+   Added optional contacts and registration_pending arguments.
+   Validates and saves student contact information and verification state.
+   Existing callers remain compatible.
+
+3. db.get_all_students() / db.get_student(...)
+   Changed their SELECT queries to return all student fields, including new ones.
+
+4. db.record_attendance(...)
+   Checks current academic status and registration verification before saving.
+   Graduate, Unenrolled, and unverified registrations do not create attendance.
+
+5. db.log_violation(...)
+   Checks current academic status and registration verification before saving.
+   Blocks new violations for Graduate, Unenrolled, and unverified registrations.
+   Existing unknown-person security logging remains.
+
+DATABASE SCHEMA FILE
+File: database/models.py
+
+- Updated the students table definition with student_status,
+  registration_pending, and mobile_number.
+- Existing records default to Enrolled and verified during migration.
+- Existing student email is reused; new mobile numbers start blank.
+
+OTHER IMPORTANT CODE CHANGES
+
+1. core/student_status.py
+   Added shared student-contact validation and status/suspension labels.
+
+2. ui/enrollment.py
+   Added status filtering, contact inputs, status/suspension table columns,
+   student-editing controls, and access to the premises log.
+   Renamed the navigation section to Student Management.
+
+3. ui/student_management.py
+   Added Details, Suspension, History, and Premises Entry Log dialogs.
+   Uses the existing desktop styling and controls.
+
+4. auth/register.py
+   Added student email/mobile inputs.
+   New self-registrations await OSA enrollment verification.
+   Pending verification is a registration flag, not Unenrolled academic status.
+
+5. ui/dashboard.py
+   Reads current status and suspension during recognition.
+   Routes Graduate/Unenrolled sightings to premises entries instead of attendance.
+   Skips their student violation checks and displays suspension alerts.
+   Counts only verified Enrolled students in the enrolled-student statistic.
+
+6. core/tracker.py
+   Carries academic-status and suspension tags into camera overlays.
+   Clears outdated violation overlays when student checks no longer apply.
+
+7. ui/student_portal.py
+   Displays student contact information, academic status, and suspension tags.
+   Refreshes visible status/suspension labels.
+
+EXISTING RULES PRESERVED
+
+- Five-day automatic violation confirmation.
+- Strike counting per violation category and semester.
+- Existing appeal deadlines and approval/rejection effects.
+- Previous attendance, violations, strikes, and appeals remain stored.
+- Suspensions require explicit OSA assignment; three strikes do not automatically
+  impose one. Approving an appeal does not automatically lift a suspension.
+
+DATABASE APPLICATION
+
+- Migration runs during normal application database initialization.
+- Development checks used temporary databases, not the actual student database.
+
+
+APPEAL AND ADMIN ALERTS UPDATE — 2026-09-23
+
+EXISTING WORK REVIEWED AND RETAINED
+
+- Five-day appeal deadline measured from confirmation, not camera detection.
+- Lime-green appeal buttons, picture validation, atomic appeal/evidence submission.
+- Separate Violations / Appeals category buttons and All / Unread / Today filters.
+- Category badges, combined sidebar badge, persisted appeal read status, and
+  navigation from alerts to the appropriate Records tab.
+- Existing student-status, suspension, attendance, strike, and camera changes.
+
+DATABASE FIELD
+
+- appeals.admin_alert_read: INTEGER NOT NULL DEFAULT 0.
+  0 = unread; 1 = read. It is independent of pending/approved/rejected status.
+  initialize() adds this field to existing databases only when missing.
+
+DATABASE CRUD CALLS ADDED / COMPLETED
+
+1. CREATE: db.insert_appeal(violation_id, student_id, reason, evidence=picture)
+   Alias: db.submit_appeal(...)
+   picture is a tuple: (filename, "image", raw_picture_bytes).
+   Example: evidence=("proof.jpg", "image", picture_bytes).
+   A picture is required. Supported formats: JPG/JPEG, PNG, BMP, up to 10 MB.
+   The explanation must contain 20–1000 characters, matching the existing UI.
+   INSERT INTO appeals and INSERT INTO evidence_files occur in one transaction.
+   Failed evidence storage rolls back the whole submission and creates no alert.
+   Ownership, active strike, confirmation, deadline, and duplicate submission
+   checks are enforced before saving. The server clock is checked after acquiring
+   the database write lock, so waiting for a lock cannot bypass the deadline.
+   Existing exact-boundary behavior is retained: accepted at the precise deadline,
+   rejected after it. A successful submission returns its appeal ID; failure returns None.
+
+2. READ: db.get_admin_appeal_alerts()
+   SELECTs appeals joined to student and violation information.
+   Returns submission alerts, appeal status, and persisted read state.
+
+3. READ: db.admin_appeal_unread_count()
+   SELECT COUNT(*) FROM appeals WHERE admin_alert_read = 0.
+
+4. UPDATE: db.mark_admin_appeal_alert_read(appeal_id)
+   UPDATE appeals SET admin_alert_read = 1 WHERE id = ?.
+   Omitting appeal_id explicitly marks all appeal alerts as read.
+   Merely opening the Alerts page does not call this command.
+
+5. CREATE: db.insert_evidence_file(appeal_id, student_id, filename, file_type, file_data)
+   The existing secondary evidence helper now validates the picture, ownership,
+   and pending appeal status before inserting. It cannot accept PDF/TXT files.
+   New appeal submissions use insert_appeal(evidence=...) instead, ensuring the
+   initial appeal and its required picture are committed together.
+
+6. UPDATE: db.update_appeal_decision(appeal_id, decision, admin_notes, decided_by=...)
+   The existing transaction still updates appeal status, strike effects, history,
+   and the student's in-app notification together.
+   RecordsPanel now passes the actual logged-in admin username as decided_by.
+
+7. READ: db.get_appeal_eligibility(violation_id, student_id)
+   Existing backend method reused by the page and open-form buttons every second.
+   The submission transaction independently enforces the same eligibility rules.
+
+OTHER CODE CHANGES
+
+- core/appeal_evidence.py: shared image decoding/validation. Rejects missing,
+  malformed, damaged, unsupported, oversized, PDF, and text evidence.
+- ui/student_portal.py: eligible violation cards and related notifications show
+  Submit Appeal in #32CD32. Expired buttons remain visible, gray, disabled, and
+  labeled Appeal Period Expired. Open-form buttons update too, without erasing
+  reasoning. Card status/deadline text updates with the button. The form scrolls
+  so picture selection and submission remain reachable on smaller windows.
+- ui/student_portal.py: polls for admin decisions every three seconds and updates
+  relevant open student pages. Students can see approved/rejected status and notes.
+- ui/notifications_panel.py: category selectors remain separate from time/read
+  filters. Mark all read applies to the selected category. Opening a notification
+  acknowledges that item and navigates to Records. Today refreshes after midnight;
+  a transient refresh error does not permanently stop polling.
+- ui/dashboard.py: sidebar count combines violation and appeal unread counts;
+  Alerts opens without bulk acknowledgement. Passes admin identity to Records.
+- ui/records_panel.py: appeal alerts select their appeal in Appeals Management,
+  clearing the status filter as needed. Violation alerts open Violation Reports.
+  Submitted pictures are displayed and can be clicked for an enlarged view.
+
+VERIFICATION
+
+- Full suite: 95 tests passed, including the existing camera/discipline tests.
+- Tested confirmation-based deadline and exact/late boundaries, deadline passage
+  while acquiring a write lock, and timer-driven disabling on an open violation
+  card, notification, and appeal form while preserving the typed explanation.
+- Tested supported pictures, missing/corrupt/unsupported/oversized pictures,
+  evidence-write rollback, invalid reasoning, and concurrent duplicate submissions.
+- Tested read/unread persistence across restart, category badges, combined sidebar
+  count, filter isolation, midnight refresh, and both notification destinations.
+- Tested violation notification -> picture-backed student submission -> admin
+  alert -> picture viewing -> approval/rejection -> student result and strike update
+  using actual desktop buttons and temporary databases. AI calls were mocked.
+- A camera stress-test timeout in an earlier combined run passed in isolation;
+  Tk test cleanup was corrected and the final complete suite passed.
+- No production student database or live camera hardware was used for validation.
+
+OUT OF SCOPE / LIMITATIONS
+
+- No violation, appeal-result, or deadline-expiry emails were implemented.
+- Appeal notification read status persists. Existing violation alerts still use
+  the current session's in-memory notifier; their restart persistence was not changed.
+- Existing historical appeals without pictures are retained. Picture requirements
+  apply to new submissions; no historical evidence was fabricated or removed.
+- Live hardware and visual appearance on the target monitor were not manually tested.
+
+RECHECK — 2026-09-23
+
+- Rechecked all six appeal/Alerts requirements against the current code.
+- Fixed an additional timing issue: an AI-analysis completion could replace the
+  cached appeal status before the decision refresh noticed an admin's decision.
+  An already-open violation or notification page could then remain outdated.
+- ui/student_portal.py now checks for decision changes before replacing that cache.
+- Added a regression test for simultaneous AI completion and admin approval.
+- Final full regression run: 96 tests passed. No additional database schema or
+  CRUD changes in this recheck; no email features were added.

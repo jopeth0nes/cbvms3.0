@@ -16,6 +16,7 @@ class Notification:
     violation: str
     timestamp: float = field(default_factory=time.time)
     acknowledged: bool = False
+    category: str = "violations"
 
 
 def play_alert() -> None:

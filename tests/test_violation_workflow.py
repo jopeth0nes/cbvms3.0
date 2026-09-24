@@ -22,6 +22,7 @@ from core.discipline import (
     format_db_datetime,
 )
 from database.db_manager import CBVMSDatabase
+from tests.evidence_fixture import picture_evidence
 
 
 UTC = timezone.utc
@@ -130,6 +131,7 @@ class ViolationWorkflowTests(unittest.TestCase):
                 violation_id,
                 student_id or self.STUDENT_A,
                 reason,
+                evidence=picture_evidence(),
             )
 
     # ------------------------------------------------------------------
