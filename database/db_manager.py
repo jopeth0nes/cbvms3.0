@@ -170,6 +170,9 @@ class CBVMSDatabase(StudentManagement):
             for ddl in ALL_TABLES:
                 conn.execute(ddl)
             migrate_student_management(conn)
+            student_cols = {r[1] for r in conn.execute("PRAGMA table_info(students)")}
+            if "profile_photo" not in student_cols:
+                conn.execute("ALTER TABLE students ADD COLUMN profile_photo BLOB")
             conn.execute(SYSTEM_REPORTS_TABLE)
             conn.execute(STUDENT_ACCOUNTS_TABLE)
             conn.execute(STUDENT_NOTIFICATIONS_TABLE)
@@ -517,6 +520,15 @@ class CBVMSDatabase(StudentManagement):
                          (*contact_values.values(), int(registration_pending), pk))
             conn.commit()
             return pk
+
+    def update_student_profile_photo(self, student_id: str, photo: bytes) -> bool:
+        """Save a portal avatar without changing enrollment photo or face encoding."""
+        with self.connect() as conn:
+            cursor = conn.execute(
+                "UPDATE students SET profile_photo = ? WHERE student_id = ?",
+                (photo, student_id),
+            )
+            return cursor.rowcount > 0
 
     def update_student_encoding(self, student_pk: int, encoding: bytes, photo: bytes) -> bool:
         with self.connect() as conn:

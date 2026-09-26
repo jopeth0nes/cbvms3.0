@@ -27,6 +27,7 @@ from core.trainer import ViolationTrainer
 from core.violation_engine import LiveViolationChecker
 from database.db_manager import CBVMSDatabase
 from ui.camera_feed import CameraFeed
+from ui.welcome import welcome_banner
 from ui.enrollment import EnrollmentPanel
 from core.student_status import standing_label, suspension_label
 from ui.notifications_panel import NotificationsPanel
@@ -217,6 +218,8 @@ class CBVMSDashboard(ctk.CTk):
         self._uniform_ema: dict[str, float] = {}       # identity_key → smoothed P(correct uniform)
 
         self._enrollment_panel: EnrollmentPanel | None = None
+        self._training_panel: TrainingPanel | None = None
+        self._suspensions_panel: SuspensionsPanel | None = None
         self._violation_panel: ViolationLogPanel | None = None
         self._settings_panel: SettingsPanel | None = None
         self._notifications_panel: NotificationsPanel | None = None
@@ -255,7 +258,10 @@ class CBVMSDashboard(ctk.CTk):
         self.grid_columnconfigure(0, weight=0, minsize=220)
         self.grid_columnconfigure(1, weight=1)
         self.grid_columnconfigure(2, weight=0, minsize=280)
-        self.grid_rowconfigure(0, weight=1)
+        self.grid_rowconfigure(0, weight=0)
+        self.grid_rowconfigure(1, weight=1)
+        welcome_banner(self, self.username, "Administrator").grid(
+            row=0, column=1, columnspan=2, sticky="ew", padx=16, pady=(16, 0))
 
         self._build_left_sidebar()
         self._build_center_panel()
@@ -270,15 +276,15 @@ class CBVMSDashboard(ctk.CTk):
             border_width=1,
             border_color=COLOR_BORDER,
         )
-        sidebar.grid(row=0, column=0, sticky="nsw", padx=(PADDING, 0), pady=PADDING)
+        sidebar.grid(row=0, column=0, rowspan=2, sticky="nsw", padx=(PADDING, 0), pady=PADDING)
         sidebar.grid_propagate(False)
 
         ctk.CTkLabel(
-            sidebar, text="CBVMS", font=heading_font(26), text_color=COLOR_ACCENT,
+            sidebar, text="CBVMS", font=heading_font(26), text_color="#D0AE68",
         ).pack(anchor="w", padx=PADDING, pady=(PADDING_LG, 0))
 
         ctk.CTkLabel(
-            sidebar, text="Vision Monitoring System",
+            sidebar, text="CAMPUS OPERATIONS",
             font=body_small_font(), text_color=COLOR_TEXT_MUTED,
         ).pack(anchor="w", padx=PADDING, pady=(0, PADDING))
 
@@ -336,7 +342,7 @@ class CBVMSDashboard(ctk.CTk):
         footer.pack(side="bottom", fill="x", padx=PADDING, pady=PADDING)
 
         ctk.CTkLabel(
-            footer, text=f"Logged in as {self.username}",
+            footer, text=f"Administrator\n{self.username}",
             font=body_small_font(), text_color=COLOR_TEXT_MUTED,
         ).pack(anchor="w", pady=(0, 8))
 
@@ -347,7 +353,7 @@ class CBVMSDashboard(ctk.CTk):
 
     def _build_center_panel(self) -> None:
         center = ctk.CTkFrame(self, fg_color="transparent")
-        center.grid(row=0, column=1, sticky="nsew", padx=PADDING, pady=PADDING)
+        center.grid(row=1, column=1, sticky="nsew", padx=PADDING, pady=PADDING)
         center.grid_columnconfigure(0, weight=1)
         center.grid_rowconfigure(1, weight=1)
 
@@ -434,7 +440,9 @@ class CBVMSDashboard(ctk.CTk):
         )
         self._status_fps.pack(side="right", padx=PADDING)
 
-        self._enrollment_panel = EnrollmentPanel(
+        # Build secondary pages only when first opened, then reuse them.
+        self._panel_factories = {
+            "enrollment": ("_enrollment_panel", lambda: EnrollmentPanel(
             self._view_host,
             database=self._database,
             recognizer=self._recognizer,
@@ -442,24 +450,16 @@ class CBVMSDashboard(ctk.CTk):
             get_frame_sample=self._get_camera_sample,
             username=self.username,
             on_open_suspensions=self._open_student_suspensions,
-        )
-        self._enrollment_panel.grid_remove()
-
-        self._suspensions_panel = SuspensionsPanel(
-            self._view_host, database=self._database, username=self.username)
-        self._suspensions_panel.grid_remove()
-
-        self._violation_panel = ViolationLogPanel(self._view_host, database=self._database)
-        self._violation_panel.grid_remove()
-
-        self._training_panel = TrainingPanel(
+        )),
+            "suspensions": ("_suspensions_panel", lambda: SuspensionsPanel(
+            self._view_host, database=self._database, username=self.username)),
+            "violations": ("_violation_panel", lambda: ViolationLogPanel(self._view_host, database=self._database)),
+            "training": ("_training_panel", lambda: TrainingPanel(
             self._view_host,
             trainer=self._trainer,
             get_frame=self._get_camera_frame,
-        )
-        self._training_panel.grid_remove()
-
-        self._settings_panel = SettingsPanel(
+        )),
+            "settings": ("_settings_panel", lambda: SettingsPanel(
             self._view_host,
             database=self._database,
             recognizer=self._recognizer,
@@ -474,32 +474,15 @@ class CBVMSDashboard(ctk.CTk):
             trainer=self._trainer,
             checker=self._checker,
             notifier=self._notifier,
-        )
-        self._settings_panel.grid_remove()
-
-        self._notifications_panel = NotificationsPanel(
+        )),
+            "alerts": ("_notifications_panel", lambda: NotificationsPanel(
             self._view_host, notifier=self._notifier, on_change=self._update_bell_badge,
-        )
-        self._notifications_panel.grid_remove()
-
-        self._records_panel = RecordsPanel(self._view_host, database=self._database)
-        self._records_panel.grid_remove()
-
-        self._account_manager_panel = AccountManagerPanel(
-            self._view_host, database=self._database)
-        self._account_manager_panel.grid_remove()
-
-        self._views: dict[str, ctk.CTkFrame] = {
-            "live":       self._live_frame,
-            "enrollment": self._enrollment_panel,
-            "suspensions": self._suspensions_panel,
-            "violations": self._violation_panel,
-            "records":    self._records_panel,
-            "training":   self._training_panel,
-            "accounts":   self._account_manager_panel,
-            "settings":   self._settings_panel,
-            "alerts":     self._notifications_panel,
+        )),
+            "records": ("_records_panel", lambda: RecordsPanel(self._view_host, database=self._database)),
+            "accounts": ("_account_manager_panel", lambda: AccountManagerPanel(
+            self._view_host, database=self._database)),
         }
+        self._views = {"live": self._live_frame}
         self._live_frame.grid(row=0, column=0, sticky="nsew")
         self._schedule_stats_refresh()
 
@@ -533,12 +516,12 @@ class CBVMSDashboard(ctk.CTk):
             self, width=SIDEBAR_RIGHT_WIDTH, fg_color=COLOR_SURFACE,
             corner_radius=CORNER_RADIUS, border_width=1, border_color=COLOR_BORDER,
         )
-        sidebar.grid(row=0, column=2, rowspan=4, sticky="nsew", padx=(0, 10), pady=10)
+        sidebar.grid(row=1, column=2, sticky="nsew", padx=(0, 10), pady=10)
         sidebar.grid_propagate(False)
         sidebar.grid_rowconfigure(1, weight=1)
 
         ctk.CTkLabel(
-            sidebar, text="Live Alerts", font=heading_font(18), text_color=COLOR_TEXT,
+            sidebar, text="Activity & alerts", font=heading_font(18), text_color=COLOR_TEXT,
         ).grid(row=0, column=0, sticky="w", padx=PADDING, pady=(PADDING, PADDING))
 
         self._alerts_scroll = ctk.CTkScrollableFrame(
@@ -597,7 +580,13 @@ class CBVMSDashboard(ctk.CTk):
 
     def _on_nav_select(self, key: str) -> None:
         if key not in self._views:
-            return
+            if key not in self._panel_factories:
+                return
+            attribute, factory = self._panel_factories[key]
+            panel = factory()
+            panel.grid_remove()
+            setattr(self, attribute, panel)
+            self._views[key] = panel
         previous_nav = self._active_nav
         self._active_nav = key
 

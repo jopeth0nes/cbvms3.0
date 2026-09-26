@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS students (
     mobile_number TEXT NOT NULL DEFAULT '',
     encoding BLOB,
     photo BLOB,
+    profile_photo BLOB,
     enrolled_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 """

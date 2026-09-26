@@ -49,13 +49,14 @@ def main() -> None:
     except Exception as exc:
         print(f"[CBVMS] PersonDetector init failed: {exc}")
         person_detector = None
-    threading.Thread(
-        target=_warm_models, args=(recognizer, person_detector), daemon=True
-    ).start()
+    def start_model_warmup():
+        threading.Thread(
+            target=_warm_models, args=(recognizer, person_detector), daemon=True
+        ).start()
 
     auth = AuthManager(database)
 
-    username = run_login(auth)
+    username = run_login(auth, on_ready=start_model_warmup)
     if not username:
         return  # login window closed — exit
 
