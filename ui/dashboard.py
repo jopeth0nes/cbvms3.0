@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import queue
 import sys
 import threading
@@ -32,6 +33,7 @@ from ui.notifications_panel import NotificationsPanel
 from ui.settings import SettingsPanel
 from ui.training_panel import TrainingPanel
 from ui.records_panel import RecordsPanel
+from ui.suspensions_panel import SuspensionsPanel
 from ui.violation_log import ViolationLogPanel
 from ui.account_manager import AccountManagerPanel
 from ui.components import (
@@ -110,6 +112,7 @@ class CBVMSDashboard(ctk.CTk):
         self.username = username
         self._logout_requested = False
         self._active_nav = "live"
+        self._suspension_student_id = None
         self._alerts: deque[dict] = deque(maxlen=MAX_ALERTS)
         self._face_presence: dict[str, float] = {}   # identity_key → last_seen_epoch
         self._feed_job: str | None = None
@@ -298,6 +301,7 @@ class CBVMSDashboard(ctk.CTk):
         nav_items = [
             ("live",       "📹  Live Monitor"),
             ("enrollment", "👤  Student Management"),
+            ("suspensions", "⏸  Suspensions"),
             ("violations", "⚠  Violation Log"),
             ("records",    "🗄  Records"),
             ("training",   "🎓  Training"),
@@ -435,9 +439,15 @@ class CBVMSDashboard(ctk.CTk):
             database=self._database,
             recognizer=self._recognizer,
             get_frame=self._get_camera_frame,
+            get_frame_sample=self._get_camera_sample,
             username=self.username,
+            on_open_suspensions=self._open_student_suspensions,
         )
         self._enrollment_panel.grid_remove()
+
+        self._suspensions_panel = SuspensionsPanel(
+            self._view_host, database=self._database, username=self.username)
+        self._suspensions_panel.grid_remove()
 
         self._violation_panel = ViolationLogPanel(self._view_host, database=self._database)
         self._violation_panel.grid_remove()
@@ -482,6 +492,7 @@ class CBVMSDashboard(ctk.CTk):
         self._views: dict[str, ctk.CTkFrame] = {
             "live":       self._live_frame,
             "enrollment": self._enrollment_panel,
+            "suspensions": self._suspensions_panel,
             "violations": self._violation_panel,
             "records":    self._records_panel,
             "training":   self._training_panel,
@@ -580,6 +591,10 @@ class CBVMSDashboard(ctk.CTk):
     # Navigation
     # ------------------------------------------------------------------
 
+    def _open_student_suspensions(self, student_id: str) -> None:
+        self._suspension_student_id = student_id
+        self._on_nav_select("suspensions")
+
     def _on_nav_select(self, key: str) -> None:
         if key not in self._views:
             return
@@ -610,10 +625,13 @@ class CBVMSDashboard(ctk.CTk):
             self._training_panel.on_hide()
         if previous_nav == "settings" and self._settings_panel is not None:
             self._settings_panel.on_hide()
+        if previous_nav == "suspensions":
+            self._suspensions_panel.on_hide()
 
         titles = {
             "live":       "Live Monitor",
             "enrollment": "Student Management",
+            "suspensions": "Suspensions",
             "violations": "Violation Log",
             "records":    "Database & Record Management",
             "training":   "Training",
@@ -630,6 +648,9 @@ class CBVMSDashboard(ctk.CTk):
             self._view_host.tkraise()
             if key == "enrollment" and self._enrollment_panel is not None:
                 self._enrollment_panel.on_show()
+            if key == "suspensions":
+                self._suspensions_panel.on_show(self._suspension_student_id)
+                self._suspension_student_id = None
             if key == "training" and self._training_panel is not None:
                 self._training_panel.on_show()
             if key == "violations" and self._violation_panel is not None:
@@ -920,6 +941,8 @@ class CBVMSDashboard(ctk.CTk):
         if generation != self._camera_generation:
             return
 
+        requested_width, requested_height = self._camera_resolution_setting
+        requested_fps = self._fps_cap_setting
         if self._camera_source_url:
             cap = CameraCapture(
                 source_url=self._camera_source_url,
@@ -949,6 +972,16 @@ class CBVMSDashboard(ctk.CTk):
                     if stop.is_set():
                         return
                     ok = cap.open()
+                    if ok:
+                        # Query the negotiated settings on the device owner thread;
+                        # unsupported backend readback must not interrupt the stream.
+                        try:
+                            settings = cap.get_settings()
+                        except Exception:
+                            settings = {"reported_settings": "unavailable"}
+                        if os.environ.get("CBVMS_CAMERA_DIAGNOSTICS") == "1":
+                            print(f"[Dashboard camera] requested {requested_width}x{requested_height} "
+                                  f"@ {requested_fps} FPS; reported {settings}")
                     self._camera_events.put(("opened", generation, cap, ok))
                     while ok and not stop.is_set():
                         frame = cap.read()
@@ -1041,6 +1074,14 @@ class CBVMSDashboard(ctk.CTk):
             # The reader thread owns cap.read(); calling it here too would mean two
             # concurrent reads on one VideoCapture (unsafe). Use the latest pumped frame.
             return self._camera.get_latest_frame()
+        return None
+
+    def _get_camera_sample(self):
+        self._last_frame_request = time.monotonic()
+        if self._camera is None:
+            self._acquire_camera()
+        if self._camera and self._camera.is_open:
+            return self._camera.get_latest_sample()
         return None
 
     # ------------------------------------------------------------------

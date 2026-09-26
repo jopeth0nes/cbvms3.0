@@ -173,6 +173,12 @@ class FaceRecognizer:
                         "score": score})
         return out
 
+    def enrollment_faces(self, frame_bgr: np.ndarray):
+        """Return boxes and their embeddings from ONE raw enrollment frame."""
+        if not self._ensure_models():
+            return []
+        return self._detect(frame_bgr)
+
     @staticmethod
     def _min_distance_to_student(probe: np.ndarray, student_embs: np.ndarray) -> float:
         """Min cosine distance from a unit probe to any of a student's unit embeddings."""

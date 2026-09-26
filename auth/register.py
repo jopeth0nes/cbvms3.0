@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
-import io
 from core.student_status import CONTACT_FIELDS, validate_contacts
 
-import pickle
+import os
+import queue
+import time
+from core.registration_camera import RegistrationCamera, PreviewMetrics
+from core.face_capture import (CaptureSession, FacePreviewTracker, MAX_FRAME_AGE,
+                               capture_payload, guide_geometry)
 import threading
 import tkinter as tk
 
@@ -23,6 +27,10 @@ from ui.components import (
 
 PREVIEW_W = 340
 PREVIEW_H = 260
+PREVIEW_INTERVAL_MS = 33
+VALIDATION_INTERVAL = .25  # at most four full validations/second, one in flight
+# Reopening must not overlap expensive model loading/inference from old windows.
+_PROCESSING_LOCK = threading.Lock()
 
 
 class StudentRegistrationWindow(ctk.CTkToplevel):
@@ -31,161 +39,108 @@ class StudentRegistrationWindow(ctk.CTkToplevel):
         super().__init__(parent)
         self.database = database
 
-        self._cap: cv2.VideoCapture | None = None
-        self._cap_lock = threading.Lock()
+        self._camera_source = RegistrationCamera()
+        self._stop_event = threading.Event()
+        self._preview_job = None
+        self._success_job = None
+        self._last_rendered = None
+        self._next_validation = 0.0
+        self._tracker = FacePreviewTracker()
+        self._feedback_state = None
+        self._camera_error = None
+        self._metrics = PreviewMetrics()
+        self._next_diagnostics = time.monotonic() + 5
+        self._model_results = queue.Queue()
+        # Reuse one model for repeated registrations under the same login window.
+        if not hasattr(parent, "_registration_model"):
+            parent._registration_model = {}
+        self._model_cache = parent._registration_model
         self._recognizer = None
         self._captured_frame: np.ndarray | None = None
         self._alive = True
+        self._capture_session = None
+        self._capture_results = queue.Queue()
+        self._capture_busy = False
+        self._submitting = False
 
         self.title("Student Registration")
         self.configure(fg_color=COLOR_BG)
         self.geometry("860x580")
         self.resizable(False, False)
         self.transient(parent)
-        self.after(120, self.lift)
-        self.after(250, self._safe_grab)
+        self._initial_jobs = [self.after(120, self._safe_grab)]
+        self.bind("<Destroy>", self._on_destroy, add="+")
         self.protocol("WM_DELETE_WINDOW", self._close)
 
         self._build_ui()
         self._load_recognizer()
-        # Open camera in background so the window appears immediately
-        threading.Thread(target=self._open_camera_bg, daemon=True).start()
+        self._camera_source.start()
+        self._live_tick()
 
     # ------------------------------------------------------------------ camera
-
-    def _open_camera_bg(self) -> None:
-        """Try camera indices in a background thread, update UI when ready."""
-        cap = None
-        for idx in range(4):
-            for backend in (cv2.CAP_DSHOW, cv2.CAP_MSMF, cv2.CAP_ANY):
-                try:
-                    c = cv2.VideoCapture(idx, backend)
-                    if not c.isOpened():
-                        c.release()
-                        continue
-                    # Warm up: read a few frames to flush the buffer
-                    for _ in range(10):
-                        c.read()
-                    ok, frame = c.read()
-                    if ok and frame is not None and frame.size > 0:
-                        cap = c
-                        break
-                    c.release()
-                except Exception:
-                    pass
-            if cap is not None:
-                break
-
-        with self._cap_lock:
-            self._cap = cap
-
-        try:
-            if self._alive and self.winfo_exists():
-                self.after(0, self._on_camera_ready, cap is not None)
-        except Exception:
-            pass
-
-    def _on_camera_ready(self, found: bool) -> None:
-        """Called on the UI thread once the background open attempt finishes."""
-        if not self._alive or not self.winfo_exists():
-            return
-        if found:
-            self._dot.configure(text_color=COLOR_TEXT_MUTED)
-            self._cam_status.configure(text="Camera ready — position your face",
-                                       text_color=COLOR_TEXT_MUTED)
-            self._cap_btn.configure(state="normal")
-            self._live_tick()
-            self._detect_tick()
-        else:
-            self._dot.configure(text_color=COLOR_WARNING)
-            self._cam_status.configure(text="No camera detected",
-                                       text_color=COLOR_WARNING)
-            self._canvas.delete("placeholder")
-            self._canvas.create_text(
-                PREVIEW_W // 2, PREVIEW_H // 2,
-                text="No camera detected", fill="#888888",
-                font=("Helvetica", 12))
-
-    def _get_frame(self) -> np.ndarray | None:
-        with self._cap_lock:
-            cap = self._cap
-        if cap and cap.isOpened():
-            ok, frame = cap.read()
-            return frame if ok else None
-        return None
 
     def _load_recognizer(self) -> None:
         self._model_load_failed = False
 
-        def _load() -> None:
-            try:
-                from core.recognizer import FaceRecognizer
-                rec = FaceRecognizer(self.database)
-                rec._ensure_models()
-                self._recognizer = rec
-            except Exception as exc:
-                print(f"[Registration] recognizer load: {exc}")
-                self._model_load_failed = True
-            try:
-                if self._alive and self.winfo_exists():
-                    self.after(0, self._on_model_ready)
-            except Exception:
-                pass
+        def load():
+            while not self._stop_event.is_set():
+                if not _PROCESSING_LOCK.acquire(timeout=.1):
+                    continue
+                try:
+                    if self._stop_event.is_set():
+                        return
+                    rec = self._model_cache.get("recognizer")
+                    if rec is None:
+                        from core.recognizer import FaceRecognizer
+                        rec = FaceRecognizer(self.database)
+                        if not rec._ensure_models():
+                            raise RuntimeError("Face model unavailable")
+                        self._model_cache["recognizer"] = rec
+                    self._model_results.put((rec, None))
+                except Exception as exc:
+                    self._model_results.put((None, str(exc)))
+                finally:
+                    _PROCESSING_LOCK.release()
+                return
 
-        threading.Thread(target=_load, daemon=True).start()
-        # Animate the dot while model is loading
-        self.after(500, self._model_loading_tick)
+        threading.Thread(target=load, daemon=True, name="registration-model").start()
 
-    def _model_loading_tick(self) -> None:
-        """Animate camera status dot while face model is still loading."""
-        if not self._alive or not self.winfo_exists():
-            return
-        if self._recognizer is not None or self._model_load_failed:
-            return  # model finished — stop ticking
-        # Toggle dot color to show activity
-        try:
-            current = self._cam_status.cget("text")
-            if "model" in current.lower() or "camera" in current.lower():
-                dots = current.count(".")
-                self._cam_status.configure(
-                    text="Loading face model" + "." * ((dots % 3) + 1),
-                    text_color=COLOR_TEXT_MUTED)
-                self._dot.configure(text_color=COLOR_WARNING)
-        except Exception:
-            pass
-        self.after(600, self._model_loading_tick)
+    def _start_validation(self, session, sample):
+        self._capture_busy = True
+        self._next_validation = time.monotonic() + VALIDATION_INTERVAL
 
-    def _on_model_ready(self) -> None:
-        """Called on UI thread when the face model finishes loading."""
-        if not self._alive or not self.winfo_exists():
-            return
-        if self._recognizer is not None:
-            # Clear any stale "model loading" error
-            try:
-                if "model" in self._err_lbl.cget("text").lower():
-                    self._set_err("")
-            except Exception:
-                pass
-            # If photo already captured, prompt user to register now
-            if self._captured_frame is not None:
-                self._set_err("✓ Face model ready — you can now click Register.", ok=True)
-            # Update detect status
-            try:
-                self._cam_status.configure(text="Face model ready ✓",
-                                           text_color=COLOR_SAFE)
-                self._dot.configure(text_color=COLOR_SAFE)
-            except Exception:
-                pass
-        else:
-            # Model failed — still allow registration (photo stored, no recognition encoding)
-            try:
-                if "model" in self._err_lbl.cget("text").lower():
-                    self._set_err("")
-                self._cam_status.configure(
-                    text="Model unavailable — photo only", text_color=COLOR_WARNING)
-                self._dot.configure(text_color=COLOR_WARNING)
-            except Exception:
-                pass
+        def detect():
+            while not self._stop_event.is_set():
+                if not _PROCESSING_LOCK.acquire(timeout=.1):
+                    continue
+                started = time.monotonic()
+                faces = []
+                try:
+                    if not self._stop_event.is_set() and session is self._capture_session:
+                        faces = self._recognizer.enrollment_faces(sample.frame)
+                except Exception:
+                    faces = []
+                finally:
+                    _PROCESSING_LOCK.release()
+                if not self._stop_event.is_set():
+                    self._capture_results.put((session, sample, faces, time.monotonic()-started))
+                return
+            # Closed windows never schedule Tk callbacks or enqueue new work.
+
+        threading.Thread(target=detect, daemon=True, name="registration-validation").start()
+
+    def _feedback(self, message, *, ready=False, frozen=False):
+        color = COLOR_SAFE if ready or frozen else COLOR_TEXT_MUTED
+        button_text = "🔄  Retake" if frozen else "📷  Capture Face"
+        button_state = "normal" if (ready or frozen) and not self._submitting else "disabled"
+        value = (message, color, button_text, button_state)
+        previous = self._feedback_state
+        if previous is None or previous[:2] != value[:2]:
+            self._cam_status.configure(text=message, text_color=color)
+            self._dot.configure(text_color=color)
+        if previous is None or previous[2:] != value[2:]:
+            self._cap_btn.configure(text=button_text, state=button_state)
+        self._feedback_state = value
 
     # ------------------------------------------------------------------ UI
 
@@ -304,7 +259,8 @@ class StudentRegistrationWindow(ctk.CTkToplevel):
                                  text_color=COLOR_TEXT_MUTED)
         self._dot.pack(side="left", padx=(0, 6))
         self._cam_status = ctk.CTkLabel(srow, text="Starting camera…",
-                                        font=body_font(12), text_color=COLOR_TEXT_MUTED)
+                                        font=body_font(12), text_color=COLOR_TEXT_MUTED,
+                                        wraplength=PREVIEW_W - 30)
         self._cam_status.pack(side="left")
 
         # Capture / Retake button
@@ -315,109 +271,149 @@ class StudentRegistrationWindow(ctk.CTkToplevel):
             state="disabled")   # enabled once camera is confirmed open
         self._cap_btn.pack(fill="x", padx=PADDING, pady=(0, PADDING))
 
-        # Camera opens in background thread (_on_camera_ready will start the feed)
+        # The camera owner and the single UI preview callback start after UI creation.
 
     # ------------------------------------------------------------------ live feed
+
+    def _capture_key(self):
+        return ("register", self._e_sid.get().strip(), self._e_name.get().strip(),
+                self._e_username.get().strip())
 
     def _live_tick(self) -> None:
         if not self._alive or not self.winfo_exists():
             return
-        if self._captured_frame is None:          # only update when not frozen
-            frame = self._get_frame()
-            if frame is not None:
-                self._render_frame(frame)
-        self.after(40, self._live_tick)           # ~25 fps
-
-    def _detect_tick(self) -> None:
-        if not self._alive or not self.winfo_exists():
-            return
-        # Don't overwrite status when photo already captured or model still loading
-        if self._captured_frame is not None:
-            self.after(400, self._detect_tick)
-            return
-        with self._cap_lock:
-            has_cam = self._cap is not None
-        if not has_cam:
-            self.after(400, self._detect_tick)
-            return
-        rec = self._recognizer
-        if rec is None:
-            # Model still loading — _model_loading_tick handles the dot animation
-            self.after(400, self._detect_tick)
-            return
-        # Model ready — show face detection status
-        frame = self._get_frame()
-        if frame is not None and rec.has_face(frame):
-            self._dot.configure(text_color=COLOR_SAFE)
-            self._cam_status.configure(text="Face detected — ready to capture",
-                                       text_color=COLOR_SAFE)
-        else:
-            self._dot.configure(text_color=COLOR_DANGER)
-            self._cam_status.configure(text="No face detected — adjust position",
-                                       text_color=COLOR_DANGER)
-        self.after(200, self._detect_tick)
-
-    def _render_frame(self, frame: np.ndarray) -> None:
+        started = time.monotonic()
+        # A single owned callback polls camera/model events and paints newest pixels.
+        # Neither VideoCapture.read nor face inference runs on the Tk thread.
         try:
-            disp = cv2.resize(frame, (PREVIEW_W, PREVIEW_H))
-            cx, cy = PREVIEW_W // 2, PREVIEW_H // 2
-            cv2.ellipse(disp, (cx, cy), (65, 85), 0, 0, 360, (255, 255, 255), 2)
-            rgb = np.ascontiguousarray(cv2.cvtColor(disp, cv2.COLOR_BGR2RGB))
-            photo = ImageTk.PhotoImage(image=Image.fromarray(rgb), master=self._canvas)
-            self._canvas_img = photo
-            if self._canvas_item is None:
-                # Clear placeholder text on first real frame
-                self._canvas.delete("placeholder")
-                self._canvas_item = self._canvas.create_image(
-                    0, 0, anchor=tk.NW, image=photo)
-            else:
-                self._canvas.itemconfig(self._canvas_item, image=photo)
-        except Exception:
+            self._recognizer, error = self._model_results.get_nowait()
+            self._model_load_failed = error is not None
+        except queue.Empty:
             pass
-
-    # ------------------------------------------------------------------ capture
-
-    def _capture_face(self) -> None:
-        if self._captured_frame is not None:
-            # Retake
+        try:
+            event, value = self._camera_source.events.get_nowait()
+            if event == "opened":
+                self._camera_error = None
+                print(f"[Registration camera] requested 1280x720 @ 30 FPS; reported {value}")
+            else:
+                self._camera_error = value
+        except queue.Empty:
+            pass
+        key = self._capture_key()
+        if self._capture_session is None or self._capture_session.student_key != key:
+            self._capture_session = CaptureSession(key)
             self._captured_frame = None
-            self._cap_btn.configure(text="📷  Capture Face", fg_color=COLOR_ACCENT)
-            self._dot.configure(text_color=COLOR_TEXT_MUTED)
-            self._cam_status.configure(text="Position face and capture again",
-                                       text_color=COLOR_TEXT_MUTED)
-            self._err_lbl.configure(text="")
-            return
+            self._tracker.clear()
+            self._last_rendered = None
+        session = self._capture_session
+        sample = self._camera_source.latest()
+        now = time.monotonic()
+        fresh = sample is not None and 0 <= now-sample.captured_at <= MAX_FRAME_AGE
+        if session.frozen is None and not fresh:
+            session.invalidate()
+            self._tracker.clear()
+        try:
+            owner, analyzed, faces, seconds = self._capture_results.get_nowait()
+            self._capture_busy = False
+            self._metrics.inference_seconds.append(seconds)
+            if (owner is session and session.frozen is None and fresh and
+                    sample.frame_id[0] == analyzed.frame_id[0]):
+                if not session.pending or analyzed.captured_at > self._requested_at:
+                    face = session.observe(analyzed, faces, 0, now)
+                    if face is not None:
+                        self._tracker.reset(analyzed, face[0])
+                    else:
+                        self._tracker.clear()
+                    if session.frozen is not None:
+                        self._captured_frame = session.frozen.frame
+                        crop = cv2.imdecode(np.frombuffer(session.frozen.photo, np.uint8), cv2.IMREAD_COLOR)
+                        self._render_frame(crop, frozen=True)
+        except queue.Empty:
+            pass
+        if session.frozen is None:
+            box = self._tracker.advance(sample) if fresh else None
+            if session.previous is not None and box is None:
+                session.invalidate("Tracking uncertain. Hold still inside the guide.")
+            if session.last_sample and now-session.last_sample.captured_at > MAX_FRAME_AGE:
+                session.invalidate()
+                self._tracker.clear()
+                box = None
+            if fresh and sample.frame_id != self._last_rendered:
+                self._render_frame(sample.frame, box)
+                self._last_rendered = sample.frame_id
+                self._metrics.rendered(sample, time.monotonic())
+            elif not fresh and self._last_rendered is not None:
+                self._canvas.delete("all")
+                self._canvas_item = None
+                self._last_rendered = None
+            if (fresh and self._recognizer is not None and not self._capture_busy and
+                    started >= self._next_validation and
+                    (session.last_sample is None or sample.frame_id != session.last_sample.frame_id)):
+                self._start_validation(session, sample)
+            message = (self._camera_error or
+                       ("Face model unavailable — capture disabled" if self._model_load_failed else
+                        "Loading face model…" if self._recognizer is None else
+                        "Capturing — hold still" if session.pending else session.message))
+            self._feedback(message, ready=session.ready and not session.pending)
+        else:
+            self._feedback("Frozen face preview — Register to save, or Retake", frozen=True)
+        if os.environ.get("CBVMS_CAMERA_DIAGNOSTICS") == "1" and started >= self._next_diagnostics:
+            print(f"[Registration preview] {self._metrics.summary(self._camera_source.frame_times)}")
+            self._next_diagnostics = started + 5
+        # Compensate for render time; after(33) *after* work would lower the cadence.
+        delay = max(1, PREVIEW_INTERVAL_MS - round((time.monotonic()-started)*1000))
+        self._preview_job = self.after(delay, self._live_tick)
 
-        with self._cap_lock:
-            has_cam = self._cap is not None
-        if not has_cam:
-            return
-
-        frame = self._get_frame()
-        if frame is None:
-            self._cam_status.configure(text="Could not read frame — try again",
-                                       text_color=COLOR_DANGER)
-            return
-
-        self._captured_frame = frame.copy()
-
-        # Show frozen snapshot with green tint border
-        snap = cv2.resize(frame, (PREVIEW_W, PREVIEW_H))
-        rgb = np.ascontiguousarray(cv2.cvtColor(snap, cv2.COLOR_BGR2RGB))
+    def _render_frame(self, frame, box=None, *, frozen=False):
+        # Resize once before drawing/converting; registration retains full-res samples.
+        disp = cv2.resize(frame, (PREVIEW_W, PREVIEW_H)) if not frozen else frame
+        if not frozen:
+            cx, cy, rx, ry = guide_geometry(disp.shape)
+            cv2.ellipse(disp, (round(cx), round(cy)), (round(rx), round(ry)),
+                        0, 0, 360, (255, 255, 255), 2)
+            if box is not None:
+                h, w = frame.shape[:2]
+                scale = np.array([PREVIEW_W/w, PREVIEW_H/h]*2)
+                x1, y1, x2, y2 = (np.asarray(box)*scale).astype(int)
+                cv2.rectangle(disp, (x1, y1), (x2, y2), (90, 220, 40), 3)
+        if frozen:
+            h, w = disp.shape[:2]
+            scale = min(PREVIEW_W / w, PREVIEW_H / h)
+            fitted = cv2.resize(disp, (max(1, round(w*scale)), max(1, round(h*scale))))
+            disp = np.zeros((PREVIEW_H, PREVIEW_W, 3), np.uint8)
+            fh, fw = fitted.shape[:2]
+            x, y = (PREVIEW_W-fw)//2, (PREVIEW_H-fh)//2
+            disp[y:y+fh, x:x+fw] = fitted
+        rgb = cv2.cvtColor(disp, cv2.COLOR_BGR2RGB)
         photo = ImageTk.PhotoImage(image=Image.fromarray(rgb), master=self._canvas)
         self._canvas_img = photo
         if self._canvas_item is None:
+            self._canvas.delete("placeholder")
             self._canvas_item = self._canvas.create_image(0, 0, anchor=tk.NW, image=photo)
         else:
             self._canvas.itemconfig(self._canvas_item, image=photo)
-        # Green border to indicate captured
-        self._canvas.configure(highlightthickness=3, highlightbackground=COLOR_SAFE)
 
-        self._dot.configure(text_color=COLOR_SAFE)
-        self._cam_status.configure(text="✓ Photo captured — click Retake to redo",
-                                   text_color=COLOR_SAFE)
-        self._cap_btn.configure(text="🔄  Retake", fg_color=COLOR_WARNING,
-                                hover_color="#B45309")
+    def _capture_face(self) -> None:
+        if self._submitting or self._capture_session is None:
+            return
+        session = self._capture_session
+        if session.student_key != self._capture_key():
+            return
+        if session.frozen is not None:
+            self._captured_frame = None
+            self._canvas.delete("all")
+            self._canvas_item = None
+            self._capture_session = CaptureSession(self._capture_key())
+            self._tracker.clear()
+            self._last_rendered = None
+            self._feedback_state = None
+            self._cap_btn.configure(text="📷  Capture Face", state="disabled")
+            self._err_lbl.configure(text="")
+        elif session.request(time.monotonic()):
+            self._requested_at = time.monotonic()
+            self._next_validation = 0.0
+            self._feedback_state = None
+            self._cap_btn.configure(state="disabled")
 
     # ------------------------------------------------------------------ submit
 
@@ -430,6 +426,8 @@ class StudentRegistrationWindow(ctk.CTkToplevel):
             pass
 
     def _submit(self) -> None:
+        if self._submitting or not self._alive:
+            return
         name     = self._e_name.get().strip()
         username = self._e_username.get().strip()
         password = self._e_password.get()
@@ -458,81 +456,48 @@ class StudentRegistrationWindow(ctk.CTkToplevel):
         if self.database.username_exists(username):
             self._set_err(f"Username '{username}' is already taken.")
             return
-        with self._cap_lock:
-            has_cam = self._cap is not None
-        if has_cam and self._captured_frame is None:
-            self._set_err("Please capture your face photo before registering.")
+        if self._captured_frame is None:
+            self._set_err("Position your face inside the guide.")
             return
-        # If model is still loading (not failed), ask user to wait
+        # A valid frozen capture always includes the selected face's embedding.
         if self._captured_frame is not None and self._recognizer is None \
                 and not self._model_load_failed:
             self._set_err("Face model is still loading — please wait a moment and try again.")
             return
 
-        self._set_err("")
-        self._cap_btn.configure(state="disabled")
-
-        frame = self._captured_frame  # may be None if no camera
-
-        def _do() -> None:
-            blob: bytes = b""
-            photo_bytes: bytes = b""
-
-            if frame is not None:
-                # Always store the captured frame as JPEG — photo must be saved
-                # regardless of whether face encoding succeeds.
-                ok, buf = cv2.imencode(
-                    ".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
-                if ok:
-                    photo_bytes = buf.tobytes()
-
-                if self._recognizer is not None:
-                    try:
-                        # Capture a burst of fresh frames for better embedding quality
-                        burst: list = [frame]
-                        for _ in range(4):
-                            f = self._get_frame()
-                            if f is not None:
-                                burst.append(f)
-                        emb, box = self._recognizer.encode_face_multi(burst, min_valid=1)
-                        if emb is not None:
-                            blob = pickle.dumps(emb)
-                            # Use face-cropped photo when encoding succeeds
-                            cropped = _crop_photo(frame, box)
-                            if cropped:
-                                photo_bytes = cropped
-                        else:
-                            self.after(0, lambda: self._set_err(
-                                "Could not detect a face clearly — "
-                                "photo saved but recognition may not work. "
-                                "Admin can update the photo later."))
-                    except Exception as exc:
-                        self.after(0, lambda e=exc: self._set_err(
-                            f"Face encoding error: {e} — photo still saved."))
-
+        blob, photo_bytes = b"", b""
+        if self._captured_frame is not None:
             try:
-                self.database.insert_student(
-                    student_id=sid, name=name, course=course,
-                    year_and_section=year, gender=gender,
-                    encoding=blob, photo=photo_bytes, email=contacts["email"],
-                    contacts=contacts, registration_pending=True,
-                )
-                self.database.insert_student_account(sid, username, password)
-                if self._recognizer and blob:
-                    self._recognizer.load_known_faces()
-            except Exception as exc:
-                self.after(0, lambda e=exc: self._set_err(f"Registration failed: {e}"))
-                self.after(0, lambda: self._cap_btn.configure(state="normal"))
+                blob, photo_bytes = capture_payload([self._capture_session.frozen], self._capture_key())
+            except (ValueError, AttributeError) as exc:
+                self._set_err(f"Retake your face for this student: {exc}")
                 return
-
-            self.after(0, self._on_success)
-
-        threading.Thread(target=_do, daemon=True).start()
+        self._set_err("")
+        self._submitting = True
+        self._cap_btn.configure(state="disabled")
+        # Commit the validated identity + frozen payload together on the UI thread.
+        # No camera reads, inference, or mutable form reads after this point.
+        try:
+            self.database.insert_student(
+                student_id=sid, name=name, course=course,
+                year_and_section=year, gender=gender,
+                encoding=blob, photo=photo_bytes, email=contacts["email"],
+                contacts=contacts, registration_pending=True,
+            )
+            self.database.insert_student_account(sid, username, password)
+            if self._recognizer and blob:
+                self._recognizer.load_known_faces()
+        except Exception as exc:
+            self._submitting = False
+            self._set_err(f"Registration failed: {exc}")
+            self._cap_btn.configure(state="normal")
+            return
+        self._on_success()
 
     def _on_success(self) -> None:
         self._set_err("✓ Registered! You can log in; OSA must verify your enrollment.", ok=True)
         self._cap_btn.configure(state="disabled")
-        self.after(2000, self._close)
+        self._success_job = self.after(2000, self._close)
 
     # ------------------------------------------------------------------ lifecycle
 
@@ -543,16 +508,28 @@ class StudentRegistrationWindow(ctk.CTkToplevel):
         except Exception:
             pass
 
-    def _close(self) -> None:
+    def _shutdown_camera(self):
+        if not self._alive:
+            return
         self._alive = False
-        with self._cap_lock:
-            cap = self._cap
-            self._cap = None
-        if cap:
-            try:
-                cap.release()
-            except Exception:
-                pass
+        self._stop_event.set()
+        self._camera_source.stop()
+        for job in [self._preview_job, self._success_job, *self._initial_jobs]:
+            if job is not None:
+                try:
+                    self.after_cancel(job)
+                except Exception:
+                    pass
+        self._preview_job = None
+        if os.environ.get("CBVMS_CAMERA_DIAGNOSTICS") == "1":
+            print(f"[Registration preview final] {self._metrics.summary(self._camera_source.frame_times)}")
+
+    def _on_destroy(self, event):
+        if event.widget is self:
+            self._shutdown_camera()
+
+    def _close(self) -> None:
+        self._shutdown_camera()
         try:
             self.grab_release()
         except Exception:
@@ -561,20 +538,3 @@ class StudentRegistrationWindow(ctk.CTkToplevel):
             self.destroy()
         except Exception:
             pass
-
-
-# ── helpers ────────────────────────────────────────────────────────────
-
-def _crop_photo(frame: np.ndarray, box) -> bytes:
-    if frame is None:
-        return b""
-    crop = frame
-    if box is not None:
-        h, w = frame.shape[:2]
-        x1, y1, x2, y2 = [max(0, int(v)) for v in box]
-        x2, y2 = min(w, x2), min(h, y2)
-        sub = frame[y1:y2, x1:x2]
-        if sub.size > 0:
-            crop = sub
-    ok, buf = cv2.imencode(".jpg", crop, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
-    return buf.tobytes() if ok else b""

@@ -324,11 +324,16 @@ class DashboardSwitchRegressionTests(unittest.TestCase):
             fake.is_open = False
             return None
 
+        def _settings():
+            calls["settings"] = threading.get_ident()
+            return {"width": 1280, "height": 720, "fps": 24}
+
         def _release():
             calls["release"] = threading.get_ident()
 
         fake.open = _open
         fake.read = _read
+        fake.get_settings = _settings
         fake.release = _release
         capture_cls.return_value = fake
 
@@ -346,14 +351,55 @@ class DashboardSwitchRegressionTests(unittest.TestCase):
         )
         ui_thread = threading.get_ident()
 
-        CBVMSDashboard._start_camera_worker(harness, 3)
-        harness._camera_reader.join(timeout=1.0)
+        with patch.dict("os.environ", {"CBVMS_CAMERA_DIAGNOSTICS": "1"}), patch("builtins.print") as printed:
+            CBVMSDashboard._start_camera_worker(harness, 3)
+            harness._camera_reader.join(timeout=1.0)
 
         self.assertFalse(harness._camera_reader.is_alive())
         self.assertEqual(calls["open"], calls["read"])
+        self.assertEqual(calls["open"], calls["settings"])
         self.assertEqual(calls["read"], calls["release"])
         self.assertNotEqual(calls["open"], ui_thread)
         self.assertTrue(harness._camera_worker_done.is_set())
+        printed.assert_called_once_with(
+            "[Dashboard camera] requested 640x480 @ 30 FPS; reported "
+            "{'width': 1280, 'height': 720, 'fps': 24}"
+        )
+
+    @patch("ui.dashboard.CameraCapture")
+    def test_settings_readback_failure_does_not_fail_opening_or_reading(self, capture_cls) -> None:
+        read_calls = []
+        fake = types.SimpleNamespace(is_open=True, last_error=None)
+        fake.open = lambda: True
+        fake.get_settings = lambda: (_ for _ in ()).throw(RuntimeError("unsupported property"))
+
+        def _read():
+            read_calls.append(True)
+            fake.is_open = False
+            return None
+
+        fake.read = _read
+        fake.release = lambda: None
+        capture_cls.return_value = fake
+        harness = types.SimpleNamespace(
+            _camera_generation=3,
+            _camera_source_url=None,
+            _camera_index_setting=0,
+            _camera_resolution_setting=(1280, 720),
+            _fps_cap_setting=30,
+            _camera_events=queue.Queue(),
+        )
+
+        with patch.dict("os.environ", {"CBVMS_CAMERA_DIAGNOSTICS": "0"}), patch("builtins.print") as printed:
+            CBVMSDashboard._start_camera_worker(harness, 3)
+            harness._camera_reader.join(timeout=1.0)
+
+        self.assertFalse(harness._camera_reader.is_alive())
+        self.assertEqual(harness._camera_events.get_nowait(), ("opened", 3, fake, True))
+        self.assertEqual(read_calls, [True])
+        self.assertIsNone(fake.last_error)
+        self.assertTrue(harness._camera_worker_done.is_set())
+        printed.assert_not_called()
 
     @patch("ui.dashboard.CameraCapture")
     def test_release_error_still_completes_worker(self, capture_cls) -> None:

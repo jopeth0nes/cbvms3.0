@@ -1917,6 +1917,33 @@ class CBVMSDatabase(StudentManagement):
             ).fetchall()
         return [dict(r) for r in rows]
 
+    def get_discipline_history_for_student(self, student_id: str) -> list[dict]:
+        """Admin history, including pending, dismissed and legacy detections.
+
+        A violation is evidence; only its ledger row can award a strike. Keep this
+        separate from student-portal visibility and from OSA-assigned suspensions.
+        Do not load camera blobs just to display a student's history.
+        """
+        with self.connect() as conn:
+            rows = conn.execute(
+                """SELECT v.id, v.student_id, v.violation_type, v.violation_code,
+                          v.timestamp, v.status, v.semester_id, v.review_deadline,
+                          v.confirmed_at, v.appeal_deadline, v.dismissal_reason,
+                          t.semester_name, t.school_year,
+                          st.id AS strike_id, st.is_active AS strike_active,
+                          st.semester_id AS strike_semester_id,
+                          st.deactivation_reason AS strike_removal_reason,
+                          a.status AS appeal_status
+                   FROM violations v
+                   LEFT JOIN academic_terms t ON t.id = v.semester_id
+                   LEFT JOIN strikes st ON st.violation_id = v.id
+                   LEFT JOIN appeals a ON a.violation_id = v.id
+                   WHERE v.student_id = ?
+                   ORDER BY v.timestamp DESC, v.id DESC""",
+                ((student_id or "").strip(),),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def record_attendance(self, student_id: str, *, observed_at=None) -> bool:
         """Record a recognized enrolled student's presence once per local day.
 

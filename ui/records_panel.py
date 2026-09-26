@@ -1,6 +1,6 @@
 """Database & Record Management panel for CBVMS admin dashboard.
 
-Four tabs:
+Five tabs, including daily Attendance Reports:
   1. Violation Reports  — searchable list of all logged violations
   2. Appeals Management — review, approve / reject student appeals + evidence viewer
   3. Evidence Files     — browse all uploaded evidence files
@@ -69,7 +69,7 @@ class RecordsPanel(ctk.CTkFrame):
         self.database = database
         self._image_refs: list = []
         self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(1, weight=1)
+        self.grid_rowconfigure(1, weight=0)
         self._build_ui()
         self.grid_remove()
 
@@ -80,11 +80,11 @@ class RecordsPanel(ctk.CTkFrame):
         hdr = ctk.CTkFrame(self, fg_color="transparent")
         hdr.grid(row=0, column=0, sticky="ew", padx=PADDING, pady=(PADDING, 0))
         hdr.columnconfigure(0, weight=1)
-        ctk.CTkLabel(hdr, text="Database & Record Management",
+        ctk.CTkLabel(hdr, text="Records",
                      font=heading_font(20), text_color=COLOR_TEXT).grid(
             row=0, column=0, sticky="w")
         ctk.CTkLabel(hdr,
-                     text="Attendance · violation reports · evidence · appeal decisions · history",
+                     text="Browse records, review evidence, and export reports.",
                      font=body_small_font(), text_color=COLOR_TEXT_MUTED).grid(
             row=1, column=0, sticky="w")
         ctk.CTkButton(hdr, text="↻  Refresh", width=100, height=32,
@@ -98,22 +98,23 @@ class RecordsPanel(ctk.CTkFrame):
         tab_row.grid(row=1, column=0, sticky="ew", padx=PADDING, pady=(10, 0))
         self._tab_btns: dict[str, ctk.CTkButton] = {}
         tabs = [
-            ("attendance", "Attendance Report"),
-            ("violations", "📋  Violation Reports"),
-            ("appeals",    "📝  Appeals Management"),
-            ("evidence",   "📎  Evidence Files"),
-            ("history",    "🕒  Decision History"),
+            ("attendance", "Attendance"),
+            ("violations", "Violations"),
+            ("appeals",    "Appeals"),
+            ("evidence",   "Evidence Files"),
+            ("history",    "Decision History"),
         ]
-        for key, label in tabs:
+        for column, (key, label) in enumerate(tabs):
+            tab_row.grid_columnconfigure(column, weight=1, uniform="record_tabs")
             btn = ctk.CTkButton(
-                tab_row, text=label, height=34, corner_radius=CORNER_RADIUS,
+                tab_row, text=label, width=1, height=34, corner_radius=CORNER_RADIUS,
                 fg_color=COLOR_ACCENT if key == "violations" else COLOR_SURFACE,
                 hover_color=COLOR_ACCENT_HOVER,
                 border_width=1, border_color=COLOR_BORDER,
                 text_color=COLOR_TEXT, font=body_small_font(),
                 command=lambda k=key: self._switch_tab(k),
             )
-            btn.pack(side="left", padx=(0, 6))
+            btn.grid(row=0, column=column, sticky="ew", padx=(0, 6 if column < 4 else 0))
             self._tab_btns[key] = btn
 
         # Content area
@@ -173,6 +174,9 @@ class RecordsPanel(ctk.CTkFrame):
         tree.configure(yscrollcommand=vsb.set)
         tree.grid(row=0, column=0, sticky="nsew")
         vsb.grid(row=0, column=1, sticky="ns")
+        hsb = ttk.Scrollbar(parent, orient="horizontal", command=tree.xview)
+        hsb.grid(row=1, column=0, sticky="ew")
+        tree.configure(xscrollcommand=hsb.set)
         parent.rowconfigure(0, weight=1)
         parent.columnconfigure(0, weight=1)
         return tree
@@ -181,74 +185,182 @@ class RecordsPanel(ctk.CTkFrame):
 
     def _build_violations_tab(self) -> None:
         self._viol_frame = ctk.CTkFrame(self._content, fg_color="transparent")
-        self._viol_frame.columnconfigure(0, weight=3)
-        self._viol_frame.columnconfigure(1, weight=2)
-        self._viol_frame.rowconfigure(1, weight=1)
+        self._viol_frame.columnconfigure(0, weight=1)
+        self._viol_frame.rowconfigure(2, weight=1)
+        self._violation_rows = {}
+        self._snapshot_source = None
+        self._snapshot_message = "Select a record to view evidence"
+        self._evidence_width = 340
+        self._split_resize_job = None
 
         # Search bar
         sbar = ctk.CTkFrame(self._viol_frame, fg_color="transparent")
-        sbar.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 6))
-        sbar.columnconfigure(0, weight=1)
+        sbar.grid(row=0, column=0, sticky="ew", pady=(0, 6))
+        sbar.columnconfigure(1, weight=1)
+        ctk.CTkLabel(sbar, text="Search", font=body_small_font()).grid(
+            row=0, column=0, padx=(0, 8))
         self._viol_search = tk.StringVar()
         self._viol_search.trace_add("write", lambda *_: self._load_violations())
         ctk.CTkEntry(sbar, textvariable=self._viol_search,
                      placeholder_text="Search by student name, ID, or violation type…",
                      height=34, corner_radius=CORNER_RADIUS,
                      fg_color=COLOR_BG, border_color=COLOR_BORDER).grid(
-            row=0, column=0, sticky="ew")
-        ctk.CTkButton(sbar, text="Export CSV", width=100, height=34,
-                      corner_radius=CORNER_RADIUS, fg_color=_SAFE,
-                      hover_color="#0EA371", font=body_small_font(),
-                      command=self._export_violations).grid(row=0, column=1, padx=(8, 0))
-        ctk.CTkButton(sbar, text="Download Report", width=130, height=34,
-                      command=lambda: self._violation_report(False)).grid(
-                          row=0, column=2, padx=(8, 0))
-        ctk.CTkButton(sbar, text="Print Report", width=110, height=34,
-                      command=lambda: self._violation_report(True)).grid(
-                          row=0, column=3, padx=(8, 0))
+            row=0, column=1, sticky="ew")
+        export_menu = tk.Menu(self, tearoff=False)
+        export_menu.add_command(label="Export CSV", command=self._export_violations)
+        export_menu.add_command(label="Download Report", command=lambda: self._violation_report(False))
+        export_menu.add_command(label="Print Report", command=lambda: self._violation_report(True))
+        export_button = ctk.CTkButton(sbar, text="Export ▾", width=100, height=34)
+        export_button.configure(command=lambda: export_menu.tk_popup(
+            export_button.winfo_rootx(), export_button.winfo_rooty() + export_button.winfo_height()))
+        export_button.grid(row=0, column=2, padx=(8, 0))
+        self._viol_count = ctk.CTkLabel(self._viol_frame,
+            text="Drag the divider to resize the table and evidence pane.",
+            font=body_small_font(), text_color=COLOR_TEXT_MUTED, anchor="w")
+        self._viol_count.grid(row=1, column=0, sticky="ew", pady=(0, 6))
+
+        self._viol_split = tk.PanedWindow(self._viol_frame, orient=tk.HORIZONTAL,
+            bg=COLOR_BORDER, bd=0, sashwidth=8, sashrelief=tk.FLAT,
+            opaqueresize=True, width=1, height=1)
+        self._viol_split.grid(row=2, column=0, sticky="nsew")
 
         # Left: list
-        left = ctk.CTkFrame(self._viol_frame, fg_color=COLOR_SURFACE,
+        left = ctk.CTkFrame(self._viol_split, fg_color=COLOR_SURFACE,
                             corner_radius=CORNER_RADIUS,
                             border_width=1, border_color=COLOR_BORDER)
-        left.grid(row=1, column=0, sticky="nsew", padx=(0, 6))
+        self._viol_split.add(left, minsize=int(self._apply_widget_scaling(220)), stretch="always")
         self._viol_tree = self._make_tree(left, [
             ("idx",        "#",           40),
             ("student",    "Student",     150),
             ("sid",        "Student ID",  100),
             ("type",       "Violation",   140),
-            ("timestamp",  "Date & Time", 130),
-            ("status",     "Status",       80),
+            ("timestamp",  "Date & Time (UTC)", 150),
+            ("status",     "Status",       130),
             ("appeal",     "Appeal",       80),
         ])
         self._viol_tree.bind("<<TreeviewSelect>>", self._on_viol_select)
 
-        # Right: detail card
+        # Right: resizable evidence pane. A wrapper lets Tk manage the CTk scroll frame.
+        right = ctk.CTkFrame(self._viol_split, width=340, fg_color=COLOR_SURFACE)
+        right.grid_columnconfigure(0, weight=1)
+        right.grid_rowconfigure(0, weight=1)
+        self._viol_split.add(right, minsize=int(self._apply_widget_scaling(280)), stretch="never")
+        self._viol_split.bind("<Configure>", self._initialize_violation_split)
+        self._viol_split.bind("<ButtonRelease-1>", self._remember_violation_split, add="+")
         self._viol_detail = ctk.CTkScrollableFrame(
-            self._viol_frame, fg_color=COLOR_SURFACE,
+            right, fg_color=COLOR_SURFACE,
             corner_radius=CORNER_RADIUS,
             border_width=1, border_color=COLOR_BORDER)
-        self._viol_detail.grid(row=1, column=1, sticky="nsew")
+        self._viol_detail.grid(row=0, column=0, sticky="nsew")
         self._viol_detail.columnconfigure(0, weight=1)
-        self._vd_title    = ctk.CTkLabel(self._viol_detail, text="Select a violation",
-                                          font=heading_font(14), text_color=COLOR_TEXT,
-                                          anchor="w")
-        self._vd_title.grid(row=0, column=0, sticky="w", padx=PADDING, pady=(PADDING, 4))
-        self._vd_snapshot = tk.Label(self._viol_detail, text="No snapshot",
-                                     bg=COLOR_BG, fg=COLOR_TEXT_MUTED, bd=0)
-        self._vd_snapshot.grid(row=1, column=0, padx=PADDING, pady=(0, 8))
-        self._vd_info     = ctk.CTkLabel(self._viol_detail, text="", font=body_small_font(),
-                                          text_color=COLOR_TEXT_MUTED, anchor="w",
-                                          justify="left", wraplength=280)
-        self._vd_info.grid(row=2, column=0, sticky="w", padx=PADDING)
+        self._vd_labels = []
+
+        def detail_label(text, row, font=None, color=COLOR_TEXT_MUTED):
+            label = ctk.CTkLabel(self._viol_detail, text=text, width=1, height=20,
+                font=font or body_small_font(), text_color=color, anchor="w", justify="left")
+            label.grid(row=row, column=0, sticky="ew", padx=12, pady=(4, 0))
+            self._vd_labels.append(label)
+            return label
+
+        self._vd_title = detail_label("Select a violation", 0, heading_font(16), COLOR_TEXT)
+        self._vd_student = detail_label("Choose a record from the table.", 1)
+        self._vd_identity = detail_label("", 2)
+        self._vd_status = detail_label("", 3, body_font(12), COLOR_WARNING)
+        detail_label("EVIDENCE SNAPSHOT", 4)
+        self._vd_snapshot = tk.Canvas(self._viol_detail, width=1,
+            height=int(self._apply_widget_scaling(210)), bg=COLOR_BG,
+            highlightthickness=0, bd=0)
+        self._vd_snapshot.grid(row=5, column=0, sticky="ew", padx=12, pady=8)
+        self._vd_snapshot.bind("<Configure>", lambda _e: self._render_violation_snapshot())
+        self._vd_snapshot.bind("<Button-1>", lambda _e: self._open_violation_evidence())
+        self._vd_enlarge = ctk.CTkButton(self._viol_detail, text="Enlarge Evidence",
+            height=30, state="disabled", command=self._open_violation_evidence)
+        self._vd_enlarge.grid(row=6, column=0, sticky="ew", padx=12, pady=(0, 8))
+        self._vd_fields = {}
+        for row, (key, label) in enumerate((("date", "Date & time (UTC)"),
+                ("course", "Course / year & section"), ("semester", "Semester"),
+                ("strike", "Strike"), ("appeal", "Appeal")), start=7):
+            self._vd_fields[key] = detail_label(f"{label}: —", row)
+        self._viol_detail.bind("<Configure>", self._resize_violation_details)
+
+    def _initialize_violation_split(self, event):
+        # Place the sash after Tk has allocated the panes; doing it during Configure
+        # lets the children's initial requested sizes overwrite the position.
+        if self._split_resize_job is not None:
+            self.after_cancel(self._split_resize_job)
+        def place():
+            self._split_resize_job = None
+            self._viol_split.sash_place(0, max(int(self._apply_widget_scaling(220)),
+                self._viol_split.winfo_width() - int(self._apply_widget_scaling(self._evidence_width)) - 8), 0)
+        self._split_resize_job = self.after_idle(place)
+
+    def _remember_violation_split(self, _event):
+        def remember():
+            x, _ = self._viol_split.sash_coord(0)
+            self._evidence_width = self._reverse_widget_scaling(self._viol_split.winfo_width() - x - 8)
+        self.after_idle(remember)
+
+    def _resize_violation_details(self, event):
+        width = max(80, int(self._reverse_widget_scaling(event.width)) - 24)
+        for label in self._vd_labels:
+            label.configure(wraplength=width)
+
+    def _render_violation_snapshot(self):
+        canvas = self._vd_snapshot
+        width, height = max(1, canvas.winfo_width()), max(1, canvas.winfo_height())
+        canvas.delete("all")
+        canvas._ref = None
+        if self._snapshot_source is None:
+            canvas.configure(cursor="")
+            canvas.create_text(width / 2, height / 2, text=self._snapshot_message,
+                fill=COLOR_TEXT_MUTED, width=max(1, width - 20), justify="center")
+            return
+        img = self._snapshot_source.copy()
+        img.thumbnail((max(1, width - 12), max(1, height - 12)), Image.Resampling.LANCZOS)
+        canvas._ref = ImageTk.PhotoImage(img, master=canvas)
+        canvas.create_image(width / 2, height / 2, image=canvas._ref)
+        canvas.configure(cursor="hand2")
+
+    def _open_violation_evidence(self):
+        if self._snapshot_source is None:
+            return
+        source = self._snapshot_source.copy()
+        modal = ctk.CTkToplevel(self)
+        modal.title("Violation Evidence")
+        modal.geometry("800x700")
+        modal.minsize(440, 360)
+        modal.transient(self.winfo_toplevel())
+        modal.configure(fg_color=COLOR_BG)
+        modal.grid_columnconfigure(0, weight=1)
+        modal.grid_rowconfigure(1, weight=1)
+        title = ctk.CTkLabel(modal, text=f"{self._vd_student.cget('text')} · {self._vd_title.cget('text')}",
+            width=1, wraplength=700, font=heading_font(15))
+        title.grid(row=0, column=0, sticky="ew", padx=16, pady=12)
+        title.bind("<Configure>", lambda event: title.configure(
+            wraplength=max(100, int(self._reverse_widget_scaling(event.width)) - 8)))
+        canvas = tk.Canvas(modal, bg=COLOR_BG, highlightthickness=0)
+        canvas.grid(row=1, column=0, sticky="nsew", padx=16)
+        def render(event):
+            img = source.copy()
+            img.thumbnail((max(1, event.width - 16), max(1, event.height - 16)), Image.Resampling.LANCZOS)
+            canvas._ref = ImageTk.PhotoImage(img, master=canvas)
+            canvas.delete("all")
+            canvas.create_image(event.width / 2, event.height / 2, image=canvas._ref)
+        canvas.bind("<Configure>", render)
+        ctk.CTkButton(modal, text="Close", command=modal.destroy).grid(row=2, column=0, pady=12)
+        modal.bind("<Escape>", lambda _e: modal.destroy())
+        modal.after(100, modal.lift)
 
     def _load_violations(self) -> None:
+        selection = self._viol_tree.selection()
         q = (self._viol_search.get() or "").strip().lower()
         rows = self.database.get_all_violations_full()
+        self._violation_rows = {str(r["id"]): r for r in rows}
         for item in self._viol_tree.get_children():
             self._viol_tree.delete(item)
         appeals_map = {a["violation_id"]: a["status"]
                        for a in self.database.get_all_appeals_full()}
+        self._violation_appeals = appeals_map
         for i, r in enumerate(rows, 1):
             name = r.get("student_name") or "—"
             sid  = r.get("student_id") or "—"
@@ -261,41 +373,54 @@ class RecordsPanel(ctk.CTkFrame):
                 continue
             self._viol_tree.insert("", "end", iid=str(r["id"]),
                                    values=(i, name, sid, vtype, ts, stat, ap))
+        shown = len(self._viol_tree.get_children())
+        self._viol_count.configure(text=f"{shown} records · Drag the divider to resize the table and evidence pane.")
+        if selection and self._viol_tree.exists(selection[0]):
+            self._viol_tree.selection_set(selection[0])
+        self._on_viol_select()
 
     def _on_viol_select(self, _e=None) -> None:
         sel = self._viol_tree.selection()
-        if not sel:
-            return
-        vid = int(sel[0])
-        rows = self.database.get_all_violations_full()
-        r = next((x for x in rows if x["id"] == vid), None)
+        r = self._violation_rows.get(sel[0]) if sel else None
+        self._snapshot_source = None
+        self._vd_enlarge.configure(state="disabled")
+        self._snapshot_message = "No snapshot on file"
         if r is None:
+            self._vd_title.configure(text="Select a violation")
+            self._vd_student.configure(text="Choose a record from the table.")
+            self._vd_identity.configure(text="")
+            self._vd_status.configure(text="")
+            for label in self._vd_fields.values():
+                label.configure(text="")
+            self._snapshot_message = "Select a record to view evidence"
+            self._render_violation_snapshot()
             return
         vtype = (r.get("violation_type") or "—").replace("_", " ").title()
         self._vd_title.configure(text=vtype)
-        info = (
-            f"Student: {r.get('student_name') or '—'}\n"
-            f"ID: {r.get('student_id') or '—'}\n"
-            f"Course: {r.get('course') or '—'}  |  {r.get('year_and_section') or '—'}\n"
-            f"Date: {_ts(r.get('timestamp', ''))}\n"
-            f"Status: {_violation_status_label(r.get('status') or '')}\n"
-            f"Semester: {r.get('semester_name') or '—'} · {r.get('school_year') or '—'}\n"
-            f"Strike: {'Active' if r.get('strike_active') else 'Inactive / Not Awarded'}"
-        )
-        self._vd_info.configure(text=info)
+        self._vd_student.configure(text=r.get("student_name") or "Unknown student")
+        self._vd_identity.configure(text=f"Student ID: {r.get('student_id') or '—'} · Record #{r['id']}")
+        status = r.get("status") or ""
+        self._vd_status.configure(text=_violation_status_label(status), text_color=(
+            COLOR_WARNING if status == "pending_review" else COLOR_DANGER
+            if status in ("confirmed", "auto_confirmed") else COLOR_TEXT_MUTED))
+        fields = {
+            "date": f"Date & time (UTC): {_ts(r.get('timestamp', ''))}",
+            "course": f"Course / year & section: {r.get('course') or '—'} · {r.get('year_and_section') or '—'}",
+            "semester": f"Semester: {r.get('semester_name') or '—'} · {r.get('school_year') or '—'}",
+            "strike": f"Strike: {'Active' if r.get('strike_active') else 'Inactive / Not Awarded'}",
+            "appeal": f"Appeal: {(self._violation_appeals.get(r['id']) or 'None').title()}",
+        }
+        for key, value in fields.items():
+            self._vd_fields[key].configure(text=value)
         snap = r.get("snapshot") or r.get("violation_snapshot")
         if snap:
             try:
-                img = Image.open(io.BytesIO(snap)).convert("RGB")
-                img.thumbnail((280, 210), Image.LANCZOS)
-                ph = ImageTk.PhotoImage(img)
-                self._image_refs.append(ph)
-                self._vd_snapshot.configure(image=ph, text="")
-                self._vd_snapshot._ref = ph
+                with Image.open(io.BytesIO(snap)) as img:
+                    self._snapshot_source = img.convert("RGB")
+                self._vd_enlarge.configure(state="normal")
             except Exception:
-                self._vd_snapshot.configure(image="", text="Snapshot unavailable")
-        else:
-            self._vd_snapshot.configure(image="", text="No snapshot")
+                self._snapshot_message = "Snapshot unavailable"
+        self._render_violation_snapshot()
 
     def _export_violations(self) -> None:
         path = filedialog.asksaveasfilename(

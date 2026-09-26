@@ -5,7 +5,10 @@ from __future__ import annotations
 from core.student_status import CONTACT_FIELDS, validate_contacts, standing_label, suspension_label
 from ui.student_management import open_student_details, open_premises_log
 
-import pickle
+import os
+import queue
+from collections import deque
+import time
 import re
 import threading
 import tkinter as tk
@@ -16,6 +19,10 @@ import cv2
 import customtkinter as ctk
 import numpy as np
 from PIL import Image, ImageTk
+
+from core.face_capture import (CaptureSession, FacePreviewTracker, capture_payload, guide_geometry,
+                               POSITION_MESSAGE, MAX_FRAME_AGE)
+from core.registration_camera import PreviewMetrics
 
 from ui.components import (
     COLOR_ACCENT,
@@ -45,6 +52,8 @@ if TYPE_CHECKING:
 
 PREVIEW_WIDTH = 320
 PREVIEW_HEIGHT = 240
+PREVIEW_INTERVAL_MS = 33
+VALIDATION_INTERVAL = .25
 
 # Guided multi-angle capture order (angle_key, on-screen instruction).
 _ANGLES = [
@@ -60,7 +69,7 @@ _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
 class EnrollmentPanel(ctk.CTkFrame):
-    """Student list + selected-photo preview. Enrolling swaps the panel's center to an
+    """Student list with a selected-student summary. Enrolling swaps the panel's center to an
     in-panel flow (details form → guided face capture); Update Photo still uses a modal.
 
     All photo rendering uses ImageTk.PhotoImage (CTkImage does not display on
@@ -74,13 +83,19 @@ class EnrollmentPanel(ctk.CTkFrame):
         recognizer: Recognizer,
         get_frame: Callable[[], np.ndarray | None],
         username: str = "admin",
+        on_open_suspensions: Callable[[str], None] | None = None,
+        get_frame_sample=None,
         **kwargs,
     ) -> None:
         super().__init__(master, fg_color=COLOR_BG, **kwargs)
         self.username = username
+        self.on_open_suspensions = on_open_suspensions
         self.database = database
         self.recognizer = recognizer
         self.get_frame = get_frame
+        self.get_frame_sample = get_frame_sample
+        # Shared by all enrollment/update wizard generations, including closing ones.
+        self._capture_inference_lock = threading.Lock()
 
         self._students: list[dict] = []
         self._selected_pk: int | None = None
@@ -91,21 +106,20 @@ class EnrollmentPanel(ctk.CTkFrame):
         self._enroll_status_label: ctk.CTkLabel | None = None
         self._enroll_close: Callable[[], None] | None = None
         self._enroll_screen: ctk.CTkFrame | None = None
+        self._update_close = None
         self._enroll_step_chips: list | None = None
 
         # The panel hosts one full-bleed screen at a time (list ⇄ enroll flow).
         self.grid_rowconfigure(0, weight=1)
         self.grid_columnconfigure(0, weight=1)
 
-        # List screen — student list (left) + selected-photo preview (right).
+        # The summary and table share the full available width.
         self._list_screen = ctk.CTkFrame(self, fg_color=COLOR_BG)
         self._list_screen.grid(row=0, column=0, sticky="nsew")
         self._list_screen.grid_columnconfigure(0, weight=1)
-        self._list_screen.grid_columnconfigure(1, weight=1)
         self._list_screen.grid_rowconfigure(0, weight=1)
 
         self._build_left_panel()
-        self._build_preview_panel()
         self._reload_students()
         self.grid_remove()
         self.after(15000, self._refresh_standing_tags)
@@ -116,7 +130,7 @@ class EnrollmentPanel(ctk.CTkFrame):
         self.after(15000, self._refresh_standing_tags)
 
     # ------------------------------------------------------------------
-    # Left panel — student list
+    # Student summary and list
     # ------------------------------------------------------------------
 
     def _build_left_panel(self) -> None:
@@ -127,8 +141,8 @@ class EnrollmentPanel(ctk.CTkFrame):
             border_width=1,
             border_color=COLOR_BORDER,
         )
-        left.grid(row=0, column=0, sticky="nsew", padx=(0, PADDING // 2))
-        left.grid_rowconfigure(2, weight=1)
+        left.grid(row=0, column=0, sticky="nsew")
+        left.grid_rowconfigure(4, weight=1)
         left.grid_columnconfigure(0, weight=1)
 
         header = ctk.CTkFrame(left, fg_color="transparent")
@@ -147,6 +161,8 @@ class EnrollmentPanel(ctk.CTkFrame):
             command=self._open_enroll_flow,
         ).grid(row=0, column=1, sticky="e")
 
+        self._build_summary_card(left)
+
         self._search_var = tk.StringVar()
         self._search_var.trace_add("write", lambda *_: self._apply_filter())
         search = ctk.CTkEntry(
@@ -154,7 +170,7 @@ class EnrollmentPanel(ctk.CTkFrame):
             placeholder_text="Search by name or student ID…",
             textvariable=self._search_var,
         )
-        search.grid(row=1, column=0, sticky="ew", padx=PADDING, pady=(0, 8))
+        search.grid(row=2, column=0, sticky="ew", padx=PADDING, pady=(0, 8))
         filters = ctk.CTkFrame(left, fg_color="transparent")
         filters.grid(row=3, column=0, sticky="ew", padx=PADDING, pady=(0, 8))
         self._status_filter = ctk.CTkOptionMenu(filters,
@@ -165,7 +181,7 @@ class EnrollmentPanel(ctk.CTkFrame):
             command=lambda: open_premises_log(self, self.database)).pack(side="right")
 
         tree_wrap = ctk.CTkFrame(left, fg_color=COLOR_BG, corner_radius=CORNER_RADIUS)
-        tree_wrap.grid(row=2, column=0, sticky="nsew", padx=PADDING, pady=(0, 8))
+        tree_wrap.grid(row=4, column=0, sticky="nsew", padx=PADDING, pady=(0, 8))
         tree_wrap.grid_rowconfigure(0, weight=1)
         tree_wrap.grid_columnconfigure(0, weight=1)
 
@@ -204,38 +220,23 @@ class EnrollmentPanel(ctk.CTkFrame):
         self._tree.bind("<<TreeviewSelect>>", self._on_row_select)
 
         footer = ctk.CTkFrame(left, fg_color="transparent")
-        footer.grid(row=4, column=0, sticky="ew", padx=PADDING, pady=(0, PADDING))
+        footer.grid(row=5, column=0, sticky="ew", padx=PADDING, pady=(0, PADDING))
         footer.grid_columnconfigure(0, weight=1)
 
         self._count_label = ctk.CTkLabel(
             footer, text="0 students enrolled", font=body_font(12), text_color=COLOR_TEXT_MUTED,
         )
-        self._count_label.grid(row=0, column=0, sticky="w", pady=(0, 8))
-
-        btn_row = ctk.CTkFrame(footer, fg_color="transparent")
-        btn_row.grid(row=1, column=0, sticky="ew")
-        btn_row.grid_columnconfigure((0, 1, 2), weight=1, uniform="enroll_btns")
+        self._count_label.grid(row=0, column=0, sticky="w")
 
         ctk.CTkButton(
-            btn_row, text="Reload", height=32, corner_radius=CORNER_RADIUS,
+            footer, text="Reload", width=100, height=32, corner_radius=CORNER_RADIUS,
             fg_color=COLOR_BORDER, hover_color=COLOR_ACCENT_HOVER, command=self._reload_students,
-        ).grid(row=0, column=0, sticky="ew", padx=(0, 6))
-
-        self._update_btn = ctk.CTkButton(
-            btn_row, text="Update Photo", height=32, corner_radius=CORNER_RADIUS,
-            fg_color=COLOR_ACCENT, hover_color=COLOR_ACCENT_HOVER,
-            command=self._update_selected_photo, state="disabled",
+        ).grid(row=0, column=1, sticky="e")
+        self._status_label = ctk.CTkLabel(
+            footer, text="", height=20, font=body_font(12),
+            text_color=COLOR_TEXT_MUTED, anchor="w", justify="left", wraplength=500,
         )
-        self._update_btn.grid(row=0, column=1, sticky="ew", padx=(0, 6))
-
-        ctk.CTkButton(
-            btn_row, text="Delete Selected", height=32, corner_radius=CORNER_RADIUS,
-            fg_color=COLOR_DANGER, hover_color="#DC2626", command=self._delete_selected,
-        ).grid(row=0, column=2, sticky="ew")
-
-        ctk.CTkButton(btn_row, text="Edit Details / Suspension", height=32,
-            corner_radius=CORNER_RADIUS, fg_color=COLOR_ACCENT,
-            command=self._edit_selected_details).grid(row=1, column=0, columnspan=3, sticky="ew", pady=(8, 0))
+        self._status_label.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(4, 0))
 
     def _edit_selected_details(self):
         if not self._tree.selection():
@@ -247,49 +248,102 @@ class EnrollmentPanel(ctk.CTkFrame):
             return
         open_student_details(self, self.database, student["student_id"], self.username, self._reload_students)
 
+    def _open_selected_suspensions(self):
+        student = self._resolve_selected_student()
+        if student and self.on_open_suspensions:
+            self.on_open_suspensions(student["student_id"])
+
     # ------------------------------------------------------------------
-    # Right panel — selected student photo preview
+    # Compact selected-student summary
     # ------------------------------------------------------------------
 
-    def _build_preview_panel(self) -> None:
-        right = ctk.CTkFrame(
-            self._list_screen, fg_color=COLOR_SURFACE, corner_radius=CORNER_RADIUS,
+    def _build_summary_card(self, parent) -> None:
+        self._summary_card = ctk.CTkFrame(
+            parent, fg_color=COLOR_BG, corner_radius=CORNER_RADIUS,
             border_width=1, border_color=COLOR_BORDER,
         )
-        right.grid(row=0, column=1, sticky="nsew", padx=(PADDING // 2, 0))
-        right.grid_columnconfigure(0, weight=1)
-        right.grid_rowconfigure(1, weight=1)
+        self._summary_card.grid(row=1, column=0, sticky="ew", padx=PADDING, pady=(0, 12))
+        self._summary_card.grid_columnconfigure(1, weight=1)
 
-        ctk.CTkLabel(
-            right, text="Student Photo  ·  click to enlarge",
-            font=heading_font(16), text_color=COLOR_TEXT,
-        ).grid(row=0, column=0, sticky="w", padx=PADDING, pady=(PADDING, 8))
-
-        photo_wrap = ctk.CTkFrame(right, fg_color=COLOR_BG, corner_radius=CORNER_RADIUS)
-        photo_wrap.grid(row=1, column=0, sticky="nsew", padx=PADDING, pady=(0, 8))
-        photo_wrap.grid_rowconfigure(0, weight=1)
-        photo_wrap.grid_columnconfigure(0, weight=1)
+        portrait = ctk.CTkFrame(self._summary_card, fg_color="transparent")
+        portrait.grid(row=0, column=0, padx=12, pady=12, sticky="n")
+        photo_wrap = ctk.CTkFrame(portrait, width=88, height=88, fg_color=COLOR_SURFACE,
+                                corner_radius=8)
+        photo_wrap.pack()
+        photo_wrap.pack_propagate(False)
 
         # tk.Label (not CTkLabel): CTkLabel.configure(image=None) fails to clear a
         # raw ImageTk image, leaving a deleted student's photo on screen. tk.Label
         # clears reliably with image="".
         self._selected_photo_label = tk.Label(
-            photo_wrap, text="Select a student to view photo",
-            bg=COLOR_BG, fg=COLOR_TEXT_MUTED, cursor="hand2",
-            font=("Helvetica", 13), bd=0,
+            photo_wrap, text="No selection",
+            bg=COLOR_SURFACE, fg=COLOR_TEXT_MUTED, cursor="",
+            font=("Helvetica", 11), bd=0, wraplength=76,
         )
-        self._selected_photo_label.grid(row=0, column=0, sticky="nsew", padx=12, pady=12)
+        self._selected_photo_label.pack(fill="both", expand=True, padx=4, pady=4)
         self._selected_photo_label.bind("<Button-1>", lambda _e: self._view_selected_photo())
+        self._photo_hint = ctk.CTkLabel(portrait, text="", height=16,
+                                      font=body_font(10), text_color=COLOR_TEXT_MUTED)
+        self._photo_hint.pack(pady=(4, 0))
 
-        self._preview_caption = ctk.CTkLabel(
-            right, text="", font=body_font(12), text_color=COLOR_TEXT_MUTED,
+        info = ctk.CTkFrame(self._summary_card, fg_color="transparent", width=1)
+        info.grid(row=0, column=1, sticky="new", pady=12, padx=(0, 12))
+        info.grid_columnconfigure(0, weight=1)
+        self._summary_name = ctk.CTkLabel(
+            info, text="Select a student", width=1, anchor="w", justify="left",
+            font=heading_font(17), text_color=COLOR_TEXT,
         )
-        self._preview_caption.grid(row=2, column=0, sticky="w", padx=PADDING, pady=(0, 4))
+        self._summary_identity = ctk.CTkLabel(
+            info, text="Choose a row below to view details and actions.", width=1,
+            anchor="w", justify="left", font=body_font(12), text_color=COLOR_TEXT_MUTED,
+        )
+        self._summary_standing = ctk.CTkLabel(
+            info, text="", width=1, anchor="w", justify="left",
+            font=body_font(12), text_color=COLOR_TEXT_MUTED,
+        )
+        self._summary_suspension = ctk.CTkLabel(
+            info, text="", width=1, anchor="w", justify="left",
+            font=body_font(12), text_color=COLOR_TEXT_MUTED,
+        )
+        labels = (self._summary_name, self._summary_identity,
+                  self._summary_standing, self._summary_suspension)
+        for row, label in enumerate(labels):
+            label.grid(row=row, column=0, sticky="ew")
 
-        self._status_label = ctk.CTkLabel(
-            right, text="", font=body_font(12), text_color=COLOR_TEXT_MUTED, wraplength=360,
+        def resize_text(event):
+            width = max(60, int(self._reverse_widget_scaling(event.width)) - 4)
+            for label in labels:
+                label.configure(wraplength=width)
+        info.bind("<Configure>", resize_text)
+
+        actions = ctk.CTkFrame(self._summary_card, fg_color="transparent")
+        actions.grid(row=0, column=2, sticky="ne", padx=(0, 12), pady=12)
+        self._details_btn = ctk.CTkButton(
+            actions, text="Edit Details", width=185, height=30,
+            corner_radius=8, fg_color=COLOR_ACCENT, hover_color=COLOR_ACCENT_HOVER,
+            command=self._edit_selected_details, state="disabled",
         )
-        self._status_label.grid(row=3, column=0, sticky="w", padx=PADDING, pady=(0, PADDING))
+        self._details_btn.pack(fill="x")
+        self._suspensions_btn = ctk.CTkButton(
+            actions, text="View Suspensions", width=185, height=30, corner_radius=8,
+            fg_color=COLOR_BORDER, hover_color=COLOR_ACCENT_HOVER,
+            command=self._open_selected_suspensions, state="disabled",
+        )
+        if self.on_open_suspensions:
+            self._suspensions_btn.pack(fill="x", pady=(6, 0))
+        self._update_btn = ctk.CTkButton(
+            actions, text="Update Photo", width=185, height=30, corner_radius=8,
+            fg_color=COLOR_BORDER, hover_color=COLOR_ACCENT_HOVER,
+            command=self._update_selected_photo, state="disabled",
+        )
+        self._update_btn.pack(fill="x", pady=6)
+        self._delete_btn = ctk.CTkButton(
+            actions, text="Delete Selected", width=185, height=30, corner_radius=8,
+            fg_color=COLOR_BG, border_width=1, border_color=COLOR_DANGER,
+            text_color=COLOR_DANGER, hover_color=COLOR_BORDER,
+            command=self._delete_selected, state="disabled",
+        )
+        self._delete_btn.pack(fill="x")
 
     def _configure_tree_style(self) -> None:
         style = ttk.Style()
@@ -335,15 +389,12 @@ class EnrollmentPanel(ctk.CTkFrame):
     # ------------------------------------------------------------------
 
     def _reload_students(self) -> None:
-        selection = self._tree.selection()
         rows = self.database.get_all_students()
         self._students = [dict(row) for row in rows]
         self._apply_filter()
-        if selection and self._tree.exists(selection[0]):
-            self._tree.selection_set(selection[0])
-            self._on_row_select()
 
     def _apply_filter(self) -> None:
+        selection = self._tree.selection()
         query = self._search_var.get().strip().lower()
         for item in self._tree.get_children():
             self._tree.delete(item)
@@ -377,52 +428,48 @@ class EnrollmentPanel(ctk.CTkFrame):
             )
 
         self._count_label.configure(text=f"{shown} of {len(self._students)} students")
+        if selection and self._tree.exists(selection[0]):
+            self._tree.selection_set(selection[0])
+        self._on_row_select()
 
     def _on_row_select(self, _event: tk.Event | None = None) -> None:
         selection = self._tree.selection()
-        if not selection:
-            self._selected_pk = None
-            self._update_btn.configure(state="disabled")
-            self._clear_photo_label("Select a student to view photo")
-            self._preview_caption.configure(text="")
+        previous_pk = self._selected_pk
+        self._selected_pk = int(selection[0]) if selection else None
+        if previous_pk != self._selected_pk and self._update_close is not None:
+            self._update_close()
+        student = self._resolve_selected_student()
+        for button in (self._details_btn, self._update_btn, self._delete_btn):
+            button.configure(state="normal" if student else "disabled")
+        self._suspensions_btn.configure(state="normal" if student and self.on_open_suspensions else "disabled")
+
+        if student is None:
+            self._clear_photo_label("No selection")
+            self._selected_photo_label.configure(cursor="")
+            self._photo_hint.configure(text="")
+            self._summary_name.configure(text="Select a student")
+            self._summary_identity.configure(text="Choose a row below to view details and actions.")
+            self._summary_standing.configure(text="")
+            self._summary_suspension.configure(text="")
             return
 
-        self._selected_pk = int(selection[0])
-        self._update_btn.configure(state="normal")
-        student = self._resolve_selected_student()
-
-        if student and student.get("photo"):
+        if student.get("photo"):
             self._show_photo_bytes(student["photo"], self._selected_photo_label)
         else:
             self._clear_photo_label("No photo on file")
-
-        if student:
-            self._preview_caption.configure(
-                text=f"{student.get('name', '')}  ·  {student.get('student_id', '')}"
-            )
-        else:
-            self._preview_caption.configure(text="")
-
-    # ------------------------------------------------------------------
-    # Multi-frame capture (async — camera cache refreshes between after() ticks)
-    # ------------------------------------------------------------------
-
-    def _collect_frames(self, on_done, *, count: int = 10, interval_ms: int = 100) -> None:
-        """Collect `count` fresh camera frames `interval_ms` apart without blocking
-        the UI loop, then call on_done(frames). A blocking sleep loop would freeze
-        the event loop and return identical cached frames, so we chain after()."""
-        frames: list = []
-
-        def _grab(i: int = 0) -> None:
-            if not self.winfo_exists() or i >= count:
-                on_done(frames)
-                return
-            f = self.get_frame()
-            if f is not None:
-                frames.append(f.copy())
-            self.after(interval_ms, _grab, i + 1)
-
-        _grab(0)
+        self._selected_photo_label.configure(cursor="hand2")
+        self._photo_hint.configure(text="Click to enlarge" if student.get("photo") else "")
+        self._summary_name.configure(text=student.get("name") or "Unnamed student")
+        self._summary_identity.configure(text=" · ".join(
+            str(student.get(key) or "—") for key in ("student_id", "course", "year_and_section")))
+        standing = standing_label(student)
+        self._summary_standing.configure(
+            text=f"Status: {standing}",
+            text_color=COLOR_SAFE if standing == "Enrolled" else COLOR_WARNING,
+        )
+        active = self.database.get_active_suspension(student["student_id"])
+        self._summary_suspension.configure(
+            text=suspension_label(active), text_color=COLOR_DANGER if active else COLOR_TEXT_MUTED)
 
     # ------------------------------------------------------------------
     # Image rendering (ImageTk — the render path that works here)
@@ -447,7 +494,7 @@ class EnrollmentPanel(ctk.CTkFrame):
         except Exception:
             return None
 
-    def _show_photo_bytes(self, photo_blob: bytes, label, max_w: int = 440, max_h: int = 440) -> None:
+    def _show_photo_bytes(self, photo_blob: bytes, label, max_w: int = 80, max_h: int = 80) -> None:
         photo = self._photo_bytes_to_photo(photo_blob, max_w, max_h)
         if photo is None:
             self._clear_photo_label("Could not load photo")
@@ -492,6 +539,8 @@ class EnrollmentPanel(ctk.CTkFrame):
         # loops stop and we return cleanly to the list for next time.
         if self._enroll_close is not None:
             self._enroll_close()
+        if self._update_close is not None:
+            self._update_close()
 
     def update_preview(self, frame: np.ndarray | None) -> None:
         return
@@ -545,6 +594,8 @@ class EnrollmentPanel(ctk.CTkFrame):
         }
 
         def _return_to_list() -> None:
+            if state.get("capturing"):
+                return
             state["alive"] = False
             for job_key in ("job_tick", "job_detect"):
                 if state.get(job_key) is not None:
@@ -826,11 +877,19 @@ class EnrollmentPanel(ctk.CTkFrame):
         pw, ph = preview_size
         state["preview_w"], state["preview_h"] = pw, ph
         state["mirror"] = MirrorController()
+        state["student_key"] = self._capture_student_key(state)
+        state["session"] = CaptureSession(state["student_key"])
+        state["results"] = queue.Queue()
+        state["worker_busy"] = False
+        state["reviewing"] = False
+        state["capturing"] = False
+        state["on_finish"] = on_finish
+        state["finish_text"] = finish_text
+        self._init_wizard_preview(state)
         pad = 16 if big else 12
         csz = 38 if big else 30
 
-        # Warm up the recognizer models (for the live "face detected" indicator) without
-        # blocking the UI thread — has_face() returns False until this finishes.
+        # Warm up inference without blocking the UI thread.
         if self.recognizer is not None:
             threading.Thread(target=self.recognizer._ensure_models, daemon=True).start()
 
@@ -849,6 +908,11 @@ class EnrollmentPanel(ctk.CTkFrame):
         step_caption = ctk.CTkLabel(ind, text="", font=body_font(14 if big else 12),
                                     text_color=COLOR_TEXT)
         step_caption.pack(pady=(8 if big else 6, 0))
+        if "target_pk" in state:
+            identity = state["target_student_id"]
+        else:
+            identity = f"{self._entries['name'].get().strip()} · {self._entries['student_id'].get().strip()}"
+        state["identity"] = identity
         state["circles"] = circles
         state["step_caption"] = step_caption
 
@@ -909,191 +973,315 @@ class EnrollmentPanel(ctk.CTkFrame):
 
         self._wizard_refresh(state, finish_text)
         self._wizard_tick(state)
-        self._wizard_detect(state)
+
+    def _capture_student_key(self, state):
+        if "target_pk" in state:
+            return ("update", self._selected_pk, state["target_student_id"])
+        return ("enroll", tuple((key, entry.get().strip())
+                               for key, entry in self._entries.items()), self._gender_var.get())
+
+    def _capture_current(self, state):
+        return (state.get("alive", False) and state["modal"].winfo_exists()
+                and state["student_key"] == self._capture_student_key(state))
 
     @staticmethod
     def _draw_pose_guide(disp, step: int, mirror: bool = False):
-        """Draw a face-oval guide (+ direction arrow) onto the preview frame in place.
-
-        Scales to the frame size, and (when ``mirror``) flips the horizontal direction so the
-        guidance matches the mirrored (selfie) view the user sees."""
-        h, w = disp.shape[:2]
-        cx, cy = w // 2, h // 2
-        rx, ry = int(w * 0.19), int(h * 0.33)
-        off = int(w * 0.09)
-        fs = max(0.9, w / 320.0)
-        sign = -1 if mirror else 1
-        if step == 1:        # turn LEFT → guide oval shifts (mirror-aware)
-            center = (cx + sign * off, cy)
-        elif step == 2:      # turn RIGHT
-            center = (cx - sign * off, cy)
-        else:
-            center = (cx, cy)
-        cv2.ellipse(disp, center, (rx, ry), 0, 0, 360, (255, 255, 255), 2)
-        # cv2 (Hershey) fonts are ASCII-only, so use "<-"/"->" for the arrows.
-        arrow = None
-        if step == 1:
-            arrow = "->" if mirror else "<-"
-        elif step == 2:
-            arrow = "<-" if mirror else "->"
-        if arrow is not None:
-            left_side = (step == 1) != mirror
-            ax = (cx - rx - int(50 * fs)) if left_side else (cx + rx + int(10 * fs))
-            cv2.putText(disp, arrow, (ax, cy + 8), cv2.FONT_HERSHEY_SIMPLEX,
-                        fs, (255, 255, 255), 2, cv2.LINE_AA)
+        cx, cy, rx, ry = guide_geometry(disp.shape, step)
+        if mirror:
+            cx = disp.shape[1] - cx
+        cv2.ellipse(disp, (round(cx), round(cy)), (round(rx), round(ry)),
+                    0, 0, 360, (255, 255, 255), 2)
         return disp
 
-    def _wizard_tick(self, state: dict) -> None:
-        modal = state["modal"]
-        if not modal.winfo_exists() or not state.get("alive", True):
-            return
-        frame = self.get_frame()
-        if frame is not None:
-            pw = state.get("preview_w", PREVIEW_WIDTH)
-            ph = state.get("preview_h", PREVIEW_HEIGHT)
+    def _render_capture(self, state, frame, box=None, *, frozen=False):
+        pw, ph = state["preview_w"], state["preview_h"]
+        if frozen:
+            # The saved JPEG stays unmirrored; only its display copy is fitted.
+            h, w = frame.shape[:2]
+            scale = min(pw / w, ph / h)
+            fitted = cv2.resize(frame, (max(1, round(w*scale)), max(1, round(h*scale))))
+            disp = np.zeros((ph, pw, 3), dtype=np.uint8)
+            fh, fw = fitted.shape[:2]
+            x, y = (pw-fw)//2, (ph-fh)//2
+            disp[y:y+fh, x:x+fw] = fitted
+        else:
+            # Resize once, then draw at preview resolution. Detection/capture retain
+            # the untouched full-resolution sample and raw-coordinate face box.
             disp = cv2.resize(frame, (pw, ph))
-            mctrl = state.get("mirror")
-            mir = mctrl.display_mirror() if mctrl is not None else False
-            if mir:
+            self._draw_pose_guide(disp, state["step"])
+            if box is not None:
+                h, w = frame.shape[:2]
+                x1, y1, x2, y2 = (np.asarray(box)*np.array([pw/w, ph/h]*2)).astype(int)
+                cv2.rectangle(disp, (x1, y1), (x2, y2), (90, 220, 40), 2)
+            if state["mirror"].display_mirror():
                 disp = cv2.flip(disp, 1)
-            self._draw_pose_guide(disp, state["step"], mirror=mir)
-            if mctrl is not None:
-                disp = mctrl.apply_anim(disp)
-            rgb = np.ascontiguousarray(cv2.cvtColor(disp, cv2.COLOR_BGR2RGB))
-            photo = ImageTk.PhotoImage(image=Image.fromarray(rgb), master=state["canvas"])
-            state["img"] = photo
-            if state["canvas_item"] is None:
-                state["canvas_item"] = state["canvas"].create_image(0, 0, anchor=tk.NW, image=photo)
-            else:
-                state["canvas"].itemconfig(state["canvas_item"], image=photo)
-        state["job_tick"] = modal.after(50, lambda: self._wizard_tick(state))
+        rgb = cv2.cvtColor(disp, cv2.COLOR_BGR2RGB)
+        photo = ImageTk.PhotoImage(image=Image.fromarray(rgb), master=state["canvas"])
+        state["img"] = photo
+        if state["canvas_item"] is None:
+            state["canvas_item"] = state["canvas"].create_image(0, 0, anchor=tk.NW, image=photo)
+        else:
+            state["canvas"].itemconfig(state["canvas_item"], image=photo)
 
-    def _wizard_detect(self, state: dict) -> None:
-        modal = state["modal"]
-        if not modal.winfo_exists() or not state.get("alive", True):
+    def _show_frozen(self, state, capture):
+        # Decode the exact JPEG bytes that persistence receives, unmirrored.
+        crop = cv2.imdecode(np.frombuffer(capture.photo, np.uint8), cv2.IMREAD_COLOR)
+        self._render_capture(state, crop, frozen=True)
+
+    @staticmethod
+    def _init_wizard_preview(state):
+        state.update(preview_tracker=FacePreviewTracker(), preview_session=None,
+                     last_rendered=None, next_validation=0.0, preview_feedback=None,
+                     preview_metrics=PreviewMetrics(), source_times=deque(maxlen=300),
+                     last_source_sample=None, next_diagnostics=time.monotonic()+5)
+
+    def _start_wizard_validation(self, state, session, sample):
+        # The panel-level lock also covers workers from a closed/backed-out wizard.
+        # Never queue a second worker while an obsolete native inference finishes.
+        if not self._capture_inference_lock.acquire(blocking=False):
             return
-        if not state.get("capturing"):
-            frame = self.get_frame()
-            rec = self.recognizer
-            if rec is None or not getattr(rec, "_models_loaded", False):
-                state["dot"].configure(text_color=COLOR_TEXT_MUTED)
-                state["det_status"].configure(text="Loading model…", text_color=COLOR_TEXT_MUTED)
-            elif frame is not None and rec.has_face(frame):
-                state["dot"].configure(text_color=COLOR_SAFE)
-                state["det_status"].configure(text="Face detected ✓", text_color=COLOR_SAFE)
-            else:
-                state["dot"].configure(text_color=COLOR_DANGER)
-                state["det_status"].configure(
-                    text="No face detected — adjust your position", text_color=COLOR_DANGER)
-        state["job_detect"] = modal.after(200, lambda: self._wizard_detect(state))
+        state["worker_busy"] = True
+        state["validation_started_at"] = time.monotonic()
+        state["next_validation"] = state["validation_started_at"] + VALIDATION_INTERVAL
+        results = state["results"]
+        recognizer = self.recognizer
+
+        def detect():
+            faces, error = [], None
+            try:
+                if state.get("alive") and state["session"] is session:
+                    faces = recognizer.enrollment_faces(sample.frame)
+            except Exception as exc:
+                error = str(exc)
+            finally:
+                results.put((session, sample, faces, error))
+                self._capture_inference_lock.release()
+
+        try:
+            threading.Thread(target=detect, daemon=True, name="enrollment-validation").start()
+        except Exception:
+            state["worker_busy"] = False
+            self._capture_inference_lock.release()
+            raise
+
+    @staticmethod
+    def _wizard_feedback(state, session):
+        frozen = session.frozen is not None
+        message = ("Frozen face preview — confirm or retake" if frozen else
+                   "Capturing — hold still" if session.pending else session.message)
+        ready = frozen or session.ready and not session.pending
+        color = COLOR_SAFE if ready else COLOR_DANGER
+        value = (message, color, "Use This Capture" if frozen else "Capture This Angle",
+                 "normal" if ready else "disabled", "Retake" if frozen else "Skip this angle →",
+                 "disabled" if session.pending else "normal")
+        previous = state.get("preview_feedback")
+        if previous is None or previous[:2] != value[:2]:
+            state["det_status"].configure(text=message, text_color=color)
+            state["dot"].configure(text_color=color)
+        if previous is None or previous[2:4] != value[2:4]:
+            state["cap_btn"].configure(text=value[2], state=value[3])
+        if previous is None or previous[4:] != value[4:]:
+            state["skip_btn"].configure(text=value[4], state=value[5])
+        state["preview_feedback"] = value
+
+    def _wizard_tick(self, state: dict) -> None:
+        if not state.get("alive") or not state["modal"].winfo_exists():
+            return
+        started = time.monotonic()
+        session = state["session"]
+        tracker = state["preview_tracker"]
+        if not self._capture_current(state):
+            session.invalidate("Student changed. Close this capture and select the student again.")
+            state["angle_frames"] = {}
+            tracker.clear()
+            state["canvas"].delete("all")
+            state["canvas_item"] = None
+            state["img"] = None
+            state["cap_btn"].configure(state="disabled")
+            state["skip_btn"].configure(state="disabled")
+            state["det_status"].configure(text=session.message, text_color=COLOR_DANGER)
+            return
+        if state["preview_session"] is not session:
+            tracker.clear()
+            state["preview_session"] = session
+            state["last_rendered"] = None
+            state["next_validation"] = 0.0
+            state["preview_feedback"] = None
+            # A deliberate frozen-review pause is not a slow live-preview frame.
+            state["preview_metrics"] = PreviewMetrics()
+            state["source_times"].clear()
+            state["last_source_sample"] = None
+            state["next_diagnostics"] = started + 5
+        if not state["reviewing"] and session.frozen is None:
+            sample = self.get_frame_sample() if self.get_frame_sample else None
+            now = time.monotonic()
+            fresh = sample is not None and 0 <= now-sample.captured_at <= MAX_FRAME_AGE
+            if not fresh:
+                session.invalidate()
+                tracker.clear()
+                if state["last_rendered"] is not None:
+                    state["canvas"].delete("all")
+                    state["canvas_item"] = None
+                    state["img"] = None
+                    state["last_rendered"] = None
+            elif session.last_sample and sample.frame_id[0] != session.last_sample.frame_id[0]:
+                session.invalidate("Camera changed. Hold still and capture again.")
+                tracker.clear()
+            if fresh and sample.frame_id != state["last_source_sample"]:
+                state["source_times"].append(sample.captured_at)
+                state["last_source_sample"] = sample.frame_id
+            # A delayed post-click result must not win a race with newer pixels
+            # showing that the target left. Cancel before observe() can freeze it.
+            if session.pending and fresh and tracker.advance(sample, state["step"]) is None:
+                session.invalidate("Tracking uncertain. Hold still inside the guide.")
+            try:
+                owner, detected_sample, faces, error = state["results"].get_nowait()
+                state["worker_busy"] = False
+                state["preview_metrics"].inference_seconds.append(
+                    max(0, now-state.get("validation_started_at", now)))
+                if owner is session and fresh and sample.frame_id[0] == detected_sample.frame_id[0]:
+                    # Never freeze an in-flight frame acquired before the user's click.
+                    if not session.pending or detected_sample.captured_at > state.get("requested_at", 0):
+                        face = session.observe(detected_sample, faces, state["step"], now)
+                        if error:
+                            session.invalidate("Face detection unavailable. Please try again.")
+                            face = None
+                        if face is None:
+                            tracker.clear()
+                        else:
+                            tracker.reset(detected_sample, face[0])
+                        if session.frozen is not None:
+                            captures = self._ordered_captures(state)
+                            if captures and float(captures[0].embedding @ session.frozen.embedding) < .55:
+                                session.frozen = None
+                                session.invalidate("Target changed. Retake with the same person.")
+                                tracker.clear()
+                            else:
+                                self._show_frozen(state, session.frozen)
+            except queue.Empty:
+                pass
+            if session.frozen is None:
+                # Only optical flow runs between validations; its box is display-only.
+                # Full validation of a fresh frame still determines every saved pixel.
+                box = tracker.advance(sample, state["step"]) if fresh else None
+                if session.previous is not None and box is None:
+                    session.invalidate("Tracking uncertain. Hold still inside the guide.")
+                if session.last_sample and now-session.last_sample.captured_at > MAX_FRAME_AGE:
+                    session.invalidate()
+                    tracker.clear()
+                    box = None
+                orientation = state["mirror"].display_mirror()
+                render_key = (sample.frame_id, orientation) if fresh else None
+                if fresh and render_key != state["last_rendered"]:
+                    self._render_capture(state, sample.frame, box)
+                    state["last_rendered"] = render_key
+                    state["preview_metrics"].rendered(sample, time.monotonic())
+                if (fresh and not state["worker_busy"] and now >= state["next_validation"] and
+                        (session.last_sample is None or sample.frame_id != session.last_sample.frame_id)):
+                    self._start_wizard_validation(state, session, sample)
+            self._wizard_feedback(state, session)
+        if os.environ.get("CBVMS_CAMERA_DIAGNOSTICS") == "1" and started >= state["next_diagnostics"]:
+            metrics = state["preview_metrics"].summary(state["source_times"])
+            # These source samples are those observed by this consumer, not all reads.
+            metrics["observed_source_fps"] = metrics.pop("source_fps")
+            metrics["phase"] = "review" if state["reviewing"] or session.frozen else "live"
+            print(f"[Enrollment preview] {metrics}")
+            state["next_diagnostics"] = started + 5
+        elapsed_ms = round((time.monotonic()-started)*1000)
+        state["job_tick"] = state["modal"].after(
+            max(1, PREVIEW_INTERVAL_MS-elapsed_ms), lambda: self._wizard_tick(state))
+
+    @staticmethod
+    def _ordered_captures(state):
+        return [c for key, _ in _ANGLES for c in state["angle_frames"].get(key, [])]
 
     def _update_pills(self, state: dict) -> None:
         for key, pill in state["pills"].items():
             n = len(state["angle_frames"].get(key, []))
-            color = COLOR_SAFE if n >= 2 else COLOR_WARNING if n == 1 else COLOR_TEXT_MUTED
-            pill.configure(text=f"{key.title()}: {n}", text_color=color)
+            pill.configure(text=f"{key.title()}: {'✓' if n else '0'}",
+                           text_color=COLOR_SAFE if n else COLOR_TEXT_MUTED)
 
     def _wizard_refresh(self, state: dict, finish_text: str) -> None:
+        state["preview_feedback"] = None
         step = state["step"]
-        for i, c in enumerate(state["circles"]):
-            if i < step:
-                c.configure(text="✓", fg_color=COLOR_SAFE, text_color=COLOR_TEXT)
-            elif i == step:
-                c.configure(text=str(i + 1), fg_color=COLOR_ACCENT, text_color=COLOR_TEXT)
-            else:
-                c.configure(text=str(i + 1), fg_color=COLOR_BORDER, text_color=COLOR_TEXT_MUTED)
-        instr = _ANGLES[step][1] if step < len(_ANGLES) else ""
-        state["step_caption"].configure(text=f"Step {min(step + 1, 3)} of 3 — {instr}")
-        is_last = step >= len(_ANGLES) - 1
-        state["cap_btn"].configure(text=finish_text if is_last else "Capture This Angle",
-                                   state="normal")
-        state["skip_btn"].configure(state="normal")
+        for i, circle in enumerate(state["circles"]):
+            circle.configure(text="✓" if i < step else str(i+1),
+                             fg_color=COLOR_SAFE if i < step else COLOR_ACCENT if i == step else COLOR_BORDER)
+        state["step_caption"].configure(text=f"Step {step+1} of 3 — {_ANGLES[step][1]}")
+        state["cap_btn"].configure(text="Capture This Angle", state="disabled")
+        state["skip_btn"].configure(text="Skip this angle →", state="normal")
         self._update_pills(state)
 
     def _wizard_capture(self, state: dict, on_finish, finish_text: str) -> None:
-        if state.get("capturing") or state["step"] >= len(_ANGLES):
+        if not self._capture_current(state) or state.get("capturing"):
             return
-        angle_key = _ANGLES[state["step"]][0]
-        state["capturing"] = True
-        state["cap_btn"].configure(state="disabled")
-        state["skip_btn"].configure(state="disabled")
-        state["dot"].configure(text_color=COLOR_TEXT_MUTED)
-        state["det_status"].configure(text="Capturing… hold still", text_color=COLOR_TEXT_MUTED)
+        if state["reviewing"]:
+            on_finish(state["modal"], state)
+            return
+        session = state["session"]
+        if session.frozen is not None:
+            state["angle_frames"][_ANGLES[state["step"]][0]] = [session.frozen]
+            self._wizard_next(state, on_finish, finish_text)
+        elif session.request(time.monotonic()):
+            state["requested_at"] = time.monotonic()
+            state["next_validation"] = 0.0
+            state["preview_feedback"] = None
+            state["cap_btn"].configure(state="disabled")
+            state["skip_btn"].configure(state="disabled")
 
-        def _done(frames) -> None:
-            if not state["modal"].winfo_exists():
-                return
-            good = [f for f in frames if f is not None]
-            state["angle_frames"].setdefault(angle_key, []).extend(good)
-            state["det_status"].configure(text=f"✓ {len(good)} frames captured", text_color=COLOR_SAFE)
-            self._update_pills(state)
-            state["modal"].after(800, lambda: self._wizard_next(state, on_finish, finish_text))
-
-        self._collect_frames(_done, count=8, interval_ms=120)
+    def _wizard_retake(self, state):
+        if state.get("capturing") or not self._capture_current(state):
+            return
+        if state["reviewing"]:
+            state["angle_frames"] = {}
+            state["step"] = 0
+        state["reviewing"] = False
+        state["session"] = CaptureSession(state["student_key"])
+        state["canvas"].delete("all")
+        state["canvas_item"] = None
+        state["img"] = None
+        self._wizard_refresh(state, state["finish_text"])
 
     def _wizard_skip(self, state: dict, on_finish, finish_text: str) -> None:
-        if state.get("capturing"):
+        if not self._capture_current(state) or state.get("capturing") or state["session"].pending:
             return
-        is_last = state["step"] >= len(_ANGLES) - 1
-        total = sum(len(v) for v in state["angle_frames"].values())
-        if is_last and total == 0:
-            state["dot"].configure(text_color=COLOR_DANGER)
-            state["det_status"].configure(
-                text="Capture at least one angle before finishing.", text_color=COLOR_DANGER)
+        if state["reviewing"] or state["session"].frozen is not None:
+            self._wizard_retake(state)
+            return
+        if state["step"] == 2 and not self._ordered_captures(state):
+            state["det_status"].configure(text="Capture at least one angle before finishing.", text_color=COLOR_DANGER)
             return
         self._wizard_next(state, on_finish, finish_text)
 
     def _wizard_next(self, state: dict, on_finish, finish_text: str) -> None:
-        state["capturing"] = False
         state["step"] += 1
+        state["session"] = CaptureSession(state["student_key"])
         if state["step"] >= len(_ANGLES):
-            on_finish(state["modal"], state)
+            state["reviewing"] = True
+            self._show_frozen(state, self._ordered_captures(state)[0])
+            state["step_caption"].configure(text=f"Review — {state['identity']}")
+            state["det_status"].configure(text="This photo and the confirmed angle embeddings will be saved.", text_color=COLOR_SAFE)
+            state["cap_btn"].configure(text="Save", state="normal")
+            state["skip_btn"].configure(text="Retake", state="normal")
+            self._update_pills(state)
             return
         self._wizard_refresh(state, finish_text)
 
-    @staticmethod
-    def _first_frame(angle_frames: dict):
-        for key, _instr in _ANGLES:
-            for f in reversed(angle_frames.get(key, [])):
-                if f is not None:
-                    return f
-        for frames in angle_frames.values():
-            for f in reversed(frames):
-                if f is not None:
-                    return f
-        return None
-
-    @staticmethod
-    def _crop_photo(frame, box) -> bytes:
-        if frame is None:
-            return b""
-        crop = frame
-        if box is not None:
-            h, w = frame.shape[:2]
-            x1, y1, x2, y2 = [max(0, int(v)) for v in box]
-            x2, y2 = min(w, x2), min(h, y2)
-            sub = frame[y1:y2, x1:x2]
-            if sub.size > 0:
-                crop = sub
-        ok, buf = cv2.imencode(".jpg", crop, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
-        return buf.tobytes() if ok else b""
-
-    def _wizard_embed(self, angle_frames: dict):
-        """Encode captured angles → (encoding_blob, best_box) or (None, None)."""
-        non_empty = {k: v for k, v in angle_frames.items() if v}
-        if len(non_empty) >= 2:
-            embeddings, box = self.recognizer.encode_face_multi_angle(
-                non_empty, min_valid_per_angle=2)
-            if embeddings is None:
-                return None, None
-            return pickle.dumps(embeddings), box
-        frames = next(iter(non_empty.values()))
-        emb, box = self.recognizer.encode_face_multi(frames, min_valid=2)
-        if emb is None:
-            return None, None
-        return pickle.dumps(emb), box
+    def _capture_save_payload(self, state):
+        if not self._capture_current(state) or not state.get("reviewing") or state.get("capturing"):
+            raise ValueError("Capture changed. Review the selected student's face again.")
+        if "target_pk" in state:
+            row = self.database.get_student(state["target_pk"])
+            if row is None or row["student_id"] != state["target_student_id"]:
+                raise ValueError("Student record changed. Reopen capture for the correct student.")
+        return capture_payload(self._ordered_captures(state), state["student_key"])
 
     def _finish_enroll(self, modal, state: dict) -> None:
+        try:
+            blob, photo = self._capture_save_payload(state)
+        except ValueError as exc:
+            state["det_status"].configure(text=str(exc), text_color=COLOR_DANGER)
+            return
         angle_frames = {k: v for k, v in state["angle_frames"].items() if v}
         if not angle_frames:
             self._set_enroll_status("Please capture at least one angle.", error=True)
@@ -1116,8 +1304,7 @@ class EnrollmentPanel(ctk.CTkFrame):
             state["capturing"] = False
             self._set_enroll_status(msg, error=True)
             if modal.winfo_exists():
-                state["step"] = 0
-                self._wizard_refresh(state, _ENROLL_FINISH_TEXT)
+                state["cap_btn"].configure(text="Save", state="normal")
 
         if not all([name, student_id, course, year_and_section]):
             _rearm("Name, student ID, course, and year/section are required. Contacts are optional.")
@@ -1129,32 +1316,26 @@ class EnrollmentPanel(ctk.CTkFrame):
             _rearm("Face recognition not ready.")
             return
 
-        # Mark busy so the 200ms detect loop stops overwriting the status while encoding.
+        # Commit only the already reviewed payload; block repeated saves.
         state["capturing"] = True
         state["cap_btn"].configure(text="Enrolling…", state="disabled")
         state["skip_btn"].configure(state="disabled")
-        self._set_enroll_status("Encoding faces and enrolling…")
+        self._set_enroll_status("Saving confirmed captures…")
+
+        try:
+            self.database.insert_student(
+                student_id=student_id, name=name, course=course,
+                year_and_section=year_and_section, gender=gender,
+                encoding=blob, photo=photo, email=email, contacts=contacts,
+            )
+        except Exception as exc:
+            _rearm(f"Enrollment failed: {exc}")
+            return
 
         def _do_enroll() -> None:
             import random
             import string
             from core.email_sender import send_credentials
-
-            blob, box = self._wizard_embed(angle_frames)
-            if blob is None:
-                modal.after(0, lambda: _rearm(
-                    "Could not get enough face detections. Try again in better lighting."))
-                return
-            photo = self._crop_photo(self._first_frame(angle_frames), box)
-            try:
-                self.database.insert_student(
-                    student_id=student_id, name=name, course=course,
-                    year_and_section=year_and_section, gender=gender,
-                    encoding=blob, photo=photo, email=email, contacts=contacts,
-                )
-            except Exception as exc:
-                modal.after(0, lambda e=exc: _rearm(f"Enrollment failed: {e}"))
-                return
 
             # Auto-generate a new password and upsert the student account.
             # upsert preserves an existing username (e.g. from self-registration)
@@ -1181,6 +1362,7 @@ class EnrollmentPanel(ctk.CTkFrame):
             modal.after(0, lambda: _on_success(email_note, actual_username, password))
 
         def _on_success(email_note: str, username: str, password: str) -> None:
+            state["capturing"] = False
             self._clear_form()
             self._reload_students()
             self.recognizer.load_known_faces()
@@ -1193,6 +1375,11 @@ class EnrollmentPanel(ctk.CTkFrame):
         threading.Thread(target=_do_enroll, daemon=True).start()
 
     def _finish_update(self, modal, state: dict) -> None:
+        try:
+            blob, photo = self._capture_save_payload(state)
+        except ValueError as exc:
+            state["det_status"].configure(text=str(exc), text_color=COLOR_DANGER)
+            return
         angle_frames = {k: v for k, v in state["angle_frames"].items() if v}
         if not angle_frames:
             state["dot"].configure(text_color=COLOR_DANGER)
@@ -1208,24 +1395,13 @@ class EnrollmentPanel(ctk.CTkFrame):
                 return
             state["dot"].configure(text_color=COLOR_DANGER)
             state["det_status"].configure(text=msg, text_color=COLOR_DANGER)
-            state["step"] = 0
-            self._wizard_refresh(state, _UPDATE_FINISH_TEXT)
+            state["cap_btn"].configure(text="Save", state="normal")
 
-        # Mark busy so the 200ms detect loop stops overwriting the status while encoding.
+        # Commit only the already reviewed payload; block repeated saves.
         state["capturing"] = True
         state["cap_btn"].configure(text="Updating…", state="disabled")
         state["skip_btn"].configure(state="disabled")
-        state["det_status"].configure(text="Encoding faces…", text_color=COLOR_TEXT_MUTED)
-
-        def _do_update() -> None:
-            blob, box = self._wizard_embed(angle_frames)
-            if blob is None:
-                modal.after(0, lambda: _rearm(
-                    "Could not get enough face detections. Better lighting helps."))
-                return
-            photo = self._crop_photo(self._first_frame(angle_frames), box)
-            ok = self.database.update_student_encoding(pk, blob, photo)
-            modal.after(0, lambda: _on_done(ok, photo))
+        state["det_status"].configure(text="Saving confirmed captures…", text_color=COLOR_TEXT_MUTED)
 
         def _on_done(ok: bool, photo: bytes) -> None:
             if not ok:
@@ -1233,16 +1409,18 @@ class EnrollmentPanel(ctk.CTkFrame):
                 return
             self.recognizer.load_known_faces()
             self._reload_students()
-            try:
-                self._show_photo_bytes(photo, self._selected_photo_label)
-            except Exception:
-                pass
+            state["capturing"] = False
             self._set_status("Photo updated successfully.", success=True)
             close = state.get("close")
             if close is not None:
                 close()
 
-        threading.Thread(target=_do_update, daemon=True).start()
+        try:
+            ok = self.database.update_student_encoding(pk, blob, photo)
+        except Exception as exc:
+            _rearm(f"Update failed: {exc}")
+            return
+        _on_done(ok, photo)
 
     # ------------------------------------------------------------------
     # Delete
@@ -1263,10 +1441,6 @@ class EnrollmentPanel(ctk.CTkFrame):
             return
 
         if self.database.delete_student(self._selected_pk):
-            self._selected_pk = None
-            self._update_btn.configure(state="disabled")
-            self._clear_photo_label("Select a student to view photo")
-            self._preview_caption.configure(text="")
             self._set_status("Student deleted.", success=True)
             self._reload_students()
             if self.recognizer is not None:
@@ -1334,6 +1508,8 @@ class EnrollmentPanel(ctk.CTkFrame):
         self._open_update_modal(student)
 
     def _open_update_modal(self, student: dict) -> None:
+        if self._update_close is not None:
+            self._update_close()
         target_pk = int(student["id"])
 
         modal = ctk.CTkToplevel(self)
@@ -1357,11 +1533,14 @@ class EnrollmentPanel(ctk.CTkFrame):
 
         state: dict = {
             "modal": modal, "step": 0, "angle_frames": {}, "capturing": False,
-            "alive": True, "target_pk": target_pk,
+            "alive": True, "target_pk": target_pk, "target_student_id": student["student_id"],
         }
 
         def _close() -> None:
+            if state.get("capturing"):
+                return
             state["alive"] = False
+            self._update_close = None
             for job_key in ("job_tick", "job_detect"):
                 if state.get(job_key) is not None:
                     try:
@@ -1376,6 +1555,7 @@ class EnrollmentPanel(ctk.CTkFrame):
             modal.destroy()
 
         state["close"] = _close
+        self._update_close = _close
 
         self._build_capture_wizard(
             card, state, on_finish=self._finish_update, finish_text=_UPDATE_FINISH_TEXT,

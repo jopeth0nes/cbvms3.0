@@ -5,6 +5,8 @@ from __future__ import annotations
 import platform
 import threading
 import time
+import uuid
+from dataclasses import dataclass
 
 import cv2
 import numpy as np
@@ -12,6 +14,13 @@ import numpy as np
 # USB/AVFoundation and RTSP probes must not open a device while the live dashboard
 # owns it.  Long operations acquire this only on worker threads, never on Tk.
 CAMERA_DEVICE_LOCK = threading.Lock()
+
+
+@dataclass(frozen=True)
+class CameraSample:
+    frame: np.ndarray
+    frame_id: tuple
+    captured_at: float
 
 
 class CameraCapture:
@@ -41,6 +50,9 @@ class CameraCapture:
         self.last_error: str | None = None
         self._lock = threading.Lock()
         self._latest_frame: np.ndarray | None = None
+        self._frame_sequence = 0
+        self._frame_time = 0.0
+        self._source_token = uuid.uuid4().hex
 
     def _backend(self) -> int | None:
         if platform.system() == "Darwin" and hasattr(cv2, "CAP_AVFOUNDATION"):
@@ -146,7 +158,33 @@ class CameraCapture:
             return None
         with self._lock:
             self._latest_frame = frame
+            self._frame_sequence += 1
+            self._frame_time = time.monotonic()
         return frame
+
+    def get_latest_sample(self) -> CameraSample | None:
+        """Atomic pixels + freshness metadata for enrollment consumers."""
+        with self._lock:
+            if self._latest_frame is None:
+                return None
+            return CameraSample(self._latest_frame.copy(), (self._source_token, self._frame_sequence),
+                                self._frame_time)
+
+    def get_settings(self) -> dict:
+        """Backend-reported settings; call on the camera owner thread after open.
+
+        Some devices report zero for FPS. Consumers must measure frame delivery
+        rather than treat either the requested or reported rate as achieved FPS.
+        """
+        if self._cap is None:
+            return {}
+        return {
+            "backend": self._cap.getBackendName(),
+            "width": self._cap.get(cv2.CAP_PROP_FRAME_WIDTH),
+            "height": self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT),
+            "fps": self._cap.get(cv2.CAP_PROP_FPS),
+            "requested_fps": self._preferred_fps_cap,
+        }
 
     def get_latest_frame(self) -> np.ndarray | None:
         """Return the most recent frame without reading the device again."""
