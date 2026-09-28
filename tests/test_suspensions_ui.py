@@ -152,6 +152,7 @@ class SuspensionsUITests(unittest.TestCase):
         root = self.root
         root.username = "osa.tester"
         root._active_nav = "live"
+        root._invalidate_monitor = MagicMock()
         root._open_alerts_from_bell = lambda: None
         root._logout = lambda: None
         root._on_nav_select = lambda key: CBVMSDashboard._on_nav_select(root, key)
@@ -167,6 +168,7 @@ class SuspensionsUITests(unittest.TestCase):
         root._nav_buttons["suspensions"].invoke()
         self.wait_loaded()
         self.assertEqual(root._active_nav, "suspensions")
+        root._invalidate_monitor.assert_called_once()
         CBVMSDashboard._open_student_suspensions(root, self.SID)
         self.wait_loaded()
         self.assertEqual(self.panel.student_id, self.SID)

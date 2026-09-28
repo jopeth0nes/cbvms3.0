@@ -1,17 +1,15 @@
 """Student standing, entry-only monitoring, and suspension regression coverage."""
 import sqlite3
 import tempfile
-import types
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
-import numpy as np
 from database.db_manager import CBVMSDatabase
 from core.student_status import validate_contacts
-from ui.dashboard import CBVMSDashboard
 from core.tracker import FaceTracker
+from tests.test_live_pipeline import PipelineFixture, detection
 
 
 class StudentManagementTests(unittest.TestCase):
@@ -137,29 +135,35 @@ class StudentManagementTests(unittest.TestCase):
         self.assertEqual(len(self.db.get_premises_entries()), 2)
 
     def test_camera_reads_status_changes_and_suspension_without_restart(self):
-        harness = types.SimpleNamespace(_database=self.db)
-        det = {"matched": True, "student_id": "S1", "name": "Student One"}
-        CBVMSDashboard._refresh_student_standing(harness, [det])
-        self.assertTrue(det["discipline_eligible"])
+        fixture = PipelineFixture()
+        fixture.processor.database = self.db
+        fixture.recognizer.recognize_faces.return_value = [detection("S1", name="Student One")]
+        result = fixture.confirmed()
+        self.assertTrue(result.assessments[0].discipline_eligible)
         self.change_status("Graduate")
+        self.now = datetime.fromtimestamp(1_800_000_000, timezone.utc)
         self.suspend()
-        with patch("database.student_management.utc_now", return_value=self.now):
-            CBVMSDashboard._refresh_student_standing(harness, [det])
-            CBVMSDashboard._record_attendance(harness, [det])
-        self.assertFalse(det["discipline_eligible"])
-        self.assertIn("Suspended", det["suspension_tag"])
+        with patch("database.student_management.utc_now", return_value=self.now + timedelta(seconds=5)):
+            result = fixture.analyze(5)
+            fixture.persist(result)
+        self.assertFalse(result.assessments[0].discipline_eligible)
+        self.assertIn("Suspended", result.assessments[0].suspension_tag)
         self.assertIsNotNone(self.db.get_premises_entries()[0]["suspension_id"])
         self.assertEqual(self.db.get_attendance_report(), [])
 
     def test_non_enrolled_camera_detection_skips_classifiers(self):
-        trainer = MagicMock()
-        harness = types.SimpleNamespace(_trainer=trainer, _person_detector=None,
-            _checker=types.SimpleNamespace(check_uniform=False, check_earring=True),
-            _uniform_ema={}, _log_db=MagicMock())
-        det = {"matched": True, "student_id": "S1", "discipline_eligible": False}
-        CBVMSDashboard._check_violations(harness, [det], np.zeros((40, 40, 3), dtype=np.uint8))
-        trainer.predict.assert_not_called()
-        harness._log_db.assert_not_called()
+        self.change_status("Graduate")
+        fixture = PipelineFixture()
+        fixture.processor.database = self.db
+        fixture.recognizer.recognize_faces.return_value = [detection("S1", name="Student One")]
+        fixture.trainer.is_trained.side_effect = lambda module: True
+        result = fixture.confirmed()
+        fixture.persist(result)
+        fixture.trainer.predict.assert_not_called()
+        fixture.trainer.predict_proba.assert_not_called()
+        fixture.detector.detect_persons.assert_not_called()
+        self.assertFalse(result.assessments[0].accepted_categories)
+        self.assertEqual(self.db.get_violations_for_student("S1"), [])
 
     def test_tracker_clears_old_violation_overlay_when_student_graduates(self):
         tracker = FaceTracker(min_hits=1)

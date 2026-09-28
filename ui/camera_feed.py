@@ -1,4 +1,4 @@
-"""Camera feed canvas widget for CBVMS Live Monitor."""
+"""Aspect-preserving camera canvas. All widget operations run on Tk's thread."""
 
 from __future__ import annotations
 
@@ -9,73 +9,85 @@ import numpy as np
 from PIL import Image, ImageTk
 
 
-class CameraFeed(tk.Canvas):
-    """Canvas that displays camera frames using the itemconfig pattern.
+def fitted_frame_rect(frame_width: int, frame_height: int,
+                      canvas_width: int, canvas_height: int) -> tuple[int, int, int, int]:
+    """Return centered (x, y, width, height), without stretching or cropping."""
+    if min(frame_width, frame_height, canvas_width, canvas_height) < 1:
+        return (0, 0, 0, 0)
+    scale = min(canvas_width / frame_width, canvas_height / frame_height)
+    width = min(canvas_width, max(1, round(frame_width * scale)))
+    height = min(canvas_height, max(1, round(frame_height * scale)))
+    return ((canvas_width - width) // 2, (canvas_height - height) // 2, width, height)
 
-    Sizing is dynamic — do NOT pass width/height in the constructor.
-    Let the geometry manager (grid sticky="nsew") control the size.
-    Call render(frame) directly from the UI thread each time a new frame
-    arrives; call show_placeholder() when the camera is not open.
-    """
+
+class CameraFeed(tk.Canvas):
+    """A persistent image item with letterboxing and a cached text placeholder."""
 
     def __init__(self, master, bg_color: str = "#0F1117", **kwargs) -> None:
         super().__init__(master, bg=bg_color, highlightthickness=0, **kwargs)
         self._photo: ImageTk.PhotoImage | None = None
-        self._item: int | None = None           # canvas image item id
+        self._item: int | None = None
+        self._placeholder_item: int | None = None
+        self._placeholder_key: tuple | None = None
+        self._geometry_key: tuple | None = None
+        self._frame_rect = (0, 0, 0, 0)
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
+    def render(self, frame: np.ndarray) -> bool:
+        """Display BGR pixels, returning whether a frame was actually rendered.
 
-    def render(self, frame: np.ndarray) -> None:
-        """Display a BGR camera frame. Called from the UI thread."""
-        w = self.winfo_width()
-        h = self.winfo_height()
-        if w < 2 or h < 2:
-            return
+        Overlay coordinates stay in source-frame space; the complete annotated image
+        is fitted once, so mirrored boxes and pixels undergo exactly the same scaling.
+        """
+        width, height = self.winfo_width(), self.winfo_height()
+        if width < 2 or height < 2 or frame is None or frame.size == 0:
+            return False
         try:
-            if frame.shape[1] != w or frame.shape[0] != h:
-                frame = cv2.resize(frame, (w, h), interpolation=cv2.INTER_LINEAR)
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            pil = Image.fromarray(rgb)
-            photo = ImageTk.PhotoImage(image=pil, master=self)
-            self._photo = photo          # keep strong reference — prevents GC
+            key = (frame.shape[1], frame.shape[0], width, height)
+            if key != self._geometry_key:
+                self._frame_rect = fitted_frame_rect(*key)
+                self._geometry_key = key
+            x, y, fitted_width, fitted_height = self._frame_rect
+            if frame.shape[1] != fitted_width or frame.shape[0] != fitted_height:
+                frame = cv2.resize(frame, (fitted_width, fitted_height), interpolation=cv2.INTER_LINEAR)
+            photo = ImageTk.PhotoImage(Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)), master=self)
+            self._photo = photo  # Tk does not keep a Python reference.
             if self._item is None:
-                self._item = self.create_image(0, 0, anchor="nw", image=photo)
+                self._item = self.create_image(x, y, anchor="nw", image=photo)
             else:
-                self.itemconfig(self._item, image=photo)
-        except Exception as exc:
+                self.coords(self._item, x, y)
+                self.itemconfig(self._item, image=photo, state="normal")
+            if self._placeholder_key is not None:
+                self.itemconfig(self._placeholder_item, state="hidden")
+                self._placeholder_key = None
+            return True
+        except (tk.TclError, cv2.error, ValueError) as exc:
             print(f"[CameraFeed] render error: {exc}")
+            return False
 
-    def show_placeholder(self) -> None:
-        """Display a 'No Camera' placeholder. Called when camera is not open."""
-        w = self.winfo_width()
-        h = self.winfo_height()
-        if w < 2 or h < 2:
-            return
-        try:
-            img = np.full((h, w, 3), (15, 17, 23), dtype=np.uint8)
-            text = "No Camera"
-            font, scale, thick = cv2.FONT_HERSHEY_SIMPLEX, 1.2, 2
-            (tw, th), _ = cv2.getTextSize(text, font, scale, thick)
-            cv2.putText(
-                img, text,
-                ((w - tw) // 2, (h + th) // 2),
-                font, scale, (80, 80, 90), thick, cv2.LINE_AA,
-            )
-            rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-            pil = Image.fromarray(rgb)
-            photo = ImageTk.PhotoImage(image=pil, master=self)
-            self._photo = photo
-            if self._item is None:
-                self._item = self.create_image(0, 0, anchor="nw", image=photo)
-            else:
-                self.itemconfig(self._item, image=photo)
-        except Exception as exc:
-            print(f"[CameraFeed] placeholder error: {exc}")
+    def show_placeholder(self, text: str = "No camera connected") -> bool:
+        """Show loading/reconnection/availability status without creating pixel buffers."""
+        width, height = self.winfo_width(), self.winfo_height()
+        if width < 2 or height < 2:
+            return False
+        key = (text, width, height)
+        if key == self._placeholder_key:
+            return False
+        if self._item is not None:
+            self.itemconfig(self._item, state="hidden")
+        options = dict(text=text, fill="#9CA3AF", font=("Helvetica", 15),
+                       width=max(1, width - 40), justify="center", state="normal")
+        if self._placeholder_item is None:
+            self._placeholder_item = self.create_text(width // 2, height // 2, **options)
+        else:
+            self.coords(self._placeholder_item, width // 2, height // 2)
+            self.itemconfig(self._placeholder_item, **options)
+        self._placeholder_key = key
+        return True
 
     def cleanup(self) -> None:
-        """Release resources on window close."""
         self.delete("all")
         self._photo = None
         self._item = None
+        self._placeholder_item = None
+        self._placeholder_key = None
+        self._geometry_key = None

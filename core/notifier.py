@@ -16,6 +16,7 @@ class Notification:
     violation: str
     timestamp: float = field(default_factory=time.time)
     acknowledged: bool = False
+    valid_if: Callable[[], bool] | None = field(default=None, repr=False, compare=False)
 
 
 def play_alert() -> None:
@@ -54,10 +55,16 @@ class Notifier:
     def subscribe(self, fn: Callable[[Notification], None]) -> None:
         self._listeners.append(fn)
 
-    def notify(self, student_name: str, violation: str) -> Notification:
+    def notify(self, student_name: str, violation: str, *, valid_if=None, observed_at=None) -> Notification | None:
+        if valid_if is not None and not valid_if():
+            return None
         with self._lock:
+            if valid_if is not None and not valid_if():
+                return None
             self._counter += 1
-            notif = Notification(id=self._counter, student_name=student_name, violation=violation)
+            notif = Notification(id=self._counter, student_name=student_name, violation=violation,
+                                 timestamp=time.time() if observed_at is None else observed_at,
+                                 valid_if=valid_if)
             self._log.append(notif)
         for fn in self._listeners:
             try:
@@ -65,7 +72,10 @@ class Notifier:
             except Exception:
                 pass
         if self.sound_enabled:
-            threading.Thread(target=play_alert, daemon=True).start()
+            def guarded_sound():
+                if valid_if is None or valid_if():
+                    play_alert()
+            threading.Thread(target=guarded_sound, daemon=True).start()
         return notif
 
     def acknowledge(self, notif_id: int) -> None:

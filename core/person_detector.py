@@ -7,8 +7,12 @@ model on first use. CPU only. No new dependencies (ultralytics already present).
 
 from __future__ import annotations
 
+from threading import RLock
+
 import cv2
 import numpy as np
+
+from core.model_safety import locked_model
 
 # Vertical slice of the person box used as the torso (fractions of body height).
 _TORSO_TOP_FRAC = 0.20   # skip head/neck
@@ -95,6 +99,7 @@ class PersonDetector:
     _IOU = 0.50
 
     def __init__(self) -> None:
+        self._model_lock = RLock()
         self._model = None
         self._load_failed = False
         self._pose_model = None
@@ -104,6 +109,7 @@ class PersonDetector:
     # Models (lazy)
     # ------------------------------------------------------------------
 
+    @locked_model
     def _ensure_model(self):
         if self._model is not None:
             return self._model
@@ -118,6 +124,7 @@ class PersonDetector:
             self._load_failed = True
             return None
 
+    @locked_model
     def _ensure_pose_model(self):
         if self._pose_model is not None:
             return self._pose_model
@@ -136,6 +143,7 @@ class PersonDetector:
     # Detection
     # ------------------------------------------------------------------
 
+    @locked_model
     def detect_persons(self, frame_bgr: np.ndarray) -> list[list[int]]:
         """Return person bounding boxes [x1,y1,x2,y2], largest area first."""
         model = self._ensure_model()
@@ -198,6 +206,7 @@ class PersonDetector:
     # Pose-anchored torso (YOLOv8-pose shoulders + hips) — stable across pose
     # ------------------------------------------------------------------
 
+    @locked_model
     def pose_torso_box(self, frame_bgr: np.ndarray, region: list[int] | None = None) -> list[int] | None:
         """Tight torso/shirt box [x1,y1,x2,y2] in FRAME coords from shoulder+hip keypoints.
 

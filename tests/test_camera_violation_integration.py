@@ -1,254 +1,134 @@
-"""Focused tests for the live-camera violation persistence boundary."""
+"""Camera assessments through the real administrative-review persistence boundary.
 
-from __future__ import annotations
+The dashboard's former independent logging/checking helpers no longer own this
+workflow. Exercise LiveProcessor and an isolated SQLite database instead.
+"""
 
-import contextlib
-import io
 import tempfile
-import types
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock, patch
-
-import numpy as np
+from unittest.mock import patch
 
 from database.db_manager import CBVMSDatabase
-from ui.dashboard import CBVMSDashboard
-
-
-class _ViolationTrainer:
-    def is_trained(self, _module: str) -> bool:
-        return True
-
-    def predict_proba(self, module: str, _crop: np.ndarray) -> dict[str, float] | None:
-        if module == "uniform":
-            return {"correct_uniform": 0.2, "wrong_uniform": 0.8}
-        return None
-
-    def predict(self, module: str, _crop: np.ndarray) -> tuple[str | None, float]:
-        if module == "earring":
-            return "with_earring", 0.9
-        return None, 0.0
+from tests.test_live_pipeline import PipelineFixture, detection
 
 
 class CameraViolationIntegrationTests(unittest.TestCase):
-    def test_attendance_records_recognized_presence_without_a_violation_and_throttles(self) -> None:
-        database = MagicMock()
-        database.record_attendance.return_value = True
-        harness = types.SimpleNamespace(_database=database)
-        detections = [{"student_id": "S-001", "violation": None},
-                      {"student_id": "unknown"}, {"student_id": None}]
-        with patch("ui.dashboard.time.monotonic", return_value=100.0):
-            CBVMSDashboard._record_attendance(harness, detections)
-            CBVMSDashboard._record_attendance(harness, detections)
-        database.record_attendance.assert_called_once_with("S-001")
-        with patch("ui.dashboard.time.monotonic", return_value=131.0):
-            CBVMSDashboard._record_attendance(harness, detections)
-        self.assertEqual(database.record_attendance.call_count, 2)
+    def database(self):
+        directory = tempfile.TemporaryDirectory(prefix="cbvms_camera_integration_")
+        self.addCleanup(directory.cleanup)
+        database = CBVMSDatabase(Path(directory.name) / "cbvms.db")
+        database.initialize()
+        database.insert_student(student_id="S-1", name="Student S-1", course="BSIT",
+                                year_and_section="3A", encoding=b"", photo=b"", gender="Male")
+        return database
 
-    def test_log_db_persists_real_pending_workflow_record_for_recognized_student(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="cbvms_camera_integration_") as tmp_dir:
-            database = CBVMSDatabase(Path(tmp_dir) / "cbvms.db")
-            database.initialize()
-            database.insert_student(
-                student_id="S-001",
-                name="Student One",
-                course="BSIT",
-                year_and_section="3A",
-                encoding=b"",
-                photo=b"",
-                gender="Male",
-            )
-            notifier = MagicMock()
-            harness = types.SimpleNamespace(
-                _database=database,
-                _notifier=notifier,
-                _db_log_cooldowns={},
-                _violation_dirty=False,
-            )
+    def fixture(self):
+        fixture = PipelineFixture()
+        fixture.database = self.database()
+        fixture.processor.database = fixture.database
+        return fixture
 
-            with patch("ui.dashboard.time.monotonic", return_value=100.0):
-                CBVMSDashboard._log_db(
-                    harness,
-                    {"student_id": "S-001", "name": "Student One"},
-                    np.full((40, 40, 3), 127, dtype=np.uint8),
-                    [0, 0, 30, 30],
-                    "Wrong uniform (80%)",
-                    violation_code="wrong_uniform",
-                )
+    def test_attendance_records_recognized_presence_without_violation_and_throttles(self):
+        fixture = self.fixture()
+        fixture.trainer.predict_proba.return_value = {"correct_uniform": .9}
+        fixture.recognizer.recognize_faces.return_value = [detection(), detection("", 350, embedding=1)]
+        with patch.object(fixture.database, "record_attendance", wraps=fixture.database.record_attendance) as record:
+            fixture.persist(fixture.analyze(1))
+            record.assert_not_called()  # one frame cannot establish identity
+            fixture.persist(fixture.analyze(2))
+            fixture.persist(fixture.analyze(3))
+            self.assertEqual(record.call_count, 1)
+            self.assertEqual(record.call_args.args, ("S-1",))
+            # Cooldown expires independently from temporary tracking identity.
+            fixture.processor.attendance_cooldowns = {key: fixture.now-31 for key in fixture.processor.attendance_cooldowns}
+            fixture.persist(fixture.analyze(4))
+            self.assertEqual(record.call_count, 2)
+        report = fixture.database.get_attendance_report()
+        self.assertEqual(len(report), 1)
+        self.assertEqual(report[0]["student_id"], "S-1")
+        self.assertEqual(fixture.database.get_violations_for_student("S-1"), [])
 
-            rows = database.get_violations_for_student("S-001")
-            self.assertEqual(len(rows), 1)
-            self.assertEqual(rows[0]["student_id"], "S-001")
-            self.assertEqual(rows[0]["status"], "pending_review")
-            self.assertEqual(rows[0]["violation_code"], "wrong_uniform")
-            self.assertTrue(rows[0]["review_deadline"])
-            self.assertIsInstance(rows[0]["snapshot"], bytes)
-            self.assertTrue(rows[0]["snapshot"])
-            self.assertEqual(database.get_strike_count("S-001", "wrong_uniform"), 0)
-            self.assertEqual(database.get_notifications_for_student("S-001"), [])
-            with database.connect() as conn:
-                self.assertEqual(
-                    conn.execute("SELECT COUNT(*) FROM student_notifications").fetchone()[0],
-                    0,
-                )
-            notifier.notify.assert_called_once_with("Student One", "Wrong uniform (80%)")
-            self.assertTrue(harness._violation_dirty)
+    def test_accepted_assessment_persists_pending_review_without_strike_or_student_notice(self):
+        fixture = self.fixture()
+        result = fixture.confirmed()
+        fixture.persist(result)
+        rows = fixture.database.get_violations_for_student("S-1")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["student_id"], "S-1")
+        self.assertEqual(rows[0]["status"], "pending_review")
+        self.assertEqual(rows[0]["violation_code"], "wrong_uniform")
+        self.assertTrue(rows[0]["review_deadline"])
+        self.assertIsInstance(rows[0]["snapshot"], bytes)
+        self.assertTrue(rows[0]["snapshot"])
+        self.assertEqual(fixture.database.get_strike_count("S-1", "wrong_uniform"), 0)
+        self.assertEqual(fixture.database.get_notifications_for_student("S-1"), [])
+        with fixture.database.connect() as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM student_notifications").fetchone()[0], 0)
+        fixture.notifier.notify.assert_called_once()
+        self.assertEqual(fixture.notifier.notify.call_args.args, ("Student S-1", "Suspected uniform violation"))
+        self.assertEqual(fixture.processor.write_count, 1)
 
-    def test_joined_overlay_persists_each_category_with_a_stable_code(self) -> None:
-        logged: list[tuple[str, str]] = []
-        harness = types.SimpleNamespace(
-            _person_detector=types.SimpleNamespace(
-                detect_persons=lambda _frame: [],
-                chest_region=lambda _frame, _face_box, _person_box: (
-                    [5, 35, 55, 90],
-                    "test",
-                ),
-            ),
-            _checker=types.SimpleNamespace(check_uniform=True, check_earring=True),
-            _trainer=_ViolationTrainer(),
-            _uniform_matcher=types.SimpleNamespace(
-                is_loaded=lambda: True,
-                is_uniform=lambda _crop: (False, 0.2),
-            ),
-            _uniform_ema={},
-            _log_db=lambda _det, _frame, _box, display, violation_code=None: logged.append(
-                (violation_code, display)
-            ),
-        )
-        detection = {
-            "box": [10, 10, 30, 30],
-            "name": "Student One",
-            "student_id": "S-001",
-            "gender": "Male",
-            "matched": True,
-        }
+    def test_one_assessment_persists_each_category_with_independent_cooldown(self):
+        fixture = self.fixture()
+        fixture.trainer.is_trained.side_effect = lambda module: True
+        fixture.trainer.predict.return_value = ("with_earring", .9)
+        result = fixture.confirmed()
+        self.assertEqual(result.assessments[0].accepted_categories, ("wrong_uniform", "earring"))
+        fixture.persist(result)
+        fixture.persist(fixture.analyze(5))
+        rows = fixture.database.get_violations_for_student("S-1")
+        self.assertEqual(len(rows), 2)
+        self.assertEqual({row["violation_code"] for row in rows}, {"wrong_uniform", "earring"})
+        self.assertTrue(all(row["status"] == "pending_review" for row in rows))
+        self.assertEqual(set(fixture.processor.cooldowns), {("S-1", "wrong_uniform"), ("S-1", "earring")})
+        self.assertEqual(fixture.notifier.notify.call_count, 2)
 
-        with patch("ui.dashboard.skin_fraction", return_value=0.0):
-            CBVMSDashboard._check_violations(
-                harness, [detection], np.zeros((100, 100, 3), dtype=np.uint8)
-            )
+    def test_unknown_people_are_security_events_separate_from_disciplinary_records(self):
+        fixture = self.fixture()
+        fixture.recognizer.recognize_faces.return_value = [detection("", 80), detection("", 350, embedding=1)]
+        result = fixture.analyze(1)
+        fixture.persist(result)
+        fixture.persist(fixture.analyze(2))
+        with fixture.database.connect() as connection:
+            events = connection.execute("SELECT * FROM security_events ORDER BY id").fetchall()
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM violations").fetchone()[0], 0)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM attendance").fetchone()[0], 0)
+        self.assertEqual(len(events), 2)
+        self.assertNotEqual(events[0]["presence_id"], events[1]["presence_id"])
+        self.assertTrue(all(event["snapshot"] for event in events))
 
-        self.assertEqual(
-            detection["violation"],
-            "Wrong uniform (80%), Earring detected (90%)",
-        )
-        self.assertEqual(
-            logged,
-            [
-                ("wrong_uniform", "Wrong uniform (80%)"),
-                ("earring", "Earring detected (90%)"),
-            ],
-        )
+    def test_failed_insert_remains_retryable_and_success_is_not_duplicated(self):
+        fixture = self.fixture()
+        result = fixture.confirmed()
+        original = fixture.database.log_violation
+        failures = [True]
+        def write(**kwargs):
+            if failures:
+                failures.pop()
+                raise RuntimeError("database busy")
+            return original(**kwargs)
+        with patch.object(fixture.database, "log_violation", side_effect=write) as record:
+            fixture.persist(result)
+            self.assertNotIn(("S-1", "wrong_uniform"), fixture.processor.cooldowns)
+            fixture.notifier.notify.assert_not_called()
+            fixture.persist(fixture.analyze(5))
+            fixture.persist(fixture.analyze(6))
+            self.assertEqual(record.call_count, 2)
+        self.assertEqual(len(fixture.database.get_violations_for_student("S-1")), 1)
+        fixture.notifier.notify.assert_called_once()
 
-    def test_unknown_person_is_persisted_with_non_strike_code(self) -> None:
-        logged: list[tuple[str, str]] = []
-        harness = types.SimpleNamespace(
-            _person_detector=None,
-            _checker=types.SimpleNamespace(check_uniform=False, check_earring=False),
-            _trainer=types.SimpleNamespace(is_trained=lambda _module: False),
-            _uniform_matcher=types.SimpleNamespace(is_loaded=lambda: False),
-            _uniform_ema={},
-            _log_db=lambda _det, _frame, _box, display, violation_code=None: logged.append(
-                (violation_code, display)
-            ),
-        )
-        detection = {
-            "box": [10, 10, 30, 30],
-            "name": "Unknown",
-            "student_id": "",
-            "gender": "Unknown",
-            "matched": False,
-        }
-
-        CBVMSDashboard._check_violations(
-            harness, [detection], np.zeros((50, 50, 3), dtype=np.uint8)
-        )
-
-        self.assertEqual(logged, [("unknown_person", "unknown_person")])
-
-    def test_log_db_uses_pending_review_and_category_specific_cooldowns(self) -> None:
-        database = MagicMock()
-        database.log_violation.side_effect = [101, 102]
-        notifier = MagicMock()
-        harness = types.SimpleNamespace(
-            _database=database,
-            _notifier=notifier,
-            _db_log_cooldowns={},
-            _violation_dirty=False,
-        )
-        detection = {"student_id": "S-001", "name": "Student One"}
-        frame = np.zeros((40, 40, 3), dtype=np.uint8)
-
-        with patch("ui.dashboard.time.monotonic", return_value=100.0):
-            CBVMSDashboard._log_db(
-                harness,
-                detection,
-                frame,
-                [0, 0, 30, 30],
-                "Wrong uniform (80%)",
-                violation_code="wrong_uniform",
-            )
-            # Same category remains cooldown-gated.
-            CBVMSDashboard._log_db(
-                harness,
-                detection,
-                frame,
-                [0, 0, 30, 30],
-                "Wrong uniform (85%)",
-                violation_code="wrong_uniform",
-            )
-            # A separate category for the same student must still be recorded.
-            CBVMSDashboard._log_db(
-                harness,
-                detection,
-                frame,
-                [0, 0, 30, 30],
-                "Earring detected (90%)",
-                violation_code="earring",
-            )
-
-        self.assertEqual(database.log_violation.call_count, 2)
-        first = database.log_violation.call_args_list[0].kwargs
-        second = database.log_violation.call_args_list[1].kwargs
-        self.assertEqual(first["violation_code"], "wrong_uniform")
-        self.assertEqual(second["violation_code"], "earring")
-        self.assertEqual(first["status"], "pending_review")
-        self.assertIsInstance(first["snapshot_jpeg"], bytes)
-        self.assertTrue(first["snapshot_jpeg"])
-        self.assertEqual(
-            set(harness._db_log_cooldowns),
-            {"S-001:wrong_uniform", "S-001:earring"},
-        )
-        self.assertEqual(notifier.notify.call_count, 2)
-        self.assertTrue(harness._violation_dirty)
-
-    def test_failed_insert_does_not_start_cooldown(self) -> None:
-        database = MagicMock()
-        database.log_violation.side_effect = [RuntimeError("database busy"), 201]
-        harness = types.SimpleNamespace(
-            _database=database,
-            _notifier=MagicMock(),
-            _db_log_cooldowns={},
-            _violation_dirty=False,
-        )
-        args = (
-            harness,
-            {"student_id": "S-001", "name": "Student One"},
-            np.zeros((20, 20, 3), dtype=np.uint8),
-            [0, 0, 20, 20],
-            "Wrong uniform (80%)",
-        )
-
-        with patch("ui.dashboard.time.monotonic", return_value=100.0):
-            with contextlib.redirect_stdout(io.StringIO()):
-                CBVMSDashboard._log_db(*args, violation_code="wrong_uniform")
-            self.assertNotIn("S-001:wrong_uniform", harness._db_log_cooldowns)
-            CBVMSDashboard._log_db(*args, violation_code="wrong_uniform")
-
-        self.assertEqual(database.log_violation.call_count, 2)
-        self.assertEqual(harness._db_log_cooldowns["S-001:wrong_uniform"], 100.0)
-        harness._notifier.notify.assert_called_once()
+    def test_database_rechecks_current_disciplinary_eligibility_after_analysis(self):
+        fixture = self.fixture()
+        result = fixture.confirmed()
+        # Standing changes after recognition, before the transaction commits.
+        with fixture.database.connect() as connection:
+            connection.execute("UPDATE students SET student_status='Graduate' WHERE student_id='S-1'")
+        fixture.persist(result)
+        self.assertEqual(fixture.database.get_violations_for_student("S-1"), [])
+        self.assertEqual(fixture.database.get_attendance_report(), [])
+        self.assertFalse(fixture.processor.cooldowns)
+        fixture.notifier.notify.assert_not_called()
 
 
 if __name__ == "__main__":

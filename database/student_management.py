@@ -116,19 +116,25 @@ class StudentManagement:
         with self.connect() as conn:
             return [dict(r) for r in conn.execute("SELECT * FROM student_suspensions WHERE student_id=? ORDER BY id DESC", (student_id,))]
 
-    def record_premises_entry(self, student_id, *, observed_at=None, cooldown_seconds=300):
+    def record_premises_entry(self, student_id, *, observed_at=None, cooldown_seconds=300,
+                              valid_if=None):
         observed = parse_db_datetime(observed_at) if observed_at is not None else utc_now()
         if observed is None:
             raise ValueError("Invalid entry time.")
         timestamp = format_db_datetime(observed)
         with self.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            if valid_if is not None and not valid_if():
+                conn.rollback()
+                return False
             student = conn.execute("SELECT * FROM students WHERE student_id=?", (student_id,)).fetchone()
             if not student or student["registration_pending"] or student["student_status"] not in ("Graduate", "Unenrolled"):
                 return False
             last = conn.execute("SELECT id, last_seen, student_status FROM premises_entries WHERE student_id=? ORDER BY entered_at DESC LIMIT 1", (student_id,)).fetchone()
             if last and last["student_status"] == student["student_status"] and (observed - parse_db_datetime(last["last_seen"])).total_seconds() < cooldown_seconds:
                 conn.execute("UPDATE premises_entries SET last_seen=MAX(last_seen, ?) WHERE id=?", (timestamp, last["id"]))
+                if valid_if is not None and not valid_if():
+                    conn.rollback()
                 return False
             suspension = conn.execute("""SELECT id FROM student_suspensions WHERE student_id=?
                 AND starts_at<=? AND (ends_at IS NULL OR ends_at>?) AND lifted_at IS NULL""",
@@ -136,6 +142,9 @@ class StudentManagement:
             conn.execute("""INSERT INTO premises_entries
                 (student_id, student_name, student_status, entered_at, last_seen, suspension_id) VALUES (?, ?, ?, ?, ?, ?)""",
                 (student_id, student["name"], student["student_status"], timestamp, timestamp, suspension[0] if suspension else None))
+            if valid_if is not None and not valid_if():
+                conn.rollback()
+                return False
         return True
 
     def get_premises_entries(self, search="", status="All"):

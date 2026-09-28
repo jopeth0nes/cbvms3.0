@@ -11,10 +11,13 @@ import json
 import shutil
 import uuid
 from pathlib import Path
+from threading import RLock
 from typing import Callable
 
 import cv2
 import numpy as np
+
+from core.model_safety import locked_model
 
 ROOT = Path(__file__).resolve().parents[1]
 TRAIN_DIR = ROOT / "data" / "training"
@@ -66,6 +69,7 @@ class ViolationTrainer:
     """Builds datasets and trains/predicts YOLOv8 classification models."""
 
     def __init__(self) -> None:
+        self._model_lock = RLock()
         self._models: dict[str, object] = {}  # module -> loaded YOLO model
 
     # ------------------------------------------------------------------
@@ -300,14 +304,11 @@ class ViolationTrainer:
         if not best.exists():
             return False, "Training finished but no model file was produced."
 
-        out_path = ROOT / MODULES[module]["model_out"]
-        out_path.parent.mkdir(parents=True, exist_ok=True)
         try:
-            shutil.copy(best, out_path)
+            self._publish_model(module, best)
         except Exception as exc:
             return False, f"Could not save model: {exc}"
 
-        self._models.pop(module, None)  # invalidate cache so predict reloads
         on_progress("Done.")
         total = sum(counts.values())
         return True, f"Model trained successfully. {total} total samples."
@@ -316,6 +317,20 @@ class ViolationTrainer:
     # Inference
     # ------------------------------------------------------------------
 
+    @locked_model
+    def _publish_model(self, module: str, source: Path) -> None:
+        """Publish complete weights before invalidating the shared model cache."""
+        out_path = ROOT / MODULES[module]["model_out"]
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        pending = out_path.with_name(f".{out_path.name}.{uuid.uuid4().hex}.tmp")
+        try:
+            shutil.copy(source, pending)
+            pending.replace(out_path)
+            self._models.pop(module, None)
+        finally:
+            pending.unlink(missing_ok=True)
+
+    @locked_model
     def _get_model(self, module: str):
         if module in self._models:
             return self._models[module]
@@ -330,6 +345,7 @@ class ViolationTrainer:
             print(f"[Trainer] could not load {module} model: {exc}")
             return None
 
+    @locked_model
     def predict(self, module: str, image_bgr: np.ndarray) -> tuple[str | None, float]:
         self._validate(module)
         model = self._get_model(module)
@@ -356,6 +372,7 @@ class ViolationTrainer:
             print(f"[Trainer] predict error ({module}): {exc}")
             return None, 0.0
 
+    @locked_model
     def predict_proba(self, module: str, image_bgr: np.ndarray) -> dict[str, float] | None:
         """Return the full {label: probability} distribution, or None if unavailable.
 

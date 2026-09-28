@@ -484,27 +484,31 @@ class DashboardSwitchRegressionTests(unittest.TestCase):
             def read(self):
                 raise AssertionError("Tk feed loop must not call read()")
 
-            def get_latest_frame(self):
+            def get_latest_sample(self):
                 return None
 
         placeholders = []
         harness = types.SimpleNamespace(
-            winfo_exists=lambda: True,
+            _closed=threading.Event(),
             _drain_camera_events=lambda: None,
             _notification_out=queue.Queue(),
             _on_notification=lambda _notification: None,
-            _violation_dirty=False,
+            _stats_out=queue.Queue(),
             _camera=Capture(),
             _camera_needed=lambda: True,
             _active_nav="live",
             camera_feed=types.SimpleNamespace(
-                show_placeholder=lambda: placeholders.append(True)
+                show_placeholder=lambda _text: placeholders.append(True)
             ),
+            _monitor_last_rendered=None,
+            _metrics_time=time.monotonic(),
             _feed_interval_ms=33,
             after=lambda _delay, _callback: "feed-job",
             _feed_job=None,
             _update_feed=lambda: None,
         )
+        harness._latest_monitor_sample = types.MethodType(
+            CBVMSDashboard._latest_monitor_sample, harness)
 
         CBVMSDashboard._update_feed(harness)
         self.assertEqual(placeholders, [True])

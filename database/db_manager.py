@@ -6,6 +6,7 @@ import hashlib
 import sqlite3
 from datetime import datetime
 from pathlib import Path
+from typing import Callable
 
 from core.discipline import (
     ADMIN_REVIEW_DAYS,
@@ -32,6 +33,16 @@ from core.student_status import validate_contacts
 
 DEFAULT_ADMIN_USERNAME = "admin"
 DEFAULT_ADMIN_PASSWORD = "admin123"
+
+SECURITY_EVENTS_TABLE = """
+CREATE TABLE IF NOT EXISTS security_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    presence_id TEXT NOT NULL,
+    event_code TEXT NOT NULL DEFAULT 'unknown_person',
+    observed_at TEXT NOT NULL,
+    snapshot BLOB
+);
+"""
 
 # Defined here (not models.py) so the student portal's report feature is self-contained.
 SYSTEM_REPORTS_TABLE = """
@@ -176,6 +187,9 @@ class CBVMSDatabase(StudentManagement):
             conn.execute(EVIDENCE_FILES_TABLE)
             conn.execute(DECISION_HISTORY_TABLE)
             conn.execute(APPEALS_TABLE)
+            conn.execute(SECURITY_EVENTS_TABLE)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_security_events_observed "
+                         "ON security_events(observed_at)")
 
             # Idempotent migrations for existing cbvms.db installations.
             appeal_cols = {r[1] for r in conn.execute("PRAGMA table_info(appeals)").fetchall()}
@@ -552,12 +566,15 @@ class CBVMSDatabase(StudentManagement):
         violation_code: str | None = None,
         detected_at: datetime | str | None = None,
         semester_id: int | None = None,
-    ) -> int:
+        valid_if: Callable[[], bool] | None = None,
+    ) -> int | None:
         """Persist a camera/manual detection in administrative review.
 
         ``violation_type`` remains the evidence/display text. ``violation_code`` is
         the stable category identity and never includes classifier confidence.
         Legacy callers passing ``unreviewed`` are normalized to ``pending_review``.
+        Camera callers may supply ``valid_if`` to reject cancelled or stale work
+        after obtaining the write lock and again immediately before commit.
         """
 
         safe_student_id = (student_id or "").strip() or "unknown"
@@ -577,6 +594,9 @@ class CBVMSDatabase(StudentManagement):
             # Serialize term selection with semester switches so every detection
             # permanently captures exactly one authoritative current term.
             conn.execute("BEGIN IMMEDIATE")
+            if valid_if is not None and not valid_if():
+                conn.rollback()
+                return None
             standing = conn.execute("SELECT student_status, registration_pending FROM students WHERE student_id=?", (safe_student_id,)).fetchone()
             if standing and (standing["student_status"] != "Enrolled" or standing["registration_pending"]):
                 return None
@@ -614,6 +634,9 @@ class CBVMSDatabase(StudentManagement):
                 ),
             )
             violation_id = int(cursor.lastrowid)
+            if valid_if is not None and not valid_if():
+                conn.rollback()
+                return None
             conn.commit()
 
         # Preserve callers that historically requested an already-reviewed state,
@@ -638,6 +661,42 @@ class CBVMSDatabase(StudentManagement):
         return violation_id
 
     record_detected_violation = log_violation
+
+    def log_security_event(
+        self,
+        presence_id: str,
+        *,
+        observed_at: datetime | str | None = None,
+        snapshot_jpeg: bytes | None = None,
+        valid_if: Callable[[], bool] | None = None,
+    ) -> int | None:
+        """Store an unknown person's sighting separately from student discipline.
+
+        The presence ID identifies a tracked visit, never a student. These rows
+        cannot generate a review deadline, strike, attendance, or suspension.
+        """
+        presence_id = (presence_id or "").strip()
+        if not presence_id:
+            raise ValueError("A tracked presence ID is required")
+        observed = parse_db_datetime(observed_at) if observed_at is not None else utc_now()
+        if observed is None:
+            raise ValueError("Invalid security observation time")
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if valid_if is not None and not valid_if():
+                conn.rollback()
+                return None
+            cursor = conn.execute(
+                """INSERT INTO security_events (presence_id, observed_at, snapshot)
+                   VALUES (?, ?, ?)""",
+                (presence_id, format_db_datetime(observed), snapshot_jpeg),
+            )
+            event_id = int(cursor.lastrowid)
+            if valid_if is not None and not valid_if():
+                conn.rollback()
+                return None
+            conn.commit()
+        return event_id
 
     # ------------------------------------------------------------------
     # Administrative review, deadline processing, and strike ledger
@@ -1944,7 +2003,8 @@ class CBVMSDatabase(StudentManagement):
             ).fetchall()
         return [dict(row) for row in rows]
 
-    def record_attendance(self, student_id: str, *, observed_at=None) -> bool:
+    def record_attendance(self, student_id: str, *, observed_at=None,
+                          valid_if: Callable[[], bool] | None = None) -> bool:
         """Record a recognized enrolled student's presence once per local day.
 
         Preserve the earliest/latest sightings even if workers finish out of order.
@@ -1957,6 +2017,9 @@ class CBVMSDatabase(StudentManagement):
         timestamp = format_db_datetime(observed)
         with self.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            if valid_if is not None and not valid_if():
+                conn.rollback()
+                return False
             student = conn.execute("SELECT name, student_status, registration_pending FROM students WHERE student_id = ?",
                                    (student_id,)).fetchone()
             if student is None or student["student_status"] != "Enrolled" or student["registration_pending"]:
@@ -1968,6 +2031,9 @@ class CBVMSDatabase(StudentManagement):
                     first_seen = MIN(attendance.first_seen, excluded.first_seen),
                     last_seen = MAX(attendance.last_seen, excluded.last_seen)
                 """, (student_id, student["name"], day, timestamp, timestamp))
+            if valid_if is not None and not valid_if():
+                conn.rollback()
+                return False
         return True
 
     def get_attendance_report(self, start: str = "", end: str = "",

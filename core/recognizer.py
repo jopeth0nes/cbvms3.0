@@ -8,7 +8,7 @@ threshold instead of leaking onto the nearest enrolled identity.
 
 Two failure modes are addressed here:
   1. Unknown-leakage  -> discriminative ArcFace embeddings + strict threshold.
-  2. Duplicate labels -> unique greedy assignment (one identity per face/frame).
+  2. Competing labels -> best-match-only assignment with ambiguity rejection.
 """
 
 from __future__ import annotations
@@ -27,6 +27,10 @@ if TYPE_CHECKING:
 # unknown-rejection lever — buffalo_l genuine pairs sit <= ~0.5, impostors >= ~0.85.
 MATCH_THRESHOLD = 0.50
 
+# A merely acceptable second choice is not identity evidence. Require a gap both
+# between a face's two closest students and between two faces claiming one student.
+IDENTITY_MARGIN = 0.05
+
 # Drop weak SCRFD detections (real faces score well above this).
 DET_SCORE_MIN = 0.5
 
@@ -41,6 +45,9 @@ class FaceRecognizer:
     def __init__(self, db: "CBVMSDatabase") -> None:
         self._db = db
         self._lock = threading.Lock()
+        # InsightFace's SCRFD model is shared by detection, recognition and
+        # enrollment. Serialize inference separately from model/gallery loading.
+        self._model_lock = threading.Lock()
         self._app = None             # lazy — avoid slow model load at startup
         self._frontal_cascade = None  # lightweight detectors for the has_face() UI hint
         self._profile_cascade = None
@@ -48,7 +55,9 @@ class FaceRecognizer:
         # holding that student's per-angle ArcFace embeddings.
         self._known: list[tuple[dict, np.ndarray]] = []
         self._models_loaded = False
+        self.last_error = None
         self.threshold: float = MATCH_THRESHOLD  # runtime-adjustable match sensitivity
+        self.identity_margin: float = IDENTITY_MARGIN
         self.load_known_faces()
 
     @property
@@ -115,8 +124,10 @@ class FaceRecognizer:
                 self._frontal_cascade = self._profile_cascade = None
 
             self._models_loaded = True
+            self.last_error = None
             return True
         except Exception as exc:
+            self.last_error = str(exc)
             print(f"[Recognizer] model load failed: {exc}")
             return False
 
@@ -133,8 +144,11 @@ class FaceRecognizer:
         if self._app is None or frame_bgr is None or frame_bgr.size == 0:
             return []
         try:
-            faces = self._app.get(frame_bgr)  # InsightFace expects BGR (OpenCV) frames
+            with self._model_lock:
+                faces = self._app.get(frame_bgr)  # InsightFace expects BGR frames
+                self.last_error = None
         except Exception as exc:
+            self.last_error = str(exc)
             print(f"[Recognizer] detect error: {exc}")
             return []
         out: list[tuple[list[int], np.ndarray, float, str | None]] = []
@@ -143,7 +157,7 @@ class FaceRecognizer:
             if score < DET_SCORE_MIN:
                 continue
             box = [int(v) for v in f.bbox[:4]]
-            emb = np.asarray(f.normed_embedding, dtype=np.float32)  # already L2-normalized
+            emb = np.array(f.normed_embedding, dtype=np.float32, copy=True)
             sex = getattr(f, "sex", None)
             out.append((box, emb, score, sex))
         return out
@@ -160,7 +174,8 @@ class FaceRecognizer:
         if frame_bgr is None or frame_bgr.size == 0:
             return []
         try:
-            bboxes, _kpss = self._app.det_model.detect(frame_bgr, input_size=DET_FAST_SIZE)
+            with self._model_lock:
+                bboxes, _kpss = self._app.det_model.detect(frame_bgr, input_size=DET_FAST_SIZE)
         except Exception as exc:
             print(f"[Recognizer] detect_faces error: {exc}")
             return []
@@ -186,35 +201,43 @@ class FaceRecognizer:
         return float(1.0 - float(np.max(sims)))
 
     @staticmethod
-    def _assign_identities(distance_matrix: np.ndarray, threshold: float) -> list[int]:
-        """Unique greedy assignment of faces → students.
+    def _assign_identities(
+        distance_matrix: np.ndarray,
+        threshold: float,
+        margin: float = IDENTITY_MARGIN,
+    ) -> list[int]:
+        """Accept only unambiguous strongest evidence; never use a second identity.
 
-        distance_matrix is (F, S); returns a list of length F where entry f is the
-        assigned student index, or -1 for "Unknown". Each face and each student is
-        used at most once: the globally-closest under-threshold (face, student) pair
-        is committed first, then the next, etc. This guarantees one identity per face
-        in a frame (fixing duplicate labels) while faces with no under-threshold
-        student remain Unknown (fixing unknown-leakage in tandem with the threshold).
+        Rows are faces, columns are students. Each face may propose ONLY its best
+        student, provided the absolute threshold and runner-up margin both pass.
+        For competing claims, accept the strongest only when it clearly wins;
+        otherwise leave every claimant unknown. A losing face is never relabeled
+        as its next available enrolled student just to make names unique.
         """
         F, S = distance_matrix.shape
         assignment = [-1] * F
         if F == 0 or S == 0:
             return assignment
-        candidates: list[tuple[float, int, int]] = []
+        candidates: dict[int, list[tuple[float, int]]] = {}
         for f in range(F):
-            for s in range(S):
-                d = float(distance_matrix[f, s])
-                if d < threshold:
-                    candidates.append((d, f, s))
-        candidates.sort(key=lambda t: t[0])
-        used_faces: set[int] = set()
-        used_students: set[int] = set()
-        for d, f, s in candidates:
-            if f in used_faces or s in used_students:
+            row = np.asarray(distance_matrix[f], dtype=float)
+            # Non-finite evidence cannot establish the required ranking/margin.
+            if not np.all(np.isfinite(row)):
                 continue
+            order = np.argsort(row)
+            s = int(order[0])
+            best = float(row[s])
+            if best >= threshold:
+                continue
+            if S > 1 and float(row[order[1]]) - best < margin:
+                continue
+            candidates.setdefault(s, []).append((best, f))
+        for s, claims in candidates.items():
+            claims.sort()
+            if len(claims) > 1 and claims[1][0] - claims[0][0] < margin:
+                continue
+            _distance, f = claims[0]
             assignment[f] = s
-            used_faces.add(f)
-            used_students.add(s)
         return assignment
 
     def _cascade_hit(self, gray) -> bool:
@@ -384,7 +407,12 @@ class FaceRecognizer:
         """Detect ALL faces in frame and identify each against enrolled students.
 
         Returns list of dicts:
-          {"box": [x1,y1,x2,y2], "name", "student_id", "gender", "matched", "detector_type"}
+          {"box": [x1,y1,x2,y2], "name", "student_id", "gender", "matched",
+           "detector_type", "embedding", "match_distance", "identity_uncertain"}
+
+        Embeddings are normalized immutable tuples for same-frame tracking. An
+        unassigned close/competing match is explicitly uncertain, while a face
+        outside the absolute threshold is an ordinary unknown person.
         """
         if not self._ensure_models():
             return []
@@ -401,18 +429,28 @@ class FaceRecognizer:
 
             # Per-student minimum cosine distance for every detected face → D[F, S].
             assignment = [-1] * F
+            embeddings = []
+            for _box, emb, _score, _sex in dets:
+                emb = np.asarray(emb, dtype=np.float32).reshape(-1)
+                norm = float(np.linalg.norm(emb))
+                embeddings.append(emb / norm if norm > 0 and np.isfinite(norm) else None)
+            D = np.full((F, S), np.inf, dtype=np.float32)
             if S > 0:
-                D = np.empty((F, S), dtype=np.float32)
-                for fi, (_box, emb, _score, _sex) in enumerate(dets):
+                for fi, emb in enumerate(embeddings):
+                    if emb is None:
+                        continue
                     for si, (_student, embs) in enumerate(known_snapshot):
                         D[fi, si] = self._min_distance_to_student(emb, embs)
-                # Unique assignment: one identity per face; unknowns stay -1.
-                assignment = self._assign_identities(D, self.threshold)
+                assignment = self._assign_identities(D, self.threshold, self.identity_margin)
 
             results = []
             for fi, (box, _emb, _score, sex) in enumerate(dets):
                 name, sid, gender, matched = "Unknown", "", "—", False
                 si = assignment[fi]
+                emb = embeddings[fi]
+                distance = float(np.min(D[fi])) if S else None
+                if distance is not None and not np.isfinite(distance):
+                    distance = None
                 if si >= 0:
                     student = known_snapshot[si][0]
                     name = student.get("name", "Unknown")
@@ -433,10 +471,16 @@ class FaceRecognizer:
                     "gender": gender,
                     "matched": matched,
                     "detector_type": "arcface",
+                    "embedding": tuple(float(v) for v in emb) if emb is not None else (),
+                    "match_distance": distance,
+                    "identity_uncertain": emb is None or (
+                        si < 0 and distance is not None and distance < self.threshold
+                    ),
                 })
 
             return results
 
         except Exception as exc:
+            self.last_error = str(exc)
             print(f"[Recognizer] recognize_faces error: {exc}")
             return []

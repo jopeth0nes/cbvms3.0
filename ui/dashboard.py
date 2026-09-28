@@ -18,17 +18,19 @@ import numpy as np
 from core.camera import CAMERA_DEVICE_LOCK, CameraCapture
 from core.discipline import local_calendar_day_utc_bounds
 from core.notifier import Notifier
-from core.person_detector import PersonDetector, skin_fraction
+from core.person_detector import PersonDetector
 from core.recognizer import FaceRecognizer
-from core.tracker import FaceTracker
-from core.uniform_matcher import UniformColorMatcher, fuse_uniform_prob
-from core.uniform_embedder import UniformEmbedMatcher
+from dataclasses import asdict
+from core.live_state import FrameContext, LiveConfig, LiveState
+from core.live_pipeline import LiveProcessor, LiveWorker, MonitorTask, MotionProjection
+from ui.live_alerts import LiveAlerts
+from ui.live_overlay import draw_assessments
+from core.uniform_matcher import UniformColorMatcher
 from core.trainer import ViolationTrainer
 from core.violation_engine import LiveViolationChecker
 from database.db_manager import CBVMSDatabase
 from ui.camera_feed import CameraFeed
 from ui.enrollment import EnrollmentPanel
-from core.student_status import standing_label, suspension_label
 from ui.notifications_panel import NotificationsPanel
 from ui.settings import SettingsPanel
 from ui.training_panel import TrainingPanel
@@ -64,21 +66,19 @@ from ui.components import (
 
 FEED_FPS = 30
 MAX_ALERTS = 50
-PRESENCE_TIMEOUT_SECS = 30   # seconds absent from frame before re-appearance triggers UI alert
-DB_LOG_COOLDOWN_SECS   = 300 # 5-minute minimum between DB log entries per person
 
-UNIFORM_MIN_CONF = 0.60      # below this the uniform verdict is treated as uncertain (no OK/violation)
 UNIFORM_VIOLATION_CONF = 0.65  # higher bar before a WRONG-uniform alert is logged (cuts false alarms)
-UNIFORM_EMA_ALPHA = 0.5      # smoothing weight for the per-person uniform probability (anti-flicker)
-UNIFORM_SKIN_ABSTAIN = 0.40  # after clamping below the chin, a crop still >40% bare skin → abstain
 CAMERA_IDLE_RELEASE_SECS = 4.0  # release the camera after this long with no consumer (power saver)
-DETECT_EVERY_N_FRAMES = 3    # offer every Nth feed frame to the fast detect worker (~10 FPS)
-REID_INTERVAL_SECS = 2.0     # periodic identity refresh even when all tracks are identified
 REID_MIN_GAP_SECS = 0.5      # min spacing between recognition offers (recognition takes ~0.5s)
 
 
 def _put_latest(q: "queue.Queue", item) -> None:
     """Replace whatever is in a maxsize-1 queue with the freshest item (drop-old)."""
+    try:
+        q.put_nowait(item)
+        return
+    except queue.Full:
+        pass
     try:
         q.get_nowait()
     except queue.Empty:
@@ -113,8 +113,6 @@ class CBVMSDashboard(ctk.CTk):
         self._logout_requested = False
         self._active_nav = "live"
         self._suspension_student_id = None
-        self._alerts: deque[dict] = deque(maxlen=MAX_ALERTS)
-        self._face_presence: dict[str, float] = {}   # identity_key → last_seen_epoch
         self._feed_job: str | None = None
         self._clock_job: str | None = None
         self._stats_job: str | None = None
@@ -168,53 +166,41 @@ class CBVMSDashboard(ctk.CTk):
                 print(f"[CBVMS] PersonDetector init failed: {exc}")
                 self._person_detector = None
 
-        # Uniform verdict = pretrained-embedding match (garment fingerprint) AND colour match.
-        # Both generalise from the correct-uniform photos; the from-scratch YOLO classifier
-        # degenerated on the abundant-correct / scarce-wrong dataset and is no longer used live.
+        # Preserve the trained classifier and inference-matched colour reference.
         self._uniform_matcher = UniformColorMatcher()
-        self._uniform_embed = UniformEmbedMatcher()
 
-        # Detect-and-track pipeline. Two background workers feed a UI-owned tracker:
-        #   • detect worker — fast SCRFD-only boxes (~52ms) every couple of frames,
-        #     so squares follow motion smoothly with no lag.
-        #   • recognize worker — slow ArcFace identity (~520ms) only when a track is
-        #     unidentified or on a periodic refresh, keeping CPU low.
-        # The tracker binds identity to a persistent track by IoU, so two people can
-        # never merge onto one label. Tracker is mutated only on the UI thread (workers
-        # post via after(0)), so it needs no lock.
-        self._tracker = FaceTracker()
-        self._face_frame_counter: int = 0
-        self._last_recog_offer: float = 0.0
-        self._face_queue: queue.Queue = queue.Queue(maxsize=1)    # detect worker input
-        self._recog_queue: queue.Queue = queue.Queue(maxsize=1)   # recognize worker input
-        # Worker → UI result hand-off. Tk/Tcl is NOT thread-safe (esp. on macOS): the
-        # workers must never call self.after()/winfo_exists(). They drop results in these
-        # maxsize-1 queues and the UI thread drains them in _update_feed.
-        self._boxes_out: queue.Queue = queue.Queue(maxsize=1)     # detect → tracker.update
-        self._ident_out: queue.Queue = queue.Queue(maxsize=1)     # recog → identities + alerts
-        self._violen_out: queue.Queue = queue.Queue(maxsize=1)    # recog → violation overlay
-        self._notification_out: queue.Queue = queue.Queue()       # any worker → admin UI
-        self._violation_dirty = False                              # set by worker, read by UI
-        # Cap OpenCV's thread pool so continuous background detection can't peg every core
-        # and starve the Tk main thread (keeps the UI snappy).
+        # One analysis owner; camera capture and Tk preview never wait for inference.
+        self._monitor_generation = 0
+        self._monitor_cancel = threading.Event()
+        self._monitor_result = None
+        self._monitor_projections = {}
+        self._monitor_last_offered = None
+        self._monitor_last_rendered = None
+        self._monitor_render_key = None
+        self._monitor_card_key = None
+        self._monitor_offer_time = 0.0
+        self._preview_times = deque(maxlen=120)
+        self._analysis_times = deque(maxlen=30)
+        self._metrics_time = 0.0
+        self._closed = threading.Event()
+        self._models_ready = threading.Event()
+        self._notification_out = queue.Queue(maxsize=50)
+        self._stats_out = queue.Queue(maxsize=1)
+        self._stats_busy = threading.Event()
+        self._processor = LiveProcessor(
+            self._database, self._recognizer, self._person_detector,
+            self._trainer, self._uniform_matcher, self._notifier,
+            latest_sample=self._latest_monitor_sample,
+            state=LiveState(LiveConfig(violation_min_confidence=UNIFORM_VIOLATION_CONF)),
+        )
+        self._live_worker = LiveWorker(self._processor)
+        self._live_worker.start()
         try:
             cv2.setNumThreads(2)
         except Exception:
             pass
-        self._detect_worker = threading.Thread(target=self._detect_worker_loop, daemon=True)
-        self._recognize_worker = threading.Thread(target=self._recognize_worker_loop, daemon=True)
-        self._detect_worker.start()
-        self._recognize_worker.start()
-        # Pre-warm the heavy models (InsightFace, YOLO, trained classifiers) in the
-        # background at launch — they otherwise load lazily on the first frame, so the
-        # Live Monitor would take several seconds to start scanning. Warming now hides
-        # that behind the login→dashboard build + camera warmup.
-        threading.Thread(target=self._prewarm_models, daemon=True).start()
-
-        # Separate DB-write cooldown (much longer than UI presence timeout)
-        # Prevents rapid re-logging of the same person making deletes appear to do nothing
-        self._db_log_cooldowns: dict[str, float] = {}  # identity_key → last_logged_epoch
-        self._uniform_ema: dict[str, float] = {}       # identity_key → smoothed P(correct uniform)
+        threading.Thread(target=self._prewarm_models, daemon=True,
+                         name="monitor-model-warmup").start()
 
         self._enrollment_panel: EnrollmentPanel | None = None
         self._violation_panel: ViolationLogPanel | None = None
@@ -241,7 +227,7 @@ class CBVMSDashboard(ctk.CTk):
         self._refresh_camera_switcher()   # populate quick source dropdown
         # Listeners may run on recognition workers.  Queue the payload and let the
         # feed loop perform every Tk/CTk operation on the UI thread.
-        self._notifier.subscribe(self._notification_out.put)
+        self._notifier.subscribe(lambda item: _put_latest(self._notification_out, item))
         self._build_menubar()
         self._tick_clock()
         self._schedule_feed_update()
@@ -525,7 +511,7 @@ class CBVMSDashboard(ctk.CTk):
         self._stat_today_value    = _card(0, label="Total Violations Today", accent=COLOR_DANGER)
         self._stat_unreviewed_value = _card(1, label="Pending Review",       accent=COLOR_WARNING)
         self._stat_students_value = _card(2, label="Students Enrolled",       accent=COLOR_ACCENT)
-        self._stat_last_value     = _card(3, label="Last Detection",          accent=COLOR_SAFE)
+        self._stat_last_value     = _card(3, label="Last Violation (local time)",          accent=COLOR_SAFE)
         return row
 
     def _build_right_sidebar(self) -> None:
@@ -541,9 +527,7 @@ class CBVMSDashboard(ctk.CTk):
             sidebar, text="Live Alerts", font=heading_font(18), text_color=COLOR_TEXT,
         ).grid(row=0, column=0, sticky="w", padx=PADDING, pady=(PADDING, PADDING))
 
-        self._alerts_scroll = ctk.CTkScrollableFrame(
-            sidebar, fg_color=COLOR_BG, corner_radius=CORNER_RADIUS,
-        )
+        self._alerts_scroll = LiveAlerts(sidebar, max_cards=MAX_ALERTS)
         self._alerts_scroll.grid(row=1, column=0, sticky="nsew", padx=PADDING, pady=(0, PADDING))
 
         ctk.CTkButton(
@@ -599,6 +583,8 @@ class CBVMSDashboard(ctk.CTk):
         if key not in self._views:
             return
         previous_nav = self._active_nav
+        if previous_nav != key:
+            self._invalidate_monitor()
         self._active_nav = key
 
         # Power saver: entering Live (re)opens the camera if it was released; leaving Live
@@ -914,7 +900,8 @@ class CBVMSDashboard(ctk.CTk):
         self._camera_generation += 1
         generation = self._camera_generation
         self._last_frame_request = time.monotonic()  # grace window for explicit starts
-        self._face_frame_counter = 0   # so the first frame after (re)start is scanned at once
+        if hasattr(self, "_monitor_cancel"):
+            self._invalidate_monitor()
         previous_done = self._stop_camera()
         try:
             self._camera_spinner.pack(side="right", padx=(0, 10), pady=14)
@@ -1004,6 +991,7 @@ class CBVMSDashboard(ctk.CTk):
                         # A backend teardown error must never make all future switches
                         # wait forever for this owner to finish.
                         done.set()
+                        self._camera_events.put(("stopped", generation, cap, ok))
 
         worker = threading.Thread(target=_worker, daemon=True, name=f"camera-{generation}")
         self._camera_reader = worker
@@ -1017,6 +1005,10 @@ class CBVMSDashboard(ctk.CTk):
                 return
             if event == "opened":
                 self._on_camera_opened(cap, ok, generation)
+            elif event == "stopped" and ok and generation == self._camera_generation and self._camera is cap:
+                self._invalidate_monitor()
+                self._status_camera.configure(text="Camera: Reconnecting…", text_color=COLOR_WARNING)
+                self.after(1500, lambda g=generation: self._retry_camera(g))
 
     def _on_camera_opened(self, cap: CameraCapture, ok: bool, generation: int) -> None:
         # Stale workers own and release their own capture.  Never call release() here:
@@ -1062,6 +1054,8 @@ class CBVMSDashboard(ctk.CTk):
     def _halt_camera(self) -> threading.Event:
         """Stop intentionally and invalidate every pending start or retry callback."""
         self._camera_generation += 1
+        if hasattr(self, "_monitor_cancel"):
+            self._invalidate_monitor()
         return self._stop_camera()
 
     def _get_camera_frame(self):
@@ -1132,556 +1126,154 @@ class CBVMSDashboard(ctk.CTk):
                 self._person_detector._ensure_pose_model()
         except Exception:
             pass
+        self._models_ready.set()
 
-    def _detect_worker_loop(self) -> None:
-        """Background thread: fast SCRFD-only detection → fresh boxes for the tracker.
+    def _latest_monitor_sample(self):
+        """Worker-safe read; never starts devices or touches Tk."""
+        camera = self._camera
+        return camera.get_latest_sample() if camera is not None and camera.is_open else None
 
-        Cheap (~52ms) so it runs often, giving each square a near-real-time position
-        that follows head motion. Identity is handled separately by the recognize worker.
-        """
-        while True:
-            try:
-                frame = self._face_queue.get(timeout=1.0)
-                boxes = [d["box"] for d in self._recognizer.detect_faces(frame)]
-                # Hand off to the UI thread via a queue — never call Tk from here.
-                _put_latest(self._boxes_out, boxes)
-            except queue.Empty:
-                pass
-            except Exception as exc:
-                print(f"[CBVMS] detect worker error: {exc}")
+    def _invalidate_monitor(self):
+        self._monitor_cancel.set()
+        self._monitor_cancel = threading.Event()
+        self._monitor_generation += 1
+        self._monitor_result = None
+        self._monitor_projections.clear()
+        self._monitor_last_offered = None
+        self._monitor_last_rendered = None
+        self._monitor_render_key = None
+        self._monitor_card_key = None
+        self._monitor_status_text = None
+        self._preview_times.clear()
+        self._analysis_times.clear()
+        _drain(self._live_worker.requests)
+        _drain(self._live_worker.results)
+        if getattr(self, "_alerts_scroll", None) is not None:
+            self._alerts_scroll.mark_all_inactive()
 
-    def _recognize_worker_loop(self) -> None:
-        """Background thread: slow ArcFace identity (~520ms), run only when needed.
-
-        Delivers identities to the UI tracker first (labels appear fast), then runs the
-        uniform/earring classifiers and re-binds the enriched results so the torso/
-        violation overlay follows on a later tick.
-        """
-        while True:
-            try:
-                frame = self._recog_queue.get(timeout=1.0)
-                detections = self._recognizer.recognize_faces(frame)
-                self._refresh_student_standing(detections)
-                self._record_attendance(detections)
-                # Identity + alerts first (fast label), then enrich with violations.
-                # All applied on the UI thread — never call Tk from here.
-                _put_latest(self._ident_out, detections)
-                # Uniform/earring classifiers mutate the det dicts in place; re-bind so
-                # the tracks pick up violation/torso fields on the next render tick.
-                self._check_violations(detections, frame)
-                _put_latest(self._violen_out, detections)
-            except queue.Empty:
-                pass
-            except Exception as exc:
-                print(f"[CBVMS] recognize worker error: {exc}")
-
-    @staticmethod
-    def _match_face_to_person(face_box, person_boxes):
-        """Return the person box that best contains the face (overlap/face_area ≥ 0.5)."""
-        fx1, fy1, fx2, fy2 = face_box
-        fa = max(1, (fx2 - fx1) * (fy2 - fy1))
-        best, best_ov = None, 0.0
-        for pb in person_boxes:
-            px1, py1, px2, py2 = pb
-            ix1, iy1 = max(fx1, px1), max(fy1, py1)
-            ix2, iy2 = min(fx2, px2), min(fy2, py2)
-            inter = max(0, ix2 - ix1) * max(0, iy2 - iy1)
-            ov = inter / fa
-            if ov > best_ov:
-                best_ov, best = ov, pb
-        return best if best_ov >= 0.5 else None
-
-    def _refresh_student_standing(self, detections):
-        """Read current standing each recognition cycle; never cache suspension expiry."""
-        for det in detections:
-            if not det.get("matched"):
-                continue
-            student = self._database.get_student_by_student_id(det.get("student_id"))
-            if not student:
-                det["discipline_eligible"] = False
-                det["student_status"] = "Unrecognized / Possible Visitor"
-                continue
-            det["student_status"] = standing_label(student)
-            det["discipline_eligible"] = (student["student_status"] == "Enrolled"
-                                          and not student["registration_pending"])
-            det["suspension"] = self._database.get_active_suspension(student["student_id"])
-            det["suspension_tag"] = suspension_label(det["suspension"]) if det["suspension"] else ""
-
-    def _record_attendance(self, detections: list[dict]) -> None:
-        """Background-thread: capture recognized presence independently of violations."""
-        for det in detections:
-            student_id = det.get("student_id")
-            if student_id and student_id != "unknown":
-                if det.get("student_status") in ("Graduate", "Unenrolled"):
-                    if not hasattr(self, "_entry_cooldowns"):
-                        self._entry_cooldowns = {}
-                    key = (student_id, det["student_status"])
-                    now = time.monotonic()
-                    if now - self._entry_cooldowns.get(key, -30) >= 30:
-                        self._database.record_premises_entry(student_id)
-                        self._entry_cooldowns[key] = now
-                    continue
-                if not det.get("discipline_eligible", True):
-                    continue
-                # Persist independently of whether this student has a violation.
-                # Limit writes while a recognized face remains in the camera.
-                if not hasattr(self, "_attendance_cooldowns"):
-                    self._attendance_cooldowns = {}
-                now = time.monotonic()
-                attendance_key = (student_id, date.today().isoformat())
-                if now - self._attendance_cooldowns.get(attendance_key, -30) >= 30:
-                    try:
-                        if self._database.record_attendance(student_id):
-                            self._attendance_cooldowns[attendance_key] = now
-                    except Exception as exc:
-                        print(f"[CBVMS] attendance recording failed: {exc}")
-
-    def _check_violations(self, detections: list[dict], frame: np.ndarray | None) -> None:
-        """Background-thread: run uniform/earring classifiers on each enrolled person.
-
-        Attaches per-detection: violation (str|None), uniform_label, uniform_conf,
-        torso_box. Logs real violations / unknown persons to the DB (300s cooldown).
-        """
-        for det in detections:
-            det["violation"] = None
-            det["uniform_label"] = None
-            det["uniform_conf"] = 0.0
-            det["torso_box"] = None
-        if frame is None:
-            return
-
-        h, w = frame.shape[:2]
-
-        # Person detection runs once per frame, only when uniform checking is useful.
-        person_boxes: list = []
-        uniform_on = (
-            self._person_detector is not None
-            and self._checker.check_uniform
-            and (self._trainer.is_trained("uniform") or self._uniform_matcher.is_loaded())
-        )
-        if uniform_on and any(d.get("matched") and d.get("discipline_eligible", True) for d in detections):
-            person_boxes = self._person_detector.detect_persons(frame)
-
-        earring_on = self._checker.check_earring and self._trainer.is_trained("earring")
-
-        for det in detections:
-            if det.get("matched") and not det.get("discipline_eligible", True):
-                self._uniform_ema.pop(det.get("student_id"), None)
-                continue
-            x1, y1, x2, y2 = [int(v) for v in det["box"]]
-            x1, y1 = max(0, x1), max(0, y1)
-            x2, y2 = min(w, x2), min(h, y2)
-            if x2 <= x1 or y2 <= y1:
-                continue
-
-            if not det.get("matched"):
-                # Unknown person: log for security (no classifier run).
-                self._log_db(
-                    det,
-                    frame,
-                    [x1, y1, x2, y2],
-                    "unknown_person",
-                    violation_code="unknown_person",
-                )
-                continue
-
-            parts: list[str] = []
-            violation_events: list[tuple[str, str]] = []
-            person_box = None
-
-            # --- Uniform check (torso/shirt region) ---
-            if uniform_on:
-                # The torso crop is anchored to the recognised FACE box with a HARD floor: its
-                # top is forced below the chin (chin_y + 0.10*face_h), so it is geometrically
-                # impossible to land on the face at any range/pose. Pose shoulders+hips refine
-                # when available; the face-anthropometry chest box is the guaranteed fallback
-                # (works even with no YOLO person box). See PersonDetector.chest_region.
-                person_box = None
-                if person_boxes:
-                    person_box = self._match_face_to_person([x1, y1, x2, y2], person_boxes)
-                    if person_box is None:
-                        # Single-subject entrance: a clearly-visible person must not lose the
-                        # torso box just because the face↔person overlap dipped below 0.5.
-                        person_box = person_boxes[0]   # largest by area (detect_persons sorts)
-                region = None
-                region_method = "none"
-                try:
-                    region, region_method = self._person_detector.chest_region(
-                        frame, [x1, y1, x2, y2], person_box
-                    )
-                except Exception as exc:
-                    print(f"[CBVMS] torso localize error: {exc}")
-                if region is not None:
-                    ux1, uy1, ux2, uy2 = region
-                    uniform_crop = frame[uy1:uy2, ux1:ux2]
-
-                    # Skin guard AFTER clamping: with the top below the chin this should never
-                    # trip, but if the final crop is still mostly bare skin, abstain rather than
-                    # classify a face. The earring check below still runs. (rule 4)
-                    skin = skin_fraction(uniform_crop)
-                    if skin > UNIFORM_SKIN_ABSTAIN:
-                        print(f"[CBVMS] uniform abstain ({region_method}): crop skin={skin:.0%} "
-                              f"> {UNIFORM_SKIN_ABSTAIN:.0%}  face={[x1, y1, x2, y2]} region={region}")
-                    else:
-                        # Classifier P(correct) — YOLOv8-cls trained on 0.20-0.65 torso crops
-                        # (data/training_cropped). The live crop is now the face-anchored
-                        # chest_region; the classifier generalizes to it cleanly (verified: 100%
-                        # correct/wrong separation on chest_region-cropped training data — it
-                        # learned shirt, not framing). Replaces the ResNet18 embedder, which was
-                        # mis-calibrated to the live crop and vetoed correct polos (Step 4 diagnosis).
-                        p_cls = None
-                        proba = self._trainer.predict_proba("uniform", uniform_crop)
-                        if proba is not None:
-                            p_cls = proba.get("correct_uniform")
-
-                        # Colour-matcher P(correct) — uniform-colour signal (co-required veto).
-                        p_col = None
-                        if self._uniform_matcher.is_loaded():
-                            verdict, p = self._uniform_matcher.is_uniform(uniform_crop)
-                            if verdict is not None:   # None = too dark/small to judge → skip
-                                p_col = p
-
-                        # "Correct" needs BOTH stable signals to agree (min): the classifier confirms
-                        # the garment, colour confirms the uniform colour. Either can veto. Both run
-                        # on the identical torso crop used at train/reference time.
-                        p_fused = fuse_uniform_prob(p_cls, p_col)
-                        if p_fused is not None:
-                            # Smooth per person so the shown % is stable, not flickering frame-to-frame.
-                            key = det.get("student_id") or det.get("name") or "unknown"
-                            prev = self._uniform_ema.get(key)
-                            ema = p_fused if prev is None else (
-                                UNIFORM_EMA_ALPHA * p_fused + (1.0 - UNIFORM_EMA_ALPHA) * prev
-                            )
-                            self._uniform_ema[key] = ema
-
-                            is_correct = ema >= 0.5
-                            # Confidence = probability of the verdict actually shown.
-                            confidence = ema if is_correct else (1.0 - ema)
-                            if confidence >= UNIFORM_MIN_CONF:
-                                det["uniform_label"] = "correct_uniform" if is_correct else "wrong_uniform"
-                                det["uniform_conf"] = confidence
-                                det["torso_box"] = region
-                                # Show the wrong verdict at MIN_CONF, but only log/alert above the
-                                # stricter VIOLATION_CONF bar to avoid borderline false alarms.
-                                if not is_correct and confidence >= UNIFORM_VIOLATION_CONF:
-                                    display_text = f"Wrong uniform ({confidence:.0%})"
-                                    parts.append(display_text)
-                                    violation_events.append(("wrong_uniform", display_text))
-
-            # --- Earring check (face crop, male only) ---
-            if earring_on and (det.get("gender", "") or "").lower() == "male":
-                try:
-                    label, conf = self._trainer.predict("earring", frame[y1:y2, x1:x2])
-                except Exception as exc:
-                    print(f"[CBVMS] earring predict error: {exc}")
-                    label, conf = None, 0.0
-                if label == "with_earring" and conf >= 0.65:
-                    display_text = f"Earring detected ({conf:.0%})"
-                    parts.append(display_text)
-                    violation_events.append(("earring", display_text))
-
-            det["violation"] = ", ".join(parts) if parts else None
-            if violation_events:
-                # Snapshot: full person box if known, else the face box.
-                snap_box = person_box if person_box is not None else [x1, y1, x2, y2]
-                # Keep one joined string for the live overlay, but persist each category as
-                # its own violation so category-specific strikes remain independently auditable.
-                for violation_code, display_text in violation_events:
-                    self._log_db(
-                        det,
-                        frame,
-                        snap_box,
-                        display_text,
-                        violation_code=violation_code,
-                    )
-
-    def _log_db(
-        self,
-        det: dict,
-        frame: np.ndarray,
-        box: list[int],
-        violation_type: str,
-        violation_code: str | None = None,
-    ) -> None:
-        """Persist one violation category with a 300s per-student/category cooldown."""
-        key = det.get("student_id") or "unknown"
-        code = (violation_code or "").strip() or (
-            "unknown_person" if violation_type == "unknown_person" else "unknown_violation"
-        )
-        cooldown_key = f"{key}:{code}"
-        now = time.monotonic()
-        last_logged = self._db_log_cooldowns.get(cooldown_key)
-        if last_logged is not None and now - last_logged < DB_LOG_COOLDOWN_SECS:
-            return
-
-        snapshot_jpeg: bytes | None = None
-        try:
-            bx1, by1, bx2, by2 = [int(v) for v in box]
-            h, w = frame.shape[:2]
-            bx1, by1 = max(0, bx1), max(0, by1)
-            bx2, by2 = min(w, bx2), min(h, by2)
-            crop = frame[by1:by2, bx1:bx2]
-            if crop.size > 0:
-                ok, buf = cv2.imencode(".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 85])
-                if ok:
-                    snapshot_jpeg = buf.tobytes()
-        except Exception:
-            pass
-
-        try:
-            violation_id = self._database.log_violation(
-                student_id=key,
-                student_name=det.get("name", "Unknown"),
-                violation_type=violation_type,
-                violation_code=code,
-                snapshot_jpeg=snapshot_jpeg,
-                status="pending_review",
-            )
-        except Exception as exc:
-            print(f"[CBVMS] log_violation error: {exc}")
-            return
-        if violation_id is None:
-            return
-        # A failed insert must remain retryable; start the cooldown only after persistence.
-        self._db_log_cooldowns[cooldown_key] = now
-
-        # Fire a real-time notification (sound + toast + bell badge + log panel).
-        # Cooldown above already de-duplicates, so this won't spam per frame.
-        display_name = (det.get("name") or "Unknown") if violation_type != "unknown_person" else "Unidentified person"
-        display_violation = "Unidentified person detected" if violation_type == "unknown_person" else violation_type
-        self._notifier.notify(display_name, display_violation)
-
-        # Flag for the UI thread to refresh the violations panel — never touch Tk here
-        # (this runs on the recognize worker thread).
-        self._violation_dirty = True
-
-    def _on_identities_ready(self, detections: list[dict]) -> None:
-        """UI-thread callback: bind identities to tracks and fire presence-based alerts.
-
-        One alert fires when a face first appears. While the face stays in frame,
-        last_seen is refreshed and no duplicate alert is emitted. After PRESENCE_TIMEOUT_SECS
-        without a detection the entry is purged — the next appearance fires a new alert.
-        """
-        self._tracker.assign_identities(detections)
-        now = time.time()
-
-        current_keys: set[str] = set()
-        for det in detections:
-            key = det["student_id"] if det["matched"] else "unknown"
-            current_keys.add(key)
-
-            last_seen = self._face_presence.get(key, 0.0)
-            is_new_appearance = (now - last_seen) > PRESENCE_TIMEOUT_SECS
-
-            self._face_presence[key] = now   # always refresh last-seen timestamp
-
-            if not hasattr(self, "_standing_alert_state"):
-                self._standing_alert_state = {}
-            state = (det.get("student_status"), det.get("suspension_tag", ""))
-            changed = self._standing_alert_state.get(key) != state
-            self._standing_alert_state[key] = state
-            if is_new_appearance or changed:
-                self._push_alert(det)
-                if det.get("suspension_tag"):
-                    self._notifier.notify(det["name"], det["suspension_tag"])
-
-        # Remove identities that have left the frame long enough
-        stale = [
-            k for k, t in self._face_presence.items()
-            if k not in current_keys and (now - t) > PRESENCE_TIMEOUT_SECS
-        ]
-        for k in stale:
-            del self._face_presence[k]
-
-    def _push_alert(self, det: dict, frame: np.ndarray | None = None) -> None:
-        """Add one ephemeral live-alert card. DB logging happens in the worker."""
-        entry = {
-            "identity_key": det["student_id"] or "unknown",
-            "name": det["name"],
-            "student_id": det["student_id"] or "—",
-            "gender": det.get("gender", "—"),
-            "student_status": det.get("student_status", "Enrolled"),
-            "suspension_tag": det.get("suspension_tag", ""),
-            "matched": det["matched"],
-            "violation": det.get("violation"),
-            "time": datetime.now().strftime("%H:%M:%S"),
-            "epoch": time.time(),
-        }
-        self._alerts.appendleft(entry)
-        self._refresh_alerts_ui()
-
-    @staticmethod
-    def _draw_pill(out, x: int, y_baseline: int, text: str, color) -> None:
-        """Draw a filled label pill anchored with its bottom edge at y_baseline."""
-        (lw, lh), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 1)
-        top = max(0, y_baseline - lh - 8)
-        cv2.rectangle(out, (x, top), (x + lw + 6, y_baseline), color, -1)
-        cv2.putText(out, text, (x + 3, y_baseline - 4),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1, cv2.LINE_AA)
-
-    def _annotate_frame(self, frame: np.ndarray, mirror: bool = False) -> np.ndarray:
-        """Draw a square + label per tracked face, plus orange torso/uniform overlays.
-
-        Boxes come from the tracker (fast SCRFD positions, IoU-locked to one face each);
-        identity/color/violation come from the recognizer once it has identified the track.
-
-        When ``mirror`` is set, the display frame is horizontally flipped and each box's
-        x-coordinates are mirrored (``x1, x2 = w - x2, w - x1``) so boxes still line up while
-        labels are drawn upright. The caller keeps feeding the un-mirrored ``frame`` to the
-        detection/recognition queues, so mirroring is display-only.
-        """
-        tracks = self._tracker.renderable()
-        out = cv2.flip(frame, 1) if mirror else frame
-        if not tracks:
-            return out
-        out = out.copy()
-        w = out.shape[1]
-
-        def _mx(x1: int, x2: int) -> tuple[int, int]:
-            return (w - x2, w - x1) if mirror else (x1, x2)
-
-        for tr in tracks:
-            x1, y1, x2, y2 = tr.box_int()
-            x1, x2 = _mx(x1, x2)
-
-            # Not yet identified by the (slower) recognizer — neutral box, no premature label.
-            if not tr.identified:
-                gray = (148, 163, 184)
-                cv2.rectangle(out, (x1, y1), (x2, y2), gray, 2)
-                self._draw_pill(out, x1, y1, "Scanning…", gray)
-                continue
-
-            matched = tr.matched
-            # Face colour follows the SMOOTHED uniform verdict (not the raw per-cycle one) so it
-            # can't flicker red/green out of sync with the torso label. Non-uniform violations
-            # (e.g. earring) still come from the raw violation string.
-            uniform_wrong = (tr.stable_uniform_label == "wrong_uniform")
-            other_violation = bool(tr.violation) and "uniform" not in (tr.violation or "").lower()
-            has_violation = uniform_wrong or other_violation or bool(tr.suspension_tag)
-
-            # Face box: green (OK) / red (violation) / blue (unknown)
-            if not matched:
-                face_color = (239, 68, 68)        # BGR blue-ish for unknown
-            elif has_violation:
-                face_color = (68, 68, 239)         # BGR red
+    def _monitor_rows(self, sample):
+        result = self._monitor_result
+        if result is None or not result.task.valid():
+            self._monitor_result = None
+            self._monitor_projections.clear()
+            return []
+        if (result.task.context.generation != self._monitor_generation
+                or result.task.camera_generation != self._camera_generation
+                or result.task.context.frame_id[0] != sample.frame_id[0]):
+            self._monitor_result = None
+            self._monitor_projections.clear()
+            return []
+        gray = None
+        rows = []
+        for assessment in result.assessments:
+            row = asdict(assessment)
+            row.update(observed_at=result.task.observed_at, detail=assessment.reason)
+            projection = self._monitor_projections.get(assessment.track_id)
+            if sample.frame_id == result.task.context.frame_id:
+                box = assessment.face_box
+            elif projection is not None:
+                if gray is None:
+                    gray = MotionProjection.gray_frame(sample.frame)
+                box = projection.advance(sample.frame, gray)
             else:
-                face_color = (16, 185, 129)        # BGR green
-            cv2.rectangle(out, (x1, y1), (x2, y2), face_color, 2)
-            label = (f"{tr.name} | {tr.student_status}" if matched else "Unrecognized / Possible Visitor")
-            if tr.suspension_tag:
-                label += " | SUSPENDED"
-            self._draw_pill(out, x1, y1, label, face_color)
+                box = None
+            if box is None:
+                # Never attach an old name or verdict to a newly occupied location.
+                continue
+            dx, dy = box[0]-assessment.face_box[0], box[1]-assessment.face_box[1]
+            row['face_box'] = box
+            if assessment.torso_box:
+                x1,y1,x2,y2 = assessment.torso_box
+                row['torso_box'] = (x1+dx,y1+dy,x2+dx,y2+dy)
+            rows.append(row)
+        return rows
 
-            # Torso box: orange + uniform prediction label
-            torso_box = tr.torso_box
-            if torso_box is not None:
-                tx1, ty1, tx2, ty2 = [int(v) for v in torso_box]
-                tx1, tx2 = _mx(tx1, tx2)
-                cv2.rectangle(out, (tx1, ty1), (tx2, ty2), ORANGE_BGR, 2)
-                if tr.stable_uniform_label is not None:
-                    conf = tr.stable_uniform_conf
-                    if tr.stable_uniform_label == "wrong_uniform":
-                        tag = f"X Wrong uniform {conf:.0%}"
-                    else:
-                        tag = f"OK Uniform {conf:.0%}"
-                    self._draw_pill(out, tx1, ty1, tag, ORANGE_BGR)
-        return out
-
-    # ------------------------------------------------------------------
-    # Feed update loop
-    # ------------------------------------------------------------------
+    @staticmethod
+    def _measured_rate(times, now):
+        recent = [t for t in times if now-t <= 5.0]
+        return (len(recent)-1)/(recent[-1]-recent[0]) if len(recent)>1 else 0.0
 
     def _schedule_feed_update(self) -> None:
         self._feed_job = self.after(self._feed_interval_ms, self._update_feed)
 
     def _update_feed(self) -> None:
-        if not self.winfo_exists():
+        if self._closed.is_set():
             return
+        started = time.monotonic()
         try:
-            # Camera workers communicate only through this queue; all Tk updates stay
-            # on the main thread.
             self._drain_camera_events()
-
-            notification_queue = getattr(self, "_notification_out", None)
-            if notification_queue is not None:
-                while True:
-                    try:
-                        notification = notification_queue.get_nowait()
-                    except queue.Empty:
-                        break
-                    self._on_notification(notification)
-
-            # A worker logged a violation — refresh the panel here, on the UI thread.
-            if self._violation_dirty:
-                self._violation_dirty = False
-                if self._active_nav == "violations" and self._violation_panel is not None:
-                    self._violation_panel.refresh()
-
-            # Power saver: release the camera device when no consumer needs it.
+            notification = _drain(self._notification_out)
+            if notification is not None and (notification.valid_if is None or notification.valid_if()):
+                self._on_notification(notification)
+            stats = _drain(self._stats_out)
+            if stats is not None:
+                for widget, value in zip((self._stat_today_value, self._stat_unreviewed_value,
+                                          self._stat_students_value, self._stat_last_value), stats):
+                    if widget is not None:
+                        widget.configure(text=value)
             if self._camera is not None and not self._camera_needed():
                 self._halt_camera()
-
             if self._active_nav == "live":
-                if self._camera and self._camera.is_open:
-                    # Non-blocking: the reader thread keeps this fresh. Never call
-                    # read() here or a slow network frame would freeze the UI.
-                    frame = self._camera.get_latest_frame()
-                    if frame is not None:
-                        _now = time.time()
-                        self._last_frame_request = time.monotonic()  # keep camera alive
-                        # Drain worker results on the UI thread (workers never call Tk).
-                        _boxes = _drain(self._boxes_out)
-                        if _boxes is not None:
-                            self._tracker.update(_boxes)
-                        _ident = _drain(self._ident_out)
-                        if _ident is not None:
-                            self._on_identities_ready(_ident)        # assign + presence alerts
-                        _vio = _drain(self._violen_out)
-                        if _vio is not None:
-                            self._tracker.assign_identities(_vio)     # overlay enrich only
-
-                        # Keep presence timestamps alive for currently-tracked identities so
-                        # the recognition gap can't falsely reset presence and re-fire alerts.
-                        for _tr in self._tracker.renderable():
-                            if not _tr.identified:
-                                continue
-                            _key = _tr.student_id if _tr.matched else "unknown"
-                            if _key in self._face_presence:
-                                self._face_presence[_key] = _now
-
-                        self._face_frame_counter += 1
-                        # Fast detection: scan the very first frame immediately, then
-                        # every Nth frame for smooth box tracking.
-                        if self._face_frame_counter == 1 or self._face_frame_counter % DETECT_EVERY_N_FRAMES == 0:
-                            try:
-                                self._face_queue.put_nowait(frame.copy())
-                            except queue.Full:
-                                pass
-                        # Slow recognition: only when a track needs an identity, or on a
-                        # periodic refresh — and never more often than REID_MIN_GAP_SECS.
-                        need_reid = (
-                            self._tracker.has_unidentified()
-                            or (_now - self._last_recog_offer) >= REID_INTERVAL_SECS
-                        )
-                        if need_reid and (_now - self._last_recog_offer) >= REID_MIN_GAP_SECS:
-                            try:
-                                self._recog_queue.put_nowait(frame.copy())
-                                self._last_recog_offer = _now
-                            except queue.Full:
-                                pass
-                        # Annotate from the tracker and render (mirror is display-only).
-                        annotated = self._annotate_frame(frame, mirror=self._mirror.display_mirror())
-                        self.camera_feed.render(self._mirror.apply_anim(annotated))
-                    else:
-                        self.camera_feed.show_placeholder()
+                sample = self._latest_monitor_sample()
+                if sample is None or started-sample.captured_at > 1.0:
+                    if self._monitor_last_rendered is not None:
+                        self._invalidate_monitor()
+                    self.camera_feed.show_placeholder("Reconnecting camera…" if self._camera else "No camera connected")
                 else:
-                    # On Live but the camera is off/reopening (e.g. just released for
-                    # power saving, or warming up) — show the placeholder meanwhile.
-                    self.camera_feed.show_placeholder()
-            # Non-live navs: render nothing (the live canvas is hidden anyway).
+                    self._last_frame_request = started
+                    result = _drain(self._live_worker.results)
+                    if (result is not None and result.task.valid()
+                            and result.task.context.generation == self._monitor_generation
+                            and result.task.camera_generation == self._camera_generation
+                            and result.task.context.frame_id[0] == sample.frame_id[0]):
+                        self._monitor_result = result
+                        self._monitor_projections = {
+                            a.track_id: MotionProjection(result.task.frame, a.face_box)
+                            for a in result.assessments}
+                        self._analysis_times.append(started)
+                    if (self._models_ready.is_set() and sample.frame_id != self._monitor_last_offered
+                            and started-self._monitor_offer_time >= REID_MIN_GAP_SECS):
+                        self._live_worker.offer(MonitorTask(
+                            FrameContext(self._monitor_generation, sample.frame_id, sample.captured_at),
+                            sample.frame, time.time()-(started-sample.captured_at), self._monitor_cancel,
+                            uniform_enabled=self._checker.check_uniform,
+                            earring_enabled=self._checker.check_earring,
+                            camera_generation=self._camera_generation))
+                        self._monitor_offer_time = started
+                        self._monitor_last_offered = sample.frame_id
+                    render_key = (sample.frame_id, self._mirror.display_mirror(),
+                                  self.camera_feed.winfo_width(), self.camera_feed.winfo_height())
+                    expired = self._monitor_result is not None and not self._monitor_result.task.valid()
+                    if render_key != self._monitor_render_key or result is not None or expired:
+                        rows = self._monitor_rows(sample)
+                        card_key = (self._monitor_result.task.context.frame_id if self._monitor_result else None,
+                                    tuple(row['presence_id'] for row in rows))
+                        if card_key != self._monitor_card_key:
+                            self._alerts_scroll.update_assessments(rows)
+                            self._monitor_card_key = card_key
+                        annotated = draw_assessments(sample.frame, rows, mirror=self._mirror.display_mirror())
+                        if self.camera_feed.render(self._mirror.apply_anim(annotated)):
+                            if sample.frame_id != self._monitor_last_rendered:
+                                self._preview_times.append(started)
+                            self._monitor_last_rendered = sample.frame_id
+                            self._monitor_render_key = render_key
+                    result = self._monitor_result
+                    detail = ("Loading recognition models…" if not self._models_ready.is_set() else
+                              result.detail if result is not None and result.detail else
+                              "Monitoring" if result is not None else "Identifying")
+                    status_text = f"Camera: Active · {detail}"
+                    if status_text != getattr(self, '_monitor_status_text', None):
+                        self._status_camera.configure(text=status_text, text_color=COLOR_SAFE)
+                        self._monitor_status_text = status_text
+            if started-self._metrics_time >= 1:
+                self._metrics_time = started
+                self._status_fps.configure(text=f"Preview {self._measured_rate(self._preview_times, started):.1f} FPS · "
+                                          f"Analysis {self._measured_rate(self._analysis_times, started):.1f}/s")
         except Exception as exc:
             print(f"[CBVMS] feed error: {exc}")
-        self._feed_job = self.after(self._feed_interval_ms, self._update_feed)
+        if not self._closed.is_set():
+            delay = max(1, self._feed_interval_ms-int((time.monotonic()-started)*1000))
+            self._feed_job = self.after(delay, self._update_feed)
 
     # ------------------------------------------------------------------
     # Clock & stats
@@ -1701,154 +1293,47 @@ class CBVMSDashboard(ctk.CTk):
         self._refresh_stats()
 
     def _refresh_stats(self) -> None:
+        if not self._closed.is_set() and not self._stats_busy.is_set():
+            self._stats_busy.set()
+            threading.Thread(target=self._read_stats, daemon=True, name="monitor-statistics").start()
+        if not self._closed.is_set():
+            self._stats_job = self.after(10_000, self._refresh_stats)
+
+    def _read_stats(self):
         try:
             self._database.process_expired_deadlines()
-            today_start, tomorrow_start = local_calendar_day_utc_bounds(
-                date.today().isoformat()
-            )
+            start, end = local_calendar_day_utc_bounds(date.today().isoformat())
             with self._database.connect() as conn:
-                today = conn.execute(
-                    """SELECT COUNT(*) AS c FROM violations
-                       WHERE datetime(timestamp) >= datetime(?)
-                         AND datetime(timestamp) < datetime(?)""",
-                    (today_start, tomorrow_start),
-                ).fetchone()
-                pending_review = conn.execute(
-                    "SELECT COUNT(*) AS c FROM violations WHERE status = 'pending_review'"
-                ).fetchone()
-                students   = conn.execute("SELECT COUNT(*) AS c FROM students WHERE student_status='Enrolled' AND registration_pending=0").fetchone()
-                last       = conn.execute("SELECT MAX(timestamp) AS ts FROM violations").fetchone()
-
-            if self._stat_today_value:
-                self._stat_today_value.configure(text=str(int(today["c"] if today else 0)))
-            if self._stat_unreviewed_value:
-                self._stat_unreviewed_value.configure(
-                    text=str(int(pending_review["c"] if pending_review else 0))
-                )
-            if self._stat_students_value:
-                self._stat_students_value.configure(text=str(int(students["c"] if students else 0)))
-            if self._stat_last_value:
-                ts = (last["ts"] if last else None) or ""
-                self._stat_last_value.configure(
-                    text=str(ts)[11:19] if len(str(ts)) >= 19 else (str(ts) or "—")
-                )
-        except Exception:
-            pass
-        self._stats_job = self.after(10_000, self._refresh_stats)
+                today = conn.execute("SELECT COUNT(*) FROM violations WHERE datetime(timestamp)>=datetime(?) AND datetime(timestamp)<datetime(?)", (start,end)).fetchone()[0]
+                pending = conn.execute("SELECT COUNT(*) FROM violations WHERE status='pending_review'").fetchone()[0]
+                students = conn.execute("SELECT COUNT(*) FROM students WHERE student_status='Enrolled' AND registration_pending=0").fetchone()[0]
+                last = conn.execute("SELECT MAX(timestamp) FROM violations").fetchone()[0]
+            from core.discipline import parse_db_datetime
+            stamp = parse_db_datetime(last).astimezone().strftime("%m-%d %H:%M:%S") if last else "—"
+            if not self._closed.is_set():
+                _put_latest(self._stats_out, (str(today),str(pending),str(students),stamp))
+        except Exception as exc:
+            print(f"[CBVMS] statistics unavailable: {exc}")
+        finally:
+            self._stats_busy.clear()
 
     # ------------------------------------------------------------------
     # Alerts
     # ------------------------------------------------------------------
 
     def _clear_alerts(self) -> None:
-        self._alerts.clear()
-        self._face_presence.clear()
-        self._db_log_cooldowns.clear()   # reset so next detection logs fresh
-        self._uniform_ema.clear()        # drop smoothed uniform state for a clean slate
-        self._refresh_alerts_ui()
-
-    def _refresh_alerts_ui(self) -> None:
-        for child in self._alerts_scroll.winfo_children():
-            child.destroy()
-
-        if not self._alerts:
-            ctk.CTkLabel(
-                self._alerts_scroll, text="No alerts yet",
-                font=body_font(12), text_color=COLOR_TEXT_MUTED,
-            ).pack(pady=20)
-            return
-
-        for entry in self._alerts:
-            matched = entry["matched"]
-            violation = entry.get("violation")
-            violations = violation.split(", ") if violation else []
-
-            # Dot: yellow = unknown, red = violation(s), green = clean
-            if not matched:
-                dot_color = COLOR_WARNING
-            elif violations or entry.get("suspension_tag"):
-                dot_color = COLOR_DANGER
-            else:
-                dot_color = COLOR_SAFE
-
-            card = ctk.CTkFrame(
-                self._alerts_scroll,
-                fg_color=COLOR_SURFACE,
-                corner_radius=CORNER_RADIUS,
-                border_width=1,
-                border_color=COLOR_BORDER,
-            )
-            card.pack(fill="x", pady=(0, 6))
-
-            # Header row: dot + name + time
-            header = ctk.CTkFrame(card, fg_color="transparent")
-            header.pack(fill="x", padx=10, pady=(8, 2))
-
-            ctk.CTkLabel(
-                header, text="●", font=body_font(14), text_color=dot_color,
-            ).pack(side="left", padx=(0, 6))
-            ctk.CTkLabel(
-                header, text=entry["name"], font=body_font(13),
-                text_color=COLOR_TEXT, anchor="w",
-            ).pack(side="left", fill="x", expand=True)
-            ctk.CTkLabel(
-                header, text=entry["time"], font=body_small_font(),
-                text_color=COLOR_TEXT_MUTED,
-            ).pack(side="right")
-
-            # Details row: student ID + gender
-            details = ctk.CTkFrame(card, fg_color="transparent")
-            details.pack(fill="x", padx=10, pady=(0, 4))
-            ctk.CTkLabel(
-                details,
-                text=f"ID: {entry['student_id']}   Gender: {entry['gender']}",
-                font=body_small_font(), text_color=COLOR_TEXT_MUTED, anchor="w",
-            ).pack(side="left")
-
-            if matched:
-                ctk.CTkLabel(card, text=entry.get("student_status", "Enrolled"),
-                    font=body_small_font(), text_color=COLOR_TEXT_MUTED).pack(anchor="w", padx=10)
-            if entry.get("suspension_tag"):
-                ctk.CTkLabel(card, text=entry["suspension_tag"], wraplength=280,
-                    font=body_small_font(), text_color=COLOR_DANGER).pack(anchor="w", padx=10, pady=4)
-            # Violation / status row
-            if not matched:
-                ctk.CTkLabel(
-                    card, text="Unrecognized / Possible Visitor", font=body_small_font(),
-                    text_color=COLOR_TEXT_MUTED, anchor="w",
-                ).pack(anchor="w", padx=10, pady=(0, 8))
-            elif violations:
-                pill_row = ctk.CTkFrame(card, fg_color="transparent")
-                pill_row.pack(anchor="w", fill="x", padx=10, pady=(0, 8))
-                for v in violations:
-                    ctk.CTkLabel(
-                        pill_row, text=v, font=body_small_font(),
-                        text_color=COLOR_DANGER, fg_color="#3A1414",
-                        corner_radius=999, padx=8, pady=2,
-                    ).pack(side="left", padx=(0, 4), pady=2)
-            else:
-                ctk.CTkLabel(
-                    card, text=("Entry observed" if entry.get("student_status") in ("Graduate", "Unenrolled")
-                                else "Pending verification" if entry.get("student_status") == "Pending verification"
-                                else "Suspension alert" if entry.get("suspension_tag") else "✓ OK"), font=body_small_font(),
-                    text_color=COLOR_SAFE, anchor="w",
-                ).pack(anchor="w", padx=10, pady=(0, 8))
-
-        # Scroll to newest (top)
-        try:
-            self._alerts_scroll._parent_canvas.yview_moveto(0)
-        except Exception:
-            pass
-
-    # ------------------------------------------------------------------
-    # Shutdown
-    # ------------------------------------------------------------------
+        self._alerts_scroll.clear()
 
     def _logout(self) -> None:
         self._logout_requested = True
         self._on_close()
 
     def _on_close(self) -> None:
+        self._closed.set()
+        self._monitor_cancel.set()
+        self._live_worker.stop()
+        self._enrollment_panel.on_hide()
+        self._training_panel.on_hide()
         if self._camera_switch_job is not None:
             try:
                 self.after_cancel(self._camera_switch_job)
