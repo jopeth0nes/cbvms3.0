@@ -119,6 +119,7 @@ class StudentManagementUITests(unittest.TestCase):
             portal = types.SimpleNamespace(db=db, student_id="S1", _student=db.get_student_by_student_id("S1"),
                 _standing_labels=[], _scroll_host=lambda *a: ctk.CTkScrollableFrame(root),
                 _card=StudentPortal._card, _photo_from_blob=lambda *a: None,
+                _change_profile_photo=MagicMock(),
                 _open_update_profile=lambda: None, _activity_log_card=lambda *a, **k: None)
             StudentPortal._panel_profile(portal)
             self.assertEqual(portal._standing_labels[0][0].cget("text"), "Graduate")

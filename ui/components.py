@@ -1,5 +1,6 @@
 """Reusable UI theme and widgets for CBVMS."""
 
+from pathlib import Path
 import sys
 import time
 
@@ -8,28 +9,24 @@ import cv2
 import numpy as np
 import tkinter as tk
 
-COLOR_BG = "#0F1117"
-COLOR_SURFACE = "#1A1D27"
-COLOR_BORDER = "#2A2F3D"
-COLOR_ACCENT = "#3B82F6"
-COLOR_ACCENT_HOVER = "#2563EB"
+COLOR_BG = "#101D29"
+COLOR_SURFACE = "#192B39"
+COLOR_BORDER = "#304655"
+COLOR_ACCENT = "#218779"
+COLOR_ACCENT_HOVER = "#196B62"
 COLOR_SAFE = "#10B981"
 COLOR_DANGER = "#EF4444"
 COLOR_WARNING = "#F59E0B"
-COLOR_TEXT = "#F9FAFB"
-COLOR_TEXT_MUTED = "#9CA3AF"
+COLOR_TEXT = "#F5F2E9"
+COLOR_TEXT_MUTED = "#AABCC5"
 
-ROW_STRIPE_ODD = "#1A1F2E"
-ROW_STRIPE_EVEN = "#151921"
+ROW_STRIPE_ODD = "#203543"
+ROW_STRIPE_EVEN = "#172733"
 
 APP_VERSION = "1.0.0"
-APP_COLLEGE_NAME = "Your College Name"
+APP_COLLEGE_NAME = "Dr. Yanga's Colleges, Inc."
 
-FONT_FAMILY = "SF Pro Display"
-try:
-    ctk.CTkFont(family=FONT_FAMILY)
-except Exception:
-    FONT_FAMILY = "Segoe UI"
+FONT_FAMILY = "Segoe UI"
 
 CORNER_RADIUS = 12
 CORNER_RADIUS_LG = 16
@@ -41,7 +38,7 @@ SIDEBAR_RIGHT_WIDTH = 280
 
 def apply_cbvms_theme() -> None:
     ctk.set_appearance_mode("dark")
-    ctk.set_default_color_theme("blue")
+    ctk.set_default_color_theme(str(Path(__file__).with_name("campus_theme.json")))
 
 
 def heading_font(size: int = 22, weight: str = "bold") -> ctk.CTkFont:

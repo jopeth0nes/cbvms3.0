@@ -12,7 +12,8 @@ import tkinter as tk
 from datetime import date, datetime
 
 import customtkinter as ctk
-from PIL import Image, ImageTk
+from PIL import Image, ImageOps, ImageTk
+import sqlite3
 
 import os
 from tkinter import filedialog
@@ -26,28 +27,30 @@ from core.discipline import (
     violation_display_name,
 )
 from database.db_manager import CBVMSDatabase
+from ui.components import apply_cbvms_theme
+from ui.welcome import welcome_banner
 
 # --- Light-theme palette (all colors live here; nothing hardcoded below) ---
-SP_BG = "#F4F6F9"          # page background
-SP_SIDEBAR = "#1E2A3A"     # dark navy sidebar
+SP_BG = "#F6F4EE"          # page background
+SP_SIDEBAR = "#101D29"     # dark navy sidebar
 SP_SURFACE = "#FFFFFF"     # card/panel background
-SP_ACCENT = "#1A56DB"      # blue accent
-SP_TEXT = "#111827"        # primary text
-SP_MUTED = "#6B7280"       # secondary/muted text
-SP_BORDER = "#E5E7EB"      # card borders
+SP_ACCENT = "#167568"      # blue accent
+SP_TEXT = "#192F3B"        # primary text
+SP_MUTED = "#5E7078"       # secondary/muted text
+SP_BORDER = "#DCDDD5"      # card borders
 SP_SAFE = "#059669"        # green (compliant)
 SP_DANGER = "#DC2626"      # red (violation)
 SP_WARNING = "#D97706"     # orange (unreviewed)
 # Local supporting tints (kept SP_*-prefixed; no equivalents above)
-SP_ACCENT_HOVER = "#1648B0"
+SP_ACCENT_HOVER = "#105E54"
 SP_WHITE = "#FFFFFF"
-SP_SIDEBAR_ACTIVE = "#2B3B52"   # active/hover nav highlight (lighter navy)
-SP_SIDEBAR_HOVER = "#26344A"
-SP_SIDEBAR_MUTED = "#9AA7B8"
+SP_SIDEBAR_ACTIVE = "#284650"   # active/hover nav highlight (lighter navy)
+SP_SIDEBAR_HOVER = "#203543"
+SP_SIDEBAR_MUTED = "#B2C4CA"
 SP_PILL_WARN_BG = "#FEF3C7"     # unreviewed pill bg
 SP_PILL_OK_BG = "#D1FAE5"       # reviewed pill bg
-SP_PLACEHOLDER_BG = "#EDEFF3"
-SP_HOVER_LIGHT = "#EEF2FB"
+SP_PLACEHOLDER_BG = "#EAECE5"
+SP_HOVER_LIGHT = "#E7F1ED"
 
 _SIDEBAR_FULL = 280
 _SIDEBAR_COMPACT = 200
@@ -67,7 +70,7 @@ _REPORT_CATEGORIES = ["System Bug", "Account Issue", "Violation Dispute", "Other
 
 
 def _f(size: int, weight: str = "normal") -> ctk.CTkFont:
-    return ctk.CTkFont(size=size, weight=weight)
+    return ctk.CTkFont(family="Segoe UI", size=size, weight=weight)
 
 
 def _parse_ts(ts: str | None) -> datetime | None:
@@ -89,6 +92,7 @@ class StudentPortal(ctk.CTk):
 
     def __init__(self, *, student_id: str, display_name: str) -> None:
         super().__init__()
+        apply_cbvms_theme()
         ctk.set_appearance_mode("light")
 
         self.student_id = student_id
@@ -126,11 +130,15 @@ class StudentPortal(ctk.CTk):
 
         self._build_sidebar()
         self._content = ctk.CTkFrame(self, fg_color=SP_BG)
-        self._content.grid(row=0, column=1, sticky="nsew")
+        welcome_banner(self, self.display_name, "Student").grid(
+            row=0, column=1, sticky="ew", padx=24, pady=(18, 0))
+        self.grid_rowconfigure(0, weight=0)
+        self.grid_rowconfigure(1, weight=1)
+        self._content.grid(row=1, column=1, sticky="nsew")
         self._content.grid_columnconfigure(0, weight=1)
         self._content.grid_rowconfigure(0, weight=1)
 
-        self._show("dashboard")
+        self._show("dashboard", reload=False)
         self.after(250, self._poll_ai_updates)
 
     # ------------------------------------------------------------------
@@ -221,7 +229,7 @@ class StudentPortal(ctk.CTk):
 
     def _build_sidebar(self) -> None:
         self._sidebar = ctk.CTkFrame(self, width=_SIDEBAR_FULL, fg_color=SP_SIDEBAR, corner_radius=0)
-        self._sidebar.grid(row=0, column=0, sticky="nsw")
+        self._sidebar.grid(row=0, column=0, rowspan=2, sticky="nsw")
         self._sidebar.grid_propagate(False)
         self._sidebar.grid_rowconfigure(2, weight=1)
 
@@ -231,7 +239,7 @@ class StudentPortal(ctk.CTk):
         top = ctk.CTkFrame(brand, fg_color="transparent")
         top.pack(anchor="w")
         ctk.CTkLabel(top, text="🛡️", font=_f(28)).pack(side="left", padx=(0, 8))
-        ctk.CTkLabel(top, text="SECURE", font=_f(22, "bold"), text_color=SP_WHITE).pack(side="left")
+        ctk.CTkLabel(top, text="CBVMS", font=_f(22, "bold"), text_color=SP_WHITE).pack(side="left")
         self._subtitle = ctk.CTkLabel(
             brand,
             text="Student Entrance Camera-based Uniform, Grooming, Accessory "
@@ -245,8 +253,8 @@ class StudentPortal(ctk.CTk):
         user.grid(row=1, column=0, sticky="ew", padx=20, pady=(8, 6))
         ctk.CTkLabel(user, text=self.display_name, font=_f(14, "bold"),
                      text_color=SP_WHITE, anchor="w").pack(anchor="w")
-        ctk.CTkLabel(user, text="STUDENT", font=_f(11, "bold"),
-                     text_color=SP_ACCENT, anchor="w").pack(anchor="w")
+        ctk.CTkLabel(user, text="STUDENT WORKSPACE", font=_f(11, "bold"),
+                     text_color="#D0AE68", anchor="w").pack(anchor="w")
         ctk.CTkFrame(self._sidebar, height=1, fg_color=SP_SIDEBAR_ACTIVE).grid(
             row=1, column=0, sticky="ew", padx=20, pady=(0, 0))
 
@@ -288,8 +296,8 @@ class StudentPortal(ctk.CTk):
     # Panel dispatch
     # ------------------------------------------------------------------
 
-    def _show(self, key: str) -> None:
-        if key in {"dashboard", "violations", "notifications", "appeals", "profile"}:
+    def _show(self, key: str, *, reload: bool = True) -> None:
+        if reload and key in {"dashboard", "violations", "notifications", "appeals", "profile"}:
             self._reload_workflow_data()
         self._active = key
         self._standing_labels = []
@@ -1126,11 +1134,14 @@ class StudentPortal(ctk.CTk):
                       font=_f(13), command=self._open_update_profile).grid(row=0, column=1, sticky="e")
 
         # Photo
-        photo_box = ctk.CTkFrame(card, fg_color=SP_PLACEHOLDER_BG, corner_radius=12,
+        photo_column = ctk.CTkFrame(card, fg_color="transparent")
+        photo_column.grid(row=1, column=0, sticky="nw", padx=20, pady=(0, 16))
+        photo_box = ctk.CTkFrame(photo_column, fg_color=SP_PLACEHOLDER_BG, corner_radius=12,
                                  width=200, height=200)
-        photo_box.grid(row=1, column=0, sticky="nw", padx=20, pady=(0, 16))
+        photo_box.pack()
         photo_box.grid_propagate(False)
-        photo = self._photo_from_blob(self._student.get("photo"), 196, 196)
+        photo = self._photo_from_blob(
+            self._student.get("profile_photo") or self._student.get("photo"), 196, 196)
         if photo is not None:
             lbl = tk.Label(photo_box, image=photo, bg=SP_PLACEHOLDER_BG, bd=0)
             lbl._img_ref = photo
@@ -1140,6 +1151,11 @@ class StudentPortal(ctk.CTk):
             ph.place(relx=0.5, rely=0.5, anchor="center")
             ctk.CTkLabel(ph, text="👤", font=_f(40), text_color=SP_MUTED).pack()
             ctk.CTkLabel(ph, text="No photo uploaded", font=_f(11), text_color=SP_MUTED).pack()
+
+        ctk.CTkButton(photo_column, text="Change Photo", width=160, height=34,
+                      corner_radius=8, fg_color=SP_ACCENT, hover_color=SP_ACCENT_HOVER,
+                      text_color=SP_WHITE, font=_f(13),
+                      command=self._change_profile_photo).pack(pady=(12, 0))
 
         # Fields
         fields = ctk.CTkFrame(card, fg_color="transparent")
@@ -1244,6 +1260,41 @@ class StudentPortal(ctk.CTk):
                       command=_save_pw).pack(side="right")
 
         self._activity_log_card(scroll, row=2)
+
+    def _change_profile_photo(self) -> None:
+        path = filedialog.askopenfilename(
+            parent=self, title="Choose Profile Photo",
+            filetypes=[("Images", "*.jpg *.jpeg *.png *.webp *.bmp")],
+        )
+        if not path:
+            return
+        try:
+            if os.path.getsize(path) > 10 * 1024 * 1024:
+                self._toast("Please choose an image smaller than 10 MB.", "error")
+                return
+            with Image.open(path) as source:
+                if source.width * source.height > 20_000_000:
+                    self._toast("Please choose an image under 20 megapixels.", "error")
+                    return
+                image = ImageOps.exif_transpose(source).convert("RGB")
+                image.thumbnail((800, 800), Image.Resampling.LANCZOS)
+                output = io.BytesIO()
+                image.save(output, format="JPEG", quality=90)
+            photo = output.getvalue()
+        except (OSError, ValueError, Image.DecompressionBombError):
+            self._toast("Unable to open this image. Please choose another photo.", "error")
+            return
+        try:
+            saved = self.db.update_student_profile_photo(self.student_id, photo)
+        except sqlite3.Error:
+            self._toast("Could not save your photo. Please try again.", "error")
+            return
+        if not saved:
+            self._toast("Student profile was not found.", "error")
+            return
+        self._log_activity("Profile photo changed", "Student updated their profile photo")
+        self._show("profile")
+        self._toast("Profile photo updated.")
 
     def _open_update_profile(self) -> None:
         modal = ctk.CTkToplevel(self)

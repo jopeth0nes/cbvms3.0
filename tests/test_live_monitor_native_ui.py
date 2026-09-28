@@ -124,6 +124,9 @@ class DashboardNativeLifecycleTests(unittest.TestCase):
                 errors = []
                 app.report_callback_exception = lambda *args: errors.append(args)
                 try:
+                    self.assertEqual(set(app._views), {'live'})
+                    self.assertIsNone(app._enrollment_panel)
+                    self.assertIsNone(app._training_panel)
                     frame = np.zeros((720, 1280, 3), np.uint8)
                     sequence = count()
                     app._camera = SimpleNamespace(is_open=True, get_latest_sample=lambda:
@@ -137,6 +140,11 @@ class DashboardNativeLifecycleTests(unittest.TestCase):
                     token = app._monitor_cancel
                     app._on_nav_select('enrollment')
                     self.assertTrue(token.is_set())
+                    enrollment = app._enrollment_panel
+                    self.assertIsNotNone(enrollment)
+                    app._on_nav_select('live')
+                    app._on_nav_select('enrollment')
+                    self.assertIs(app._enrollment_panel, enrollment)
                     app._on_nav_select('live')
                     app.update()
                     self.assertEqual(errors, [])

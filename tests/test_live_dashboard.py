@@ -289,6 +289,28 @@ class LiveDashboardTests(unittest.TestCase):
         self.assertEqual(original.face_box, (50, 40, 90, 90))
         self.assertEqual(original.torso_box, (40, 95, 125, 200))
 
+    def test_shutdown_releases_resources_with_opened_or_unopened_pages(self):
+        for opened in (False, True):
+            with self.subTest(opened=opened):
+                panel = dashboard()
+                panel._enrollment_panel = MagicMock() if opened else None
+                panel._training_panel = MagicMock() if opened else None
+                panel._camera_switch_job = None
+                panel._live_worker.stop = MagicMock()
+                panel._halt_camera = MagicMock()
+                panel.destroy = MagicMock()
+                token = panel._monitor_cancel
+                CBVMSDashboard._on_close(panel)
+                self.assertTrue(panel._closed.is_set())
+                self.assertTrue(token.is_set())
+                panel._live_worker.stop.assert_called_once()
+                panel._halt_camera.assert_called_once()
+                panel.camera_feed.cleanup.assert_called_once()
+                panel.destroy.assert_called_once()
+                if opened:
+                    panel._enrollment_panel.on_hide.assert_called_once()
+                    panel._training_panel.on_hide.assert_called_once()
+
     def test_shutdown_tick_does_not_requeue_or_touch_widgets(self):
         panel = dashboard()
         panel._closed.set()
