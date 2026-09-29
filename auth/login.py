@@ -12,6 +12,7 @@ from auth.auth_manager import AuthManager
 from auth.register import StudentRegistrationWindow
 from ui.components import apply_cbvms_theme
 from ui.login_intro import LoginIntro
+from ui.window_lifecycle import WorkspaceWindow
 
 
 def body_font(size: int = 14, weight: str = "normal") -> ctk.CTkFont:
@@ -19,7 +20,7 @@ def body_font(size: int = 14, weight: str = "normal") -> ctk.CTkFont:
 
 
 
-class CBVMSLoginWindow(ctk.CTk):
+class CBVMSLoginWindow(WorkspaceWindow):
     WIDTH = 920
     HEIGHT = 620
 
@@ -188,6 +189,11 @@ class CBVMSLoginWindow(ctk.CTk):
         self.login_btn.configure(state="disabled")
         self.unbind("<Return>")
         self.password_entry.delete(0, "end")
+        # Retire the form rather than letting deferred draws flash beneath
+        # the greeting during the role handoff.
+        for child in self.winfo_children():
+            if isinstance(child, ctk.CTkFrame):
+                child.grid_remove()
         panel = ctk.CTkFrame(self, fg_color="#101D29", corner_radius=0)
         panel.place(x=0, y=0, relwidth=1, relheight=1)
         panel.lift()

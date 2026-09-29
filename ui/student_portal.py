@@ -29,6 +29,7 @@ from core.discipline import (
 from database.db_manager import CBVMSDatabase
 from ui.components import apply_cbvms_theme
 from ui.welcome import welcome_banner
+from ui.window_lifecycle import WorkspaceWindow
 
 # --- Light-theme palette (all colors live here; nothing hardcoded below) ---
 SP_BG = "#F6F4EE"          # page background
@@ -87,11 +88,12 @@ def _display_ts(ts: str | None, *, fallback: str = "—") -> str:
     return parsed.strftime("%b %d, %Y · %H:%M")
 
 
-class StudentPortal(ctk.CTk):
+class StudentPortal(WorkspaceWindow):
     """Light-theme single-window portal scoped to one student_id."""
 
     def __init__(self, *, student_id: str, display_name: str) -> None:
         super().__init__()
+        self.withdraw()
         apply_cbvms_theme()
         ctk.set_appearance_mode("light")
 
@@ -140,6 +142,7 @@ class StudentPortal(ctk.CTk):
 
         self._show("dashboard", reload=False)
         self.after(250, self._poll_ai_updates)
+        self.after_idle(self.reveal_when_ready)
 
     # ------------------------------------------------------------------
     # Activity log + toast

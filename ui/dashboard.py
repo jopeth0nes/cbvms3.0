@@ -31,6 +31,7 @@ from core.violation_engine import LiveViolationChecker
 from database.db_manager import CBVMSDatabase
 from ui.camera_feed import CameraFeed
 from ui.welcome import welcome_banner
+from ui.window_lifecycle import WorkspaceWindow
 from ui.enrollment import EnrollmentPanel
 from ui.notifications_panel import NotificationsPanel
 from ui.settings import SettingsPanel
@@ -100,7 +101,7 @@ def _drain(q: "queue.Queue"):
 ORANGE_BGR = (0, 165, 255)   # torso box color (distinct from green/red/blue face box)
 
 
-class CBVMSDashboard(ctk.CTk):
+class CBVMSDashboard(WorkspaceWindow):
     def __init__(
         self,
         username: str = "admin",
@@ -110,6 +111,7 @@ class CBVMSDashboard(ctk.CTk):
         person_detector: "PersonDetector | None" = None,
     ) -> None:
         super().__init__()
+        self.withdraw()
         self.username = username
         self._logout_requested = False
         self._active_nav = "live"
@@ -235,6 +237,7 @@ class CBVMSDashboard(ctk.CTk):
         self._tick_clock()
         self._schedule_feed_update()
         self.after(80, self._deferred_start_camera)   # start the camera ASAP after the UI maps
+        self.after_idle(self.reveal_when_ready)
 
     # ------------------------------------------------------------------
     # UI construction
