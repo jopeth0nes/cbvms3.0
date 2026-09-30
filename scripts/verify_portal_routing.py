@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Prove confirmed violations route to the correct student's portal.
+"""Prove pending and confirmed violations route to the correct student's portal.
 
 Two checks, using the real workflow APIs rather than reimplementing portal rules:
 
   1. Isolation proof on a THROWAWAY temp DB. Enrolls two students with one
      ``pending_review`` violation each, then exercises ``confirm_violation`` and
-     ``get_visible_violations_for_student``. It asserts that pending detections stay hidden and
+     ``get_visible_violations_for_student``. It asserts that pending detections remain strike-free and
      each confirmed violation becomes visible only to its owner.
 
   2. Real-DB summary on data/cbvms.db through a SQLite ``mode=ro`` connection. The real database
@@ -97,8 +97,9 @@ def temp_proof() -> bool:
             "B has exactly 1 pending-review violation, keyed to B",
         )
         ok &= _ok(
-            portal_visible(db, a_sid) == [] and portal_visible(db, b_sid) == [],
-            "review gate: both portals are empty while violations are pending review",
+            all(len(portal_visible(db, sid)) == 1 and not portal_visible(db, sid)[0]["can_appeal"]
+                and not portal_visible(db, sid)[0]["strike_active"] for sid in (a_sid, b_sid)),
+            "both owners see their own pending detection without a strike or appeal window",
         )
 
         # Login resolves through the account's student number, never a display name.
@@ -118,7 +119,7 @@ def temp_proof() -> bool:
             "after confirmation, A sees A's violation",
         )
         ok &= _ok(
-            len(vis_b) == 0,
+            len(vis_b) == 1 and vis_b[0]["student_id"] == b_sid and vis_b[0]["status"] == PENDING_REVIEW,
             "after confirming A, B still sees zero of A's violations",
         )
 
@@ -213,7 +214,7 @@ def real_summary(db_path: Path, confirm_id: int | None) -> bool:
         if conn is not None:
             conn.close()
 
-    print("  student_id      | violations | confirmed/visible | enrolled?")
+    print("  student_id      | violations | confirmed        | enrolled?")
     print("  " + "-" * 70)
     for sid, count, visible in rows:
         sid_text = str(sid or "unknown")

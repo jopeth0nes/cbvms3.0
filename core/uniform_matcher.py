@@ -89,9 +89,11 @@ class UniformColorMatcher:
             if not _REF_PATH.exists():
                 return False
             data = json.loads(_REF_PATH.read_text())
-            self._hue_lo = int(data["hue_lo"])
-            self._hue_hi = int(data["hue_hi"])
-            self._n_samples = int(data.get("n_samples", 0))
+            lo, hi = int(data["hue_lo"]), int(data["hue_hi"])
+            samples = int(data.get("n_samples", 0))
+            if not (-180 < lo < 180 and lo < hi < 360 and hi-lo < 180 and samples > 0):
+                raise ValueError("Invalid uniform colour reference; rebuild it in Training")
+            self._hue_lo, self._hue_hi, self._n_samples = lo, hi, samples
             return True
         except Exception as exc:
             print(f"[UniformMatcher] load failed: {exc}")

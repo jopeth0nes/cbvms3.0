@@ -7,7 +7,7 @@ import threading
 import time
 import types
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from api.camera_manager import CameraManager
 from core.camera import CAMERA_DEVICE_LOCK, CameraCapture
@@ -497,6 +497,9 @@ class DashboardSwitchRegressionTests(unittest.TestCase):
             _camera=Capture(),
             _camera_needed=lambda: True,
             _active_nav="live",
+            _status_camera=MagicMock(), _status_models=MagicMock(),
+            _readiness=types.SimpleNamespace(message=lambda: "Loading face detector", snapshot=lambda: {}),
+            _retry_model_btn=MagicMock(),
             camera_feed=types.SimpleNamespace(
                 show_placeholder=lambda _text: placeholders.append(True)
             ),

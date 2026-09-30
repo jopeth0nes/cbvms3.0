@@ -1,4 +1,5 @@
 """Real Tk widgets and temporary records; camera and model access is unnecessary."""
+import gc
 import sqlite3
 import tempfile
 import time
@@ -21,6 +22,9 @@ class SuspensionsUITests(unittest.TestCase):
     OTHER = "2023-883"
 
     def setUp(self):
+        # Finalize fonts from previous destroyed Tk roots on Tk's thread, not
+        # during a later database worker's incidental cyclic collection.
+        gc.collect()
         self.root = ctk.CTk()
         self.root.withdraw()
         self.addCleanup(self.root.destroy)
@@ -39,8 +43,8 @@ class SuspensionsUITests(unittest.TestCase):
     def wait_loaded(self):
         deadline = time.monotonic() + 5
         while self.panel._loading and time.monotonic() < deadline:
-            self.root.update()
-            time.sleep(.01)
+            self.root.after(20,self.root.quit)
+            self.root.mainloop()
         self.root.update()
         self.assertFalse(self.panel._loading, "Student data load did not finish")
         self.assertEqual(self.errors, [])
@@ -175,6 +179,11 @@ class SuspensionsUITests(unittest.TestCase):
         self.assertIn(self.SID, self.panel._identity.cget("text"))
 
     def test_visible_layout_resizes_and_keeps_actions_reachable(self):
+        def settle():
+            # CTkTabview.set schedules old-tab removal after 100 ms. Let that
+            # transition finish before checking mapping or scrolling geometry.
+            self.root.after(160, self.root.quit)
+            self.root.mainloop()
         self.root.grid_columnconfigure(0, weight=1)
         self.root.grid_rowconfigure(0, weight=1)
         self.panel.grid(row=0, column=0, sticky="nsew")
@@ -185,7 +194,7 @@ class SuspensionsUITests(unittest.TestCase):
         self.panel._on_violation_select()
         for width in (720, 1000):
             self.root.geometry(f"{width}x720")
-            self.root.update()
+            settle()
             controls = (self.panel._year_filter, self.panel._course_filter, self.panel._clear_filters_btn)
             for left, right in zip(controls, controls[1:]):
                 self.assertLessEqual(left.winfo_rootx() + left.winfo_width(), right.winfo_rootx())
@@ -195,7 +204,7 @@ class SuspensionsUITests(unittest.TestCase):
                                  self.panel._student_tree.winfo_rooty())
             for tab in ("Violation History", "Suspension History", "Manage Suspension"):
                 self.panel._tabs.set(tab)
-                self.root.update()
+                settle()
                 self.assertLessEqual(self.panel._message.winfo_rooty() + self.panel._message.winfo_height(),
                                      self.root.winfo_rooty() + self.root.winfo_height())
                 footer = {"Violation History": self.panel._violation_detail,
@@ -206,7 +215,7 @@ class SuspensionsUITests(unittest.TestCase):
                                          self.panel._tabs.winfo_rooty() + self.panel._tabs.winfo_height())
             form = self.panel._start.master
             form._parent_canvas.yview_moveto(1)
-            self.root.update()
+            settle()
             self.assertLessEqual(self.panel._assign_btn.winfo_rooty() + self.panel._assign_btn.winfo_height(),
                                  form._parent_canvas.winfo_rooty() + form._parent_canvas.winfo_height())
         self.assertEqual(self.errors, [])

@@ -18,6 +18,7 @@ import cv2
 import numpy as np
 
 from core.model_safety import locked_model
+from core.diagnostics import event
 
 ROOT = Path(__file__).resolve().parents[1]
 TRAIN_DIR = ROOT / "data" / "training"
@@ -71,6 +72,7 @@ class ViolationTrainer:
     def __init__(self) -> None:
         self._model_lock = RLock()
         self._models: dict[str, object] = {}  # module -> loaded YOLO model
+        self.last_error = {}
 
     # ------------------------------------------------------------------
     # Helpers
@@ -337,11 +339,22 @@ class ViolationTrainer:
         if not self.is_trained(module):
             return None
         try:
+            path = ROOT / MODULES[module]["model_out"]
+            if not path.is_file() or path.stat().st_size < 1024:
+                raise RuntimeError(f"Missing or incomplete classifier weights: {path}")
+            event("model_asset", component=module, path=str(path), provider="cpu")
             from ultralytics import YOLO
-            model = YOLO(str(ROOT / MODULES[module]["model_out"]))
+            model = YOLO(str(path))
+            if getattr(model, "task", "classify") != "classify":
+                raise RuntimeError(f"Expected a classification model: {path}")
+            names = getattr(model, "names", None)
+            if names is not None and set(names.values()) != set(MODULES[module]["labels"]):
+                raise RuntimeError(f"Incompatible {module} labels in {path}: {sorted(names.values())}")
             self._models[module] = model
+            self.last_error.pop(module, None)
             return model
         except Exception as exc:
+            self.last_error[module] = str(exc)
             print(f"[Trainer] could not load {module} model: {exc}")
             return None
 

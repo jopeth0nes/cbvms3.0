@@ -162,18 +162,21 @@ class _ClosingConnection(sqlite3.Connection):
 
 
 class CBVMSDatabase(StudentManagement):
-    def __init__(self, db_path: Path | str | None = None) -> None:
+    def __init__(self, db_path: Path | str | None = None, *, timeout: float = 30.) -> None:
         if db_path is None:
             root = Path(__file__).resolve().parent.parent
             db_path = root / "data" / "cbvms.db"
-        self.db_path = Path(db_path)
+        self.timeout = timeout
+        self.db_path = Path(db_path).expanduser().resolve()
+        from core.diagnostics import event
+        event("database_resolved", path=str(self.db_path))
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
 
     def connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path, timeout=30.0, factory=_ClosingConnection)
+        conn = sqlite3.connect(self.db_path, timeout=self.timeout, factory=_ClosingConnection)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
-        conn.execute("PRAGMA busy_timeout = 30000")
+        conn.execute(f"PRAGMA busy_timeout = {int(self.timeout * 1000)}")
         return conn
 
     def initialize(self, *, process_deadlines: bool = True) -> None:
@@ -1094,7 +1097,7 @@ class CBVMSDatabase(StudentManagement):
         return True
 
     def process_expired_deadlines(
-        self, *, now: datetime | str | None = None
+        self, *, now: datetime | str | None = None, student_id: str | None = None
     ) -> dict[str, int]:
         """Idempotently auto-confirm reviews and close unused appeal windows."""
 
@@ -1102,15 +1105,17 @@ class CBVMSDatabase(StudentManagement):
         if now_dt is None:
             raise ValueError("now must be a valid datetime")
         now_text = format_db_datetime(now_dt)
+        scope = " AND student_id = ?" if student_id is not None else ""
+        scope_args = (student_id,) if student_id is not None else ()
         with self.connect() as conn:
             pending_rows = [
                 (int(row["id"]), row["review_deadline"])
                 for row in conn.execute(
-                    """SELECT id, review_deadline FROM violations
+                    f"""SELECT id, review_deadline FROM violations
                        WHERE status = ? AND review_deadline IS NOT NULL
-                         AND review_deadline <= ?
+                         AND review_deadline <= ? {scope}
                        ORDER BY review_deadline, id""",
-                    (PENDING_REVIEW, now_text),
+                    (PENDING_REVIEW, now_text, *scope_args),
                 ).fetchall()
             ]
 
@@ -1127,21 +1132,21 @@ class CBVMSDatabase(StudentManagement):
                 auto_confirmed += 1
 
         placeholders = ",".join("?" for _ in CONFIRMED_STATUSES)
+        # A normal read with no due transitions must not take SQLite's writer lock.
+        due = f"""status IN ({placeholders}) AND appeal_deadline IS NOT NULL
+                  AND appeal_deadline < ? AND appeal_window_closed_at IS NULL
+                  AND NOT EXISTS (SELECT 1 FROM appeals a WHERE a.violation_id = violations.id)
+                  {scope}"""
+        args = (*CONFIRMED_STATUSES, now_text, *scope_args)
+        appeal_windows_expired = 0
         with self.connect() as conn:
-            cursor = conn.execute(
-                f"""UPDATE violations
-                    SET appeal_window_closed_at = ?
-                    WHERE status IN ({placeholders})
-                      AND appeal_deadline IS NOT NULL
-                      AND appeal_deadline < ?
-                      AND appeal_window_closed_at IS NULL
-                      AND NOT EXISTS (
-                          SELECT 1 FROM appeals a WHERE a.violation_id = violations.id
-                      )""",
-                (now_text, *CONFIRMED_STATUSES, now_text),
-            )
-            appeal_windows_expired = int(cursor.rowcount)
-            conn.commit()
+            if conn.execute(f"SELECT 1 FROM violations WHERE {due} LIMIT 1", args).fetchone():
+                cursor = conn.execute(
+                    f"UPDATE violations SET appeal_window_closed_at = ? WHERE {due}",
+                    (now_text, *args),
+                )
+                appeal_windows_expired = int(cursor.rowcount)
+                conn.commit()
         return {
             "auto_confirmed": auto_confirmed,
             "appeal_windows_expired": appeal_windows_expired,
@@ -1219,18 +1224,37 @@ class CBVMSDatabase(StudentManagement):
         student_id: str,
         *,
         now: datetime | str | None = None,
+        process_deadlines: bool = True,
+        include_snapshot: bool = True,
+        limit: int | None = None,
+        offset: int = 0,
+        group: str = "All",
+        violation_id: int | None = None,
     ) -> list[dict]:
-        """Confirmed historical records enriched for the authenticated student UI."""
+        """One authoritative history: pending, confirmed, and resolved owner records."""
 
         now_dt = parse_db_datetime(now) if now is not None else utc_now()
         if now_dt is None:
             raise ValueError("now must be a valid datetime")
-        self.process_expired_deadlines(now=now_dt)
-        placeholders = ",".join("?" for _ in CONFIRMED_STATUSES)
+        if process_deadlines:
+            self.process_expired_deadlines(now=now_dt, student_id=student_id)
         sid = (student_id or "").strip()
+        filters = {"All": "1", "Pending": "v.status IN ('pending_review','unreviewed')",
+                   "Resolved": "(v.status = 'dismissed' OR a.status = 'approved')",
+                   "Confirmed": "v.status NOT IN ('pending_review','unreviewed','dismissed') AND COALESCE(a.status,'') != 'approved'"}
+        condition = filters[group]
+        params = [sid]
+        if violation_id is not None:
+            condition += " AND v.id = ?"
+            params.append(int(violation_id))
+        paging = " LIMIT ? OFFSET ?" if limit is not None else ""
+        if limit is not None:
+            params.extend((int(limit), int(offset)))
         with self.connect() as conn:
+            columns = "v.*" if include_snapshot else ",".join(
+                "v." + row[1] for row in conn.execute("PRAGMA table_info(violations)") if row[1] != "snapshot")
             rows = conn.execute(
-                f"""SELECT v.*,
+                f"""SELECT {columns}, (v.snapshot IS NOT NULL AND length(v.snapshot) > 0) AS has_snapshot,
                            t.semester_code, t.semester_name, t.school_year,
                            st.id AS strike_id, st.is_active AS strike_active,
                            st.deactivated_at AS strike_deactivated_at,
@@ -1242,17 +1266,15 @@ class CBVMSDatabase(StudentManagement):
                     LEFT JOIN academic_terms t ON t.id = v.semester_id
                     LEFT JOIN strikes st ON st.violation_id = v.id
                     LEFT JOIN appeals a ON a.violation_id = v.id
-                    WHERE v.student_id = ? AND v.status IN ({placeholders})
-                    ORDER BY datetime(v.timestamp) DESC, v.id DESC""",
-                (sid, *CONFIRMED_STATUSES),
+                    WHERE v.student_id = ? AND {condition}
+                    ORDER BY datetime(v.timestamp) DESC, v.id DESC {paging}""",
+                params,
             ).fetchall()
 
         result: list[dict] = []
         for raw in rows:
             item = dict(raw)
-            eligibility = self.get_appeal_eligibility(
-                int(item["id"]), sid, now=now_dt
-            )
+            eligibility = self._appeal_eligibility_from_row(item, sid, now_dt)
             item["can_appeal"] = eligibility["eligible"]
             item["appeal_eligibility_reason"] = eligibility["reason"]
             item["appeal_status"] = item.get("appeal_status") or "not_submitted"
@@ -1263,12 +1285,16 @@ class CBVMSDatabase(StudentManagement):
             item["appeal_remaining_seconds"] = (
                 max(0, int((deadline - now_dt).total_seconds())) if deadline else 0
             )
-            if item.get("appeal_id"):
+            if item.get("status") in ("pending_review", "unreviewed"):
+                item["appeal_window_status"] = "not_started"
+            elif item.get("status") == "dismissed":
+                item["appeal_window_status"] = "resolved"
+            elif item.get("appeal_id"):
                 item["appeal_window_status"] = "submitted"
             elif eligibility["eligible"]:
                 item["appeal_window_status"] = "eligible"
             else:
-                item["appeal_window_status"] = "expired"
+                item["appeal_window_status"] = "expired" if deadline else "unavailable"
             result.append(item)
         return result
 
@@ -1295,6 +1321,11 @@ class CBVMSDatabase(StudentManagement):
                    WHERE v.id = ?""",
                 (violation_id,),
             ).fetchone()
+        return self._appeal_eligibility_from_row(row, sid, now_dt)
+
+    @staticmethod
+    def _appeal_eligibility_from_row(row, sid, now_dt):
+        """Shared rules for a joined list row and authoritative submit-time validation."""
         if row is None:
             return {"eligible": False, "reason": "not_found", "deadline": None}
         if (row["student_id"] or "").strip() != sid:
@@ -1584,8 +1615,10 @@ class CBVMSDatabase(StudentManagement):
             print(f"[DB] insert_notification error: {exc}")
             return None
 
-    def get_notifications_for_student(self, student_id: str) -> list[dict]:
+    def get_notifications_for_student(self, student_id: str, *, limit: int | None = None, offset: int = 0) -> list[dict]:
         """Delivered notifications only; pending/dismissed detections stay hidden."""
+        paging = " LIMIT ? OFFSET ?" if limit is not None else ""
+        params = (int(limit), int(offset)) if limit is not None else ()
         placeholders = ",".join("?" for _ in CONFIRMED_STATUSES)
         with self.connect() as conn:
             rows = conn.execute(
@@ -1593,9 +1626,9 @@ class CBVMSDatabase(StudentManagement):
                     LEFT JOIN violations v ON v.id = n.violation_id
                     WHERE n.student_id = ?
                       AND (n.violation_id IS NULL
-                           OR v.status IN ({placeholders}))
-                    ORDER BY datetime(n.created_at) DESC, n.id DESC""",
-                ((student_id or "").strip(), *CONFIRMED_STATUSES),
+                           OR (v.student_id = n.student_id AND v.status IN ({placeholders})))
+                    ORDER BY datetime(n.created_at) DESC, n.id DESC {paging}""",
+                ((student_id or "").strip(), *CONFIRMED_STATUSES, *params),
             ).fetchall()
         return [dict(r) for r in rows]
 
@@ -1608,15 +1641,17 @@ class CBVMSDatabase(StudentManagement):
                     LEFT JOIN violations v ON v.id = n.violation_id
                     WHERE n.student_id = ? AND n.is_read = 0
                       AND (n.violation_id IS NULL
-                           OR v.status IN ({placeholders}))""",
+                           OR (v.student_id = n.student_id AND v.status IN ({placeholders})))""",
                 ((student_id or "").strip(), *CONFIRMED_STATUSES),
             ).fetchone()
         return int(row["count"] if row else 0)
 
-    def mark_notification_read(self, notif_id: int) -> bool:
+    def mark_notification_read(self, notif_id: int, *, student_id: str | None = None) -> bool:
         with self.connect() as conn:
             cursor = conn.execute(
-                "UPDATE student_notifications SET is_read = 1 WHERE id = ?", (notif_id,)
+                "UPDATE student_notifications SET is_read = 1 WHERE id = ?" +
+                (" AND student_id = ?" if student_id is not None else ""),
+                (notif_id, student_id) if student_id is not None else (notif_id,),
             )
             conn.commit()
             return cursor.rowcount > 0
@@ -1647,11 +1682,13 @@ class CBVMSDatabase(StudentManagement):
     # Appeals helpers
     # ------------------------------------------------------------------
 
-    def get_appeals_for_student(self, student_id: str) -> list[dict]:
+    def get_appeals_for_student(self, student_id: str, *, limit: int | None = None, offset: int = 0) -> list[dict]:
         """All appeals for a student, newest first."""
+        paging = " LIMIT ? OFFSET ?" if limit is not None else ""
+        params = (int(limit), int(offset)) if limit is not None else ()
         with self.connect() as conn:
             rows = conn.execute(
-                """
+                f"""
                 SELECT a.*, v.violation_type, v.violation_code,
                        v.timestamp AS violation_ts, v.confirmed_at,
                        v.appeal_deadline, v.status AS violation_status,
@@ -1660,10 +1697,10 @@ class CBVMSDatabase(StudentManagement):
                 FROM appeals a
                 JOIN violations v ON v.id = a.violation_id
                 LEFT JOIN strikes st ON st.violation_id = v.id
-                WHERE a.student_id = ?
-                ORDER BY a.submitted_at DESC
+                WHERE a.student_id = ? AND v.student_id = a.student_id
+                ORDER BY a.submitted_at DESC, a.id DESC {paging}
                 """,
-                ((student_id or "").strip(),),
+                ((student_id or "").strip(), *params),
             ).fetchall()
         return [dict(r) for r in rows]
 

@@ -105,10 +105,11 @@ class SuspensionHistoryTests(unittest.TestCase):
         student_login.result = {"role": "student", "student_id": self.SID,
                                 "display_name": "Same Name", "username": "learner"}
         portal = MagicMock(logged_out=False)
+        auth = MagicMock()
         with patch("auth.login.CBVMSLoginWindow", return_value=student_login), \
                 patch("ui.student_portal.StudentPortal", return_value=portal) as factory:
-            self.assertIsNone(run_login(MagicMock()))
-            factory.assert_called_once_with(student_id=self.SID, display_name="Same Name")
+            self.assertIsNone(run_login(auth))
+            factory.assert_called_once_with(student_id=self.SID, display_name="Same Name", database=auth._db)
         self.assertNotIn("suspensions", [key for key, _ in _NAV_ITEMS])
         admin_login = MagicMock()
         admin_login.result = {"role": "admin", "username": "osa"}

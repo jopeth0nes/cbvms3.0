@@ -8,6 +8,8 @@ model on first use. CPU only. No new dependencies (ultralytics already present).
 from __future__ import annotations
 
 from threading import RLock
+from pathlib import Path
+from core.diagnostics import event
 
 import cv2
 import numpy as np
@@ -30,27 +32,33 @@ _KP_CONF_MIN = 0.30
 # Bare-skin HSV band for the "can't judge" guard — flags a crop that has drifted onto the
 # face/neck instead of the shirt. OpenCV HSV: H 0-179, S/V 0-255. The band is deliberately
 # tight around skin hues so a coloured polo is not mistaken for skin.
-_SKIN_HSV_LO = (0, 30, 60)
+_SKIN_HSV_LO = (0, 50, 60)
 _SKIN_HSV_HI = (25, 170, 255)
-_SKIN_FRAC_MAX = 0.55    # crop with > this fraction of skin pixels is "mostly skin" → abstain
+# A visible neckline is expected; abstain when most of the validated crop is skin.
+MAX_TORSO_SKIN_FRACTION = 0.50
 
 
 def skin_fraction(crop_bgr: np.ndarray) -> float:
     """Fraction (0..1) of a BGR crop that is bare-skin coloured.
 
     Used by the uniform abstain guard: a torso crop that has slipped onto the face/neck reads
-    as predominantly skin. The denominator is the usable body pixels (not black/blown) so a
-    dark background can't dilute the ratio. Returns 0.0 when there is too little to judge.
+    as predominantly skin. Ignore black pixels, but retain bright shirt pixels in the
+    denominator: dropping white fabric inflates the ratio around an exposed neckline.
+    This is a conservative colour heuristic, not skin segmentation.
     """
     if crop_bgr is None or crop_bgr.size == 0:
         return 0.0
     hsv = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2HSV)
     V = hsv[..., 2]
-    body = (V >= 35) & (V <= 250)
+    body = V >= 35
     n_body = int(body.sum())
     if n_body < 50:
         return 0.0
-    skin = (cv2.inRange(hsv, _SKIN_HSV_LO, _SKIN_HSV_HI) > 0) & body
+    # Low-chroma, warm-lit white fabric shares skin's hue but is not skin. Require
+    # appreciable saturation and a red chroma component as well. Hue alone was
+    # labelling almost the entire white shirt as skin in the live webcam crop.
+    cr = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2YCrCb)[..., 1]
+    skin = (cv2.inRange(hsv, _SKIN_HSV_LO, _SKIN_HSV_HI) > 0) & (cr >= 135) & body
     return float(int(skin.sum())) / float(n_body)
 
 
@@ -90,8 +98,8 @@ class PersonDetector:
     than a fixed fraction of the person box, which drifts with pose/arms/sitting.
     """
 
-    _MODEL_PATH = "yolov8n.pt"        # auto-downloads if missing
-    _POSE_MODEL_PATH = "yolov8n-pose.pt"  # auto-downloads once (~6 MB)
+    _MODEL_PATH = str(Path(__file__).resolve().parents[1] / "yolov8n.pt")
+    _POSE_MODEL_PATH = str(Path(__file__).resolve().parents[1] / "yolov8n-pose.pt")
     # Lowered 0.40 -> 0.25 so a clearly-visible upright entrant isn't dropped frame-to-frame
     # (the live torso box must be present on every frame a person is visible). 0.25 is a
     # standard YOLO confidence floor; IoU/NMS unchanged so duplicate boxes are still merged.
@@ -101,6 +109,8 @@ class PersonDetector:
     def __init__(self) -> None:
         self._model_lock = RLock()
         self._model = None
+        self.last_error = None
+        self.use_pose = False  # optional; live geometry does not wait for pose
         self._load_failed = False
         self._pose_model = None
         self._pose_load_failed = False
@@ -116,11 +126,15 @@ class PersonDetector:
         if self._load_failed:
             return None
         try:
+            if not Path(self._MODEL_PATH).is_file() or Path(self._MODEL_PATH).stat().st_size < 1024:
+                raise RuntimeError(f"Missing or incomplete body weights: {self._MODEL_PATH}")
+            event("model_asset", component="body", path=self._MODEL_PATH, provider="cpu")
             from ultralytics import YOLO
             self._model = YOLO(self._MODEL_PATH)  # ~6 MB, auto-downloads once
             return self._model
         except Exception as exc:
             print(f"[PersonDetector] model load failed: {exc}")
+            self.last_error = str(exc)
             self._load_failed = True
             return None
 
@@ -131,6 +145,8 @@ class PersonDetector:
         if self._pose_load_failed:
             return None
         try:
+            if not Path(self._POSE_MODEL_PATH).is_file() or Path(self._POSE_MODEL_PATH).stat().st_size < 1024:
+                raise RuntimeError(f"Missing or incomplete pose weights: {self._POSE_MODEL_PATH}")
             from ultralytics import YOLO
             self._pose_model = YOLO(self._POSE_MODEL_PATH)  # ~6 MB, auto-downloads once
             return self._pose_model
@@ -160,8 +176,11 @@ class PersonDetector:
                     x1, y1, x2, y2 = [int(v) for v in b.xyxy[0].tolist()]
                     boxes.append([x1, y1, x2, y2])
             boxes.sort(key=lambda b: (b[2] - b[0]) * (b[3] - b[1]), reverse=True)
+            self.last_error = None
             return boxes
         except Exception as exc:
+            self.last_error = str(exc)
+            event("body_inference_failed", error=str(exc))
             print(f"[PersonDetector] detect error: {exc}")
             return []
 
@@ -296,9 +315,9 @@ class PersonDetector:
         frame_shape: tuple[int, ...],
         person_box: list[int] | None = None,
         *,
-        down: float = 3.0,
-        top_margin: float = 0.10,
-        width_pad: float = 0.5,
+        down: float = 2.0,
+        top_margin: float = 0.45,
+        width_pad: float = 0.4,
     ) -> list[int] | None:
         """Chest/shirt box anchored to the detected face — the torso is directly below it.
 
@@ -308,9 +327,14 @@ class PersonDetector:
         works for both close-up and full-body framing. Geometry:
 
           * top    = chin + ``top_margin``*face_h   (margin below the chin, skips the neck)
-          * bottom = chin + ``down``*face_h          (~3x face-height down through the shirt)
-          * width  = matched person box (shoulders) when available, else ``3x`` the face width
-                     centred on the face — i.e. ``cx ± (1+width_pad)*face_w``.
+          * bottom = chin + ``down``*face_h
+          * width  = face width plus ``width_pad`` on each side (1.8x by default),
+                     intersected with the middle 60% of the matched person box.
+
+        A full person box includes arms and background. Its central chest is the useful
+        clothing region, particularly for a seated person with exposed shoulders. All
+        bounds depend on geometry, never on which patch produces a preferred verdict.
+        Require at least a quarter-face-height of visible shirt, not a thin frame-edge strip.
 
         Returns [x1,y1,x2,y2] or None if too small. This is the guaranteed fallback floor used
         by :meth:`chest_region`.
@@ -324,17 +348,18 @@ class PersonDetector:
 
         top = int(fy2 + top_margin * fh)       # margin below the chin (skip the neck)
         bottom = int(fy2 + down * fh)          # down through the shirt
+        half = int(fw * (0.5 + width_pad))
+        left, right = cx - half, cx + half
         if person_box is not None:
             px1, py1, px2, py2 = [int(v) for v in person_box]
-            left, right = px1, px2
+            inset = int((px2 - px1) * 0.20)
+            left, right = max(left, px1 + inset), min(right, px2 - inset)
+            top = max(top, py1)
             bottom = min(bottom, py2)           # never past the body
-        else:
-            half = int(fw * (1.0 + width_pad))  # total width = 3x face width centred on cx
-            left, right = cx - half, cx + half
 
         left, top = max(0, left), max(0, top)
         right, bottom = min(W, right), min(H, bottom)
-        if (right - left) < _MIN_CROP_PX or (bottom - top) < _MIN_CROP_PX:
+        if (right - left) < max(_MIN_CROP_PX, 0.75 * fw) or (bottom - top) < max(_MIN_CROP_PX, 0.25 * fh):
             return None
         return [left, top, right, bottom]
 
@@ -348,22 +373,11 @@ class PersonDetector:
         face_box: list[int],
         person_box: list[int] | None = None,
     ) -> tuple[list[int] | None, str]:
-        """Final torso/chest region for uniform classification, clamped below the chin.
+        """Visible central chest for classification; the caller must validate ownership.
 
-        Identity face detection is reliable every frame, so the recognised face box anchors a
-        hard geometric floor: every candidate region has its TOP pushed below the chin
-        (:func:`clamp_top_below_chin`) before it can be used — the crop can never include the
-        face. Order of preference, all clamped:
-
-          (a)/(b) pose shoulders(+hips) box  [:meth:`pose_torso_box`, needs a person box;
-                  prefers the shoulder+hip quad, falls internally to a shoulder-width extent
-                  when the hips are off-frame] →
-          (c) face-anthropometry chest box   [:meth:`get_uniform_region`, works with no
-                  person box — the guaranteed floor].
-
-        Returns ``(region|None, method)`` with method in ``{'pose', 'face', 'none'}``. Pose
-        failing or clamping to nothing simply falls through to (c), which is almost always
-        available, so the box no longer drops in/out frame-to-frame.
+        Optional pose can further restrict the face-anchored region. It cannot widen
+        the crop back onto bare arms or move its top up onto the neck. An insufficient
+        visible chest returns None instead of classifying a tiny strip or the face.
         """
         if frame_bgr is None or frame_bgr.size == 0 or face_box is None:
             return None, "none"
@@ -372,15 +386,22 @@ class PersonDetector:
         if face_h <= 0:
             return None, "none"
 
+        face_reg = self.get_uniform_region(face_box, frame_bgr.shape, person_box)
+        if face_reg is None:
+            return None, "none"
+
         # (a)/(b) pose — only when we can restrict pose to this person's box.
-        if person_box is not None:
+        if person_box is not None and self.use_pose:
             pose = self.pose_torso_box(frame_bgr, person_box)
-            clamped = clamp_top_below_chin(pose, chin_y, face_h, frame_bgr.shape)
-            if clamped is not None:
-                return clamped, "pose"
+            if pose is not None:
+                restricted = [max(pose[0], face_reg[0]), max(pose[1], face_reg[1]),
+                              min(pose[2], face_reg[2]), min(pose[3], face_reg[3])]
+                clamped = clamp_top_below_chin(restricted, chin_y, face_h, frame_bgr.shape)
+                if (clamped is not None and clamped[2]-clamped[0] >= 0.75*(fx2-fx1)
+                        and clamped[3]-clamped[1] >= 0.25*face_h):
+                    return clamped, "pose"
 
         # (c) face-derived chest box — guaranteed floor; works with or without a person box.
-        face_reg = self.get_uniform_region(face_box, frame_bgr.shape, person_box)
         clamped = clamp_top_below_chin(face_reg, chin_y, face_h, frame_bgr.shape)
         if clamped is not None:
             return clamped, "face"

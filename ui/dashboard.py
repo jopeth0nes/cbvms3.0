@@ -20,9 +20,11 @@ from core.discipline import local_calendar_day_utc_bounds
 from core.notifier import Notifier
 from core.person_detector import PersonDetector
 from core.recognizer import FaceRecognizer
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from core.live_state import FrameContext, LiveConfig, LiveState
-from core.live_pipeline import LiveProcessor, LiveWorker, MonitorTask, MotionProjection
+from core.model_readiness import face_readiness
+from core.diagnostics import event
+from core.live_pipeline import LiveProcessor, LiveWorker, MonitorTask, MotionProjection, FaceTrackingProcessor
 from ui.live_alerts import LiveAlerts
 from ui.live_overlay import draw_assessments
 from core.uniform_matcher import UniformColorMatcher
@@ -182,9 +184,14 @@ class CBVMSDashboard(ctk.CTk):
         self._monitor_offer_time = 0.0
         self._preview_times = deque(maxlen=120)
         self._analysis_times = deque(maxlen=30)
+        self._tracking_times = deque(maxlen=30)
         self._metrics_time = 0.0
         self._closed = threading.Event()
-        self._models_ready = threading.Event()
+        self._readiness = face_readiness(self._recognizer)
+        self._tracking_result = None
+        self._tracking_projections = {}
+        self._tracking_last_offered = None
+        self._tracking_offer_time = 0.
         self._notification_out = queue.Queue(maxsize=50)
         self._stats_out = queue.Queue(maxsize=1)
         self._stats_busy = threading.Event()
@@ -194,7 +201,11 @@ class CBVMSDashboard(ctk.CTk):
             latest_sample=self._latest_monitor_sample,
             state=LiveState(LiveConfig(violation_min_confidence=UNIFORM_VIOLATION_CONF)),
         )
-        self._live_worker = LiveWorker(self._processor)
+        self._processor.readiness = self._readiness
+        self._live_worker = LiveWorker(self._processor, persistence_worker=True)
+        self._tracking_worker = LiveWorker(FaceTrackingProcessor(
+            self._recognizer, self._person_detector, self._readiness, self._on_localized))
+        self._tracking_worker.start()
         self._live_worker.start()
         try:
             cv2.setNumThreads(2)
@@ -404,27 +415,41 @@ class CBVMSDashboard(ctk.CTk):
 
         status_bar = ctk.CTkFrame(
             self._live_frame, fg_color=COLOR_SURFACE,
-            corner_radius=CORNER_RADIUS, border_width=1, border_color=COLOR_BORDER, height=48,
+            corner_radius=CORNER_RADIUS, border_width=1, border_color=COLOR_BORDER,
         )
         status_bar.grid(row=2, column=0, sticky="ew")
-        status_bar.grid_propagate(False)
+        status_bar.grid_columnconfigure(0, weight=1)
 
         self._status_camera = ctk.CTkLabel(
             status_bar, text="Camera: Starting…",
             font=body_small_font(), text_color=COLOR_TEXT_MUTED,
         )
-        self._status_camera.pack(side="left", padx=PADDING, pady=12)
+        self._status_camera.grid(row=0, column=0, sticky='w', padx=PADDING, pady=(8,0))
 
-        self._camera_spinner = ctk.CTkProgressBar(status_bar, mode="indeterminate", width=140)
+        spinner_host = ctk.CTkFrame(status_bar, fg_color='transparent', width=110, height=24)
+        spinner_host.pack_propagate(False)
+        spinner_host.grid(row=0, column=1, padx=8)
+        self._camera_spinner = ctk.CTkProgressBar(spinner_host, mode="indeterminate", width=100)
         self._camera_spinner.pack(side="right", padx=(0, 10), pady=14)
         self._camera_spinner.stop()
         self._camera_spinner.pack_forget()
 
+        self._retry_model_btn = ctk.CTkButton(status_bar, text="Retry model loading", width=145,
+                                              command=self._retry_models)
+        self._retry_model_btn.grid(row=0, column=2, rowspan=2, padx=8, pady=8)
         self._status_fps = ctk.CTkLabel(
             status_bar, text="FPS: —",
             font=body_small_font(), text_color=COLOR_ACCENT,
         )
-        self._status_fps.pack(side="right", padx=PADDING)
+        self._status_fps.grid(row=1, column=0, columnspan=2, sticky='w', padx=PADDING, pady=(0,8))
+        status_bar.bind('<Configure>', lambda e: self._status_camera.configure(
+            wraplength=max(150,e.width-300)))
+        self._status_models = ctk.CTkLabel(
+            self._live_frame, text="Loading face detector", anchor="w", justify="left",
+            wraplength=1050, font=body_small_font(), text_color=COLOR_TEXT_MUTED)
+        self._status_models.grid(row=3, column=0, sticky="ew", padx=PADDING, pady=(4, 8))
+        self._live_frame.bind('<Configure>',lambda e: self._status_models.configure(
+            wraplength=max(180,e.width-2*PADDING)),add='+')
 
         # Build secondary pages only when first opened, then reuse them.
         self._panel_factories = {
@@ -959,12 +984,16 @@ class CBVMSDashboard(ctk.CTk):
                             print(f"[Dashboard camera] requested {requested_width}x{requested_height} "
                                   f"@ {requested_fps} FPS; reported {settings}")
                     self._camera_events.put(("opened", generation, cap, ok))
+                    last_received = time.monotonic()
                     while ok and not stop.is_set():
                         frame = cap.read()
                         if frame is None:
-                            if not cap.is_open:
+                            if not cap.is_open or time.monotonic()-last_received > 3:
+                                event("camera_stalled", generation=generation)
                                 break
                             time.sleep(0.005)
+                        else:
+                            last_received = time.monotonic()
                 except Exception as exc:
                     cap.last_error = str(exc)
                     self._camera_events.put(("opened", generation, cap, False))
@@ -1072,50 +1101,50 @@ class CBVMSDashboard(ctk.CTk):
     # ------------------------------------------------------------------
 
     def _prewarm_models(self) -> None:
-        """Load + prime the heavy models at launch so Live Monitor scans immediately.
+        def load_body():
+            if self._person_detector is None:
+                raise RuntimeError("Body detector unavailable")
+            self._person_detector._load_failed = False
+            if self._person_detector._ensure_model() is None:
+                raise RuntimeError(self._person_detector.last_error or "Body detector failed")
+            # A saved reference is reused, never rebuilt by camera startup.
+            self._person_detector.detect_persons(np.zeros((320, 320, 3), np.uint8))
+            if self._person_detector.last_error:
+                raise RuntimeError(self._person_detector.last_error)
+            return True
 
-        Runs on a daemon thread (pure CV work, no Tk). A tiny dummy inference primes the
-        ONNX/torch graphs so the very first real frame isn't slowed by graph allocation.
-        """
-        dummy = np.zeros((480, 640, 3), dtype=np.uint8)
-        try:
-            if self._recognizer._ensure_models():
-                self._recognizer.detect_faces(dummy)        # prime SCRFD detection graph
-        except Exception as exc:
-            print(f"[CBVMS] recognizer prewarm failed: {exc}")
-        try:
-            if self._person_detector is not None:
-                self._person_detector._ensure_model()
-                self._person_detector.detect_persons(dummy)  # prime YOLO graph
-        except Exception as exc:
-            print(f"[CBVMS] person-detector prewarm failed: {exc}")
-        # Warm any already-trained violation classifiers so the first check isn't delayed.
-        for module in ("uniform", "earring"):
-            try:
-                if self._trainer.is_trained(module):
-                    self._trainer._get_model(module)
-            except Exception:
-                pass
-        # Build the uniform COLOUR reference from the inference-matched torso crops
-        # (data/training_cropped via _source_label_dir) so the hue is learned from the shirt,
-        # not the scene background. The live verdict is classifier AND colour (min); the
-        # ResNet18 embedder was dropped — Step 4 showed it vetoed correctly-worn polos — so it
-        # is no longer built here.
-        try:
-            correct_dir = self._trainer._source_label_dir("uniform", "correct_uniform")
-            n_have = len(list(correct_dir.glob("*.jpg"))) if correct_dir.exists() else 0
-            if n_have >= 1 and (not self._uniform_matcher.is_loaded()
-                                or self._uniform_matcher.sample_count != n_have):
-                self._uniform_matcher.build_from_dir(correct_dir)
-        except Exception as exc:
-            print(f"[CBVMS] uniform reference build failed: {exc}")
-        # Warm the pose model so the first live uniform check doesn't stall on download/load.
-        try:
-            if self._person_detector is not None:
-                self._person_detector._ensure_pose_model()
-        except Exception:
-            pass
-        self._models_ready.set()
+        def load_uniform():
+            if not self._uniform_matcher.is_loaded():
+                self._uniform_matcher.load()
+            if self._trainer.is_trained("uniform"):
+                if self._trainer._get_model("uniform") is None:
+                    raise RuntimeError(self._trainer.last_error.get("uniform") or "Uniform classifier failed")
+                if self._trainer.predict_proba('uniform', np.zeros((224, 224, 3), np.uint8)) is None:
+                    raise RuntimeError("Uniform classifier inference failed; restore compatible weights and retry")
+            else:
+                raise RuntimeError("Train a uniform classifier in Training; colour reference alone cannot assess garments")
+            return True
+
+        def load_earring():
+            if not self._trainer.is_trained("earring"):
+                raise RuntimeError("No trained earring weights")
+            return self._trainer._get_model("earring")
+
+        self._readiness.add("body", load_body)
+        self._readiness.add("uniform", load_uniform)
+        self._readiness.add("earring", load_earring)
+        self._readiness.start()
+
+    def _retry_models(self):
+        self._readiness.start(retry=True)
+
+    def _on_localized(self, result):
+        """Tracking worker submits its original pixels, landmarks and ownership token."""
+        if (not result.task.valid() or not self._readiness.ready('recognition')
+                or result.task.context.captured_at-self._monitor_offer_time < REID_MIN_GAP_SECS):
+            return
+        self._live_worker.offer(replace(result.task, observations=result.observations))
+        self._monitor_offer_time = result.task.context.captured_at
 
     def _latest_monitor_sample(self):
         """Worker-safe read; never starts devices or touches Tk."""
@@ -1123,6 +1152,12 @@ class CBVMSDashboard(ctk.CTk):
         return camera.get_latest_sample() if camera is not None and camera.is_open else None
 
     def _invalidate_monitor(self):
+        if hasattr(self, "_tracking_worker"):
+            _drain(self._tracking_worker.requests)
+            _drain(self._tracking_worker.results)
+            self._tracking_result = None
+            self._tracking_projections.clear()
+            self._tracking_last_offered = None
         self._monitor_cancel.set()
         self._monitor_cancel = threading.Event()
         self._monitor_generation += 1
@@ -1135,29 +1170,68 @@ class CBVMSDashboard(ctk.CTk):
         self._monitor_status_text = None
         self._preview_times.clear()
         self._analysis_times.clear()
+        self._tracking_times.clear()
         _drain(self._live_worker.requests)
         _drain(self._live_worker.results)
         if getattr(self, "_alerts_scroll", None) is not None:
             self._alerts_scroll.mark_all_inactive()
 
     def _monitor_rows(self, sample):
-        result = self._monitor_result
+        for name, projections in (("_monitor_result", self._monitor_projections),
+                                  ("_tracking_result", self._tracking_projections)):
+            result = getattr(self, name)
+            if result is not None and (not result.task.valid()
+                    or result.task.context.generation != self._monitor_generation
+                    or result.task.camera_generation != self._camera_generation
+                    or result.task.context.frame_id[0] != sample.frame_id[0]):
+                event("frame_rejected", stage="display", reason="expired_or_obsolete_session",
+                      frame_id=result.task.context.frame_id)
+                setattr(self, name, None)
+                projections.clear()
+        rows = self._project_rows(self._monitor_result, self._monitor_projections, sample)
+        tracking = self._project_rows(self._tracking_result, self._tracking_projections, sample)
+        if self._tracking_result is not None and self._tracking_result.observations is not None:
+            # One presence namespace. A result is attached only to the track that
+            # supplied its original pixels, and only while optical flow validates it.
+            by_presence={r['presence_id']:r for r in rows}
+            combined=[]
+            for current in tracking:
+                assessed=by_presence.get(current['presence_id'])
+                if assessed is not None:
+                    a,b=current['face_box'],assessed['face_box']
+                    overlap=max(0,min(a[2],b[2])-max(a[0],b[0]))*max(0,min(a[3],b[3])-max(a[1],b[1]))
+                    area=max(1,(a[2]-a[0])*(a[3]-a[1]))
+                    if overlap/area >= .5:
+                        # Current geometry, same-person validated original evidence.
+                        assessed.update(face_box=current['face_box'],torso_box=current['torso_box'])
+                        if current['torso_box'] is None:
+                            assessed.update(state='Uniform not assessed',reason=current['reason'],
+                                            detail=current['reason'],accepted_categories=())
+                        current=assessed
+                combined.append(current)
+            return combined
+        for row in tracking:
+            a = row['face_box']
+            if not any(max(a[0], b['face_box'][0]) < min(a[2], b['face_box'][2]) and
+                       max(a[1], b['face_box'][1]) < min(a[3], b['face_box'][3]) for b in rows):
+                # A detection-only presence cannot inherit a delayed student's result.
+                row['presence_id'] = "tracking:" + row['presence_id']
+                rows.append(row)
+        return rows
+
+    def _project_rows(self, result, projections, sample):
         if result is None or not result.task.valid():
-            self._monitor_result = None
-            self._monitor_projections.clear()
             return []
         if (result.task.context.generation != self._monitor_generation
                 or result.task.camera_generation != self._camera_generation
                 or result.task.context.frame_id[0] != sample.frame_id[0]):
-            self._monitor_result = None
-            self._monitor_projections.clear()
             return []
         gray = None
         rows = []
         for assessment in result.assessments:
             row = asdict(assessment)
             row.update(observed_at=result.task.observed_at, detail=assessment.reason)
-            projection = self._monitor_projections.get(assessment.track_id)
+            projection = projections.get(assessment.track_id)
             if sample.frame_id == result.task.context.frame_id:
                 box = assessment.face_box
             elif projection is not None:
@@ -1168,8 +1242,14 @@ class CBVMSDashboard(ctk.CTk):
                 box = None
             if box is None:
                 # Never attach an old name or verdict to a newly occupied location.
+                if projection is not None and not getattr(projection,'withheld_logged',False):
+                    event('overlay_withheld', presence_id=assessment.presence_id,
+                          frame_id=result.task.context.frame_id, reason='motion_not_verified')
+                    projection.withheld_logged=True
                 continue
-            dx, dy = box[0]-assessment.face_box[0], box[1]-assessment.face_box[1]
+            offset = getattr(projection,'offset',None) if projection is not None else None
+            dx,dy = offset if isinstance(offset,tuple) and len(offset)==2 else (
+                box[0]-max(0,assessment.face_box[0]), box[1]-max(0,assessment.face_box[1]))
             row['face_box'] = box
             if assessment.torso_box:
                 x1,y1,x2,y2 = assessment.torso_box
@@ -1203,43 +1283,64 @@ class CBVMSDashboard(ctk.CTk):
             if self._camera is not None and not self._camera_needed():
                 self._halt_camera()
             if self._active_nav == "live":
+                model_message = self._readiness.message()
+                if model_message != getattr(self, '_model_status_text', None):
+                    self._status_models.configure(text=model_message)
+                    self._model_status_text = model_message
+                failed = any(v.state == 'failed' for v in self._readiness.snapshot().values())
+                if failed != getattr(self, '_model_retry_enabled', None):
+                    self._retry_model_btn.configure(state="normal" if failed else "disabled")
+                    self._model_retry_enabled = failed
                 sample = self._latest_monitor_sample()
                 if sample is None or started-sample.captured_at > 1.0:
                     if self._monitor_last_rendered is not None:
                         self._invalidate_monitor()
+                    message = "Camera: Reconnecting…" if self._camera else "Camera: Disconnected"
+                    self._status_camera.configure(text=message, text_color=COLOR_WARNING)
+                    self._monitor_status_text = message
                     self.camera_feed.show_placeholder("Reconnecting camera…" if self._camera else "No camera connected")
                 else:
                     self._last_frame_request = started
+                    tracking = _drain(self._tracking_worker.results)
+                    if (tracking is not None and tracking.task.valid()
+                            and tracking.task.context.generation == self._monitor_generation
+                            and tracking.task.camera_generation == self._camera_generation
+                            and tracking.task.context.frame_id[0] == sample.frame_id[0]):
+                        self._tracking_times.append(started)
+                        self._tracking_result = tracking
+                        self._tracking_projections = {a.track_id: MotionProjection(tracking.task.frame, a.face_box)
+                                                      for a in tracking.assessments}
+                    if (self._readiness.ready('face') and sample.frame_id != self._tracking_last_offered
+                            and started-self._tracking_offer_time >= .12):
+                        self._tracking_worker.offer(MonitorTask(
+                            FrameContext(self._monitor_generation, sample.frame_id, sample.captured_at),
+                            sample.frame, time.time()-(started-sample.captured_at), self._monitor_cancel,
+                            uniform_enabled=self._checker.check_uniform, earring_enabled=self._checker.check_earring,
+                            camera_generation=self._camera_generation))
+                        self._tracking_last_offered = sample.frame_id
+                        self._tracking_offer_time = started
                     result = _drain(self._live_worker.results)
                     if (result is not None and result.task.valid()
                             and result.task.context.generation == self._monitor_generation
                             and result.task.camera_generation == self._camera_generation
                             and result.task.context.frame_id[0] == sample.frame_id[0]):
+                        if self._monitor_result is None or self._monitor_result.task.context.frame_id != result.task.context.frame_id:
+                            self._analysis_times.append(started)
                         self._monitor_result = result
                         self._monitor_projections = {
                             a.track_id: MotionProjection(result.task.frame, a.face_box)
                             for a in result.assessments}
-                        self._analysis_times.append(started)
-                    if (self._models_ready.is_set() and sample.frame_id != self._monitor_last_offered
-                            and started-self._monitor_offer_time >= REID_MIN_GAP_SECS):
-                        self._live_worker.offer(MonitorTask(
-                            FrameContext(self._monitor_generation, sample.frame_id, sample.captured_at),
-                            sample.frame, time.time()-(started-sample.captured_at), self._monitor_cancel,
-                            uniform_enabled=self._checker.check_uniform,
-                            earring_enabled=self._checker.check_earring,
-                            camera_generation=self._camera_generation))
-                        self._monitor_offer_time = started
-                        self._monitor_last_offered = sample.frame_id
                     render_key = (sample.frame_id, self._mirror.display_mirror(),
                                   self.camera_feed.winfo_width(), self.camera_feed.winfo_height())
                     expired = self._monitor_result is not None and not self._monitor_result.task.valid()
-                    if render_key != self._monitor_render_key or result is not None or expired:
-                        rows = self._monitor_rows(sample)
-                        card_key = (self._monitor_result.task.context.frame_id if self._monitor_result else None,
-                                    tuple(row['presence_id'] for row in rows))
+                    rows = self._monitor_rows(sample)
+                    if render_key != self._monitor_render_key or result is not None or tracking is not None or expired:
+                        card_key = tuple((row['presence_id'], row['state'], row['student_id'],
+                                          row['reason'], row['observed_at']) for row in rows)
                         if card_key != self._monitor_card_key:
                             self._alerts_scroll.update_assessments(rows)
                             self._monitor_card_key = card_key
+                        self._display_rows = tuple(rows)
                         annotated = draw_assessments(sample.frame, rows, mirror=self._mirror.display_mirror())
                         if self.camera_feed.render(self._mirror.apply_anim(annotated)):
                             if sample.frame_id != self._monitor_last_rendered:
@@ -1247,9 +1348,19 @@ class CBVMSDashboard(ctk.CTk):
                             self._monitor_last_rendered = sample.frame_id
                             self._monitor_render_key = render_key
                     result = self._monitor_result
-                    detail = ("Loading recognition models…" if not self._models_ready.is_set() else
-                              result.detail if result is not None and result.detail else
-                              "Monitoring" if result is not None else "Identifying")
+                    detail = (result.detail if result is not None and result.task.valid() and result.detail else
+                              self._tracking_result.detail if self._tracking_result is not None
+                              and self._tracking_result.task.valid() else "Waiting for analysis")
+                    if rows:
+                        detail = ' · '.join(dict.fromkeys(r['state'] for r in rows))
+                    if (detail == "No faces detected" and self._tracking_result is not None
+                            and self._tracking_result.task.valid() and self._tracking_result.assessments):
+                        detail = "Face detected · Identity uncertain"
+                    for worker in (self._tracking_worker, self._live_worker):
+                        if worker.last_error:
+                            detail = f"Analysis failed: {worker.last_error}"
+                        elif worker.active_task is not None and started-worker.active_since > 3:
+                            detail += " · Slow analysis; stale results rejected"
                     status_text = f"Camera: Active · {detail}"
                     if status_text != getattr(self, '_monitor_status_text', None):
                         self._status_camera.configure(text=status_text, text_color=COLOR_SAFE)
@@ -1257,6 +1368,7 @@ class CBVMSDashboard(ctk.CTk):
             if started-self._metrics_time >= 1:
                 self._metrics_time = started
                 self._status_fps.configure(text=f"Preview {self._measured_rate(self._preview_times, started):.1f} FPS · "
+                                          f"Tracking {self._measured_rate(self._tracking_times, started):.1f}/s · "
                                           f"Analysis {self._measured_rate(self._analysis_times, started):.1f}/s")
         except Exception as exc:
             print(f"[CBVMS] feed error: {exc}")
@@ -1320,6 +1432,7 @@ class CBVMSDashboard(ctk.CTk):
     def _on_close(self) -> None:
         self._closed.set()
         self._monitor_cancel.set()
+        self._tracking_worker.stop()
         self._live_worker.stop()
         if self._enrollment_panel is not None:
             self._enrollment_panel.on_hide()
@@ -1359,4 +1472,12 @@ def open_dashboard(
         person_detector=person_detector,
     )
     app.mainloop()
+    # Let cancelled native calls return before Python tears down ONNX/PyTorch
+    # types. Otherwise closing the window can emit spurious model-type errors.
+    deadline=time.monotonic()+5
+    for worker in (app._tracking_worker,app._live_worker):
+        worker.done.wait(max(0,deadline-time.monotonic()))
+    app._live_worker.writes_done.wait(max(0,deadline-time.monotonic()))
+    app._camera_worker_done.wait(max(0,deadline-time.monotonic()))
+    app._readiness.wait(max(0,deadline-time.monotonic()))
     return getattr(app, "_logout_requested", False)

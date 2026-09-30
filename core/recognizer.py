@@ -13,6 +13,10 @@ Two failure modes are addressed here:
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
+from types import SimpleNamespace
+from core.diagnostics import event
 import pickle
 import threading
 from typing import TYPE_CHECKING
@@ -48,6 +52,12 @@ class FaceRecognizer:
         # InsightFace's SCRFD model is shared by detection, recognition and
         # enrollment. Serialize inference separately from model/gallery loading.
         self._model_lock = threading.Lock()
+        self._detector_lock = threading.RLock()
+        self._recognition_lock = threading.RLock()
+        self._detector = None
+        self._recognition = None
+        self.detector_error = None
+        self.model_dir = Path(os.environ.get("CBVMS_FACE_MODEL_DIR", "~/.insightface/models/buffalo_l")).expanduser().resolve()
         self._app = None             # lazy — avoid slow model load at startup
         self._frontal_cascade = None  # lightweight detectors for the has_face() UI hint
         self._profile_cascade = None
@@ -78,57 +88,66 @@ class FaceRecognizer:
     # Model loading (lazy)
     # ------------------------------------------------------------------
 
+    def _local_model(self, filename, task):
+        path = self.model_dir / filename
+        event("model_asset", component=task, path=str(path), provider="CPUExecutionProvider")
+        if not path.is_file() or path.stat().st_size < 1024:
+            raise RuntimeError(f"Missing or incomplete {task} weights: {path}. Install the buffalo_l asset and retry.")
+        # Load only the requested file. FaceAnalysis opens every ONNX before filtering.
+        os.environ.setdefault("NO_ALBUMENTATIONS_UPDATE", "1")
+        import onnxruntime
+        options = onnxruntime.SessionOptions()
+        # Face tracking, recognition and YOLO share the CPU. Default per-session
+        # spinning pools can starve body inference until every result has expired.
+        options.intra_op_num_threads = 2
+        options.inter_op_num_threads = 1
+        options.add_session_config_entry("session.intra_op.allow_spinning", "0")
+        options.add_session_config_entry("session.inter_op.allow_spinning", "0")
+        options.log_severity_level = 3  # fixed output metadata warns at the 320 input size
+        # InsightFace 0.7.3's public get_model silently drops session options;
+        # its router forwards them to the actual ONNX session. Path is validated above.
+        from insightface.model_zoo.model_zoo import ModelRouter
+        model = ModelRouter(str(path)).get_model(providers=["CPUExecutionProvider"], sess_options=options)
+        if model is None or model.taskname != task:
+            raise RuntimeError(f"Incompatible {task} weights: {path}")
+        if task == "detection":
+            model.prepare(ctx_id=-1, input_size=(640, 640), det_thresh=DET_SCORE_MIN)
+        else:
+            model.prepare(ctx_id=-1)
+        return model
+
+    def _ensure_detector(self):
+        with self._detector_lock:
+            if self._detector is None:
+                model = self._local_model("det_10g.onnx", "detection")
+                model.detect(np.zeros((320, 320, 3), np.uint8), input_size=DET_FAST_SIZE)
+                self._detector = model
+                self._app = SimpleNamespace(det_model=model)
+                for attr, filename in (("_frontal_cascade", "haarcascade_frontalface_default.xml"),
+                                       ("_profile_cascade", "haarcascade_profileface.xml")):
+                    cascade = cv2.CascadeClassifier(cv2.data.haarcascades + filename)
+                    setattr(self, attr, None if cascade.empty() else cascade)
+            return self._detector
+
+    def _ensure_recognition(self):
+        with self._recognition_lock:
+            if self._recognition is None:
+                model = self._local_model("w600k_r50.onnx", "recognition")
+                model.get_feat(np.zeros((112, 112, 3), np.uint8))
+                self._recognition = model
+            return self._recognition
+
     def _ensure_models(self) -> bool:
         if self._models_loaded:
             return True
-        # Serialize the (slow) first load — the enrollment wizard warms models on a
-        # background thread while the live face worker may also call this; without the
-        # lock both would build the InsightFace app at once (wasteful, risks a model
-        # download race). The fast path above stays lock-free after load.
-        with self._lock:
-            if self._models_loaded:
-                return True
-            return self._load_models()
-
-    def _load_models(self) -> bool:
         try:
-            from insightface.app import FaceAnalysis
-
-            # Load only the models we actually use: SCRFD detection, ArcFace recognition,
-            # and gender/age (for the unknown-face gender hint). Skipping the 106-point
-            # landmark model speeds up both startup load and per-frame recognition.
-            app = FaceAnalysis(
-                name="buffalo_l",
-                allowed_modules=["detection", "recognition", "genderage"],
-                providers=["CPUExecutionProvider"],
-            )
-            app.prepare(ctx_id=-1, det_size=(640, 640))  # ctx_id=-1 => CPU
-            self._app = app
-
-            # OpenCV Haar cascades power only the lightweight has_face() preview hint,
-            # which runs on the UI thread every 200ms during enrollment — far too often
-            # to run full SCRFD there. Both ship with opencv-python (no download).
-            try:
-                self._frontal_cascade = cv2.CascadeClassifier(
-                    cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
-                )
-                self._profile_cascade = cv2.CascadeClassifier(
-                    cv2.data.haarcascades + "haarcascade_profileface.xml"
-                )
-                if self._frontal_cascade.empty():
-                    self._frontal_cascade = None
-                if self._profile_cascade.empty():
-                    self._profile_cascade = None
-            except Exception as exc:
-                print(f"[Recognizer] cascade load failed: {exc}")
-                self._frontal_cascade = self._profile_cascade = None
-
+            self._ensure_detector()
+            self._ensure_recognition()
             self._models_loaded = True
             self.last_error = None
             return True
         except Exception as exc:
             self.last_error = str(exc)
-            print(f"[Recognizer] model load failed: {exc}")
             return False
 
     # ------------------------------------------------------------------
@@ -144,9 +163,21 @@ class FaceRecognizer:
         if self._app is None or frame_bgr is None or frame_bgr.size == 0:
             return []
         try:
-            with self._model_lock:
-                faces = self._app.get(frame_bgr)  # InsightFace expects BGR frames
-                self.last_error = None
+            from insightface.app.common import Face
+            with self._detector_lock:
+                boxes, keypoints = self._detector.detect(frame_bgr, input_size=(640, 640))
+                # Close faces may be visible at preview scale but missed at 640.
+                # Keep the same model and threshold before declaring no faces.
+                if not len(boxes):
+                    boxes, keypoints = self._detector.detect(frame_bgr, input_size=DET_FAST_SIZE)
+            faces = []
+            # ArcFace has a separate owner lock; it cannot hold up fast SCRFD tracking.
+            with self._recognition_lock:
+                for i, box in enumerate(boxes):
+                    face = Face(bbox=box[:4], kps=keypoints[i], det_score=box[4])
+                    self._recognition.get(frame_bgr, face)
+                    faces.append(face)
+            self.last_error = None
         except Exception as exc:
             self.last_error = str(exc)
             print(f"[Recognizer] detect error: {exc}")
@@ -169,24 +200,39 @@ class FaceRecognizer:
         so the overlay can refresh box positions ~10-15x more often than identity.
         Returns [{"box": [x1,y1,x2,y2], "score": float}] for confident detections.
         """
-        if not self._ensure_models():
-            return []
         if frame_bgr is None or frame_bgr.size == 0:
             return []
         try:
-            with self._model_lock:
-                bboxes, _kpss = self._app.det_model.detect(frame_bgr, input_size=DET_FAST_SIZE)
+            detector = self._ensure_detector()
+            with self._detector_lock:
+                bboxes, _kpss = detector.detect(frame_bgr, input_size=DET_FAST_SIZE)
+            self.detector_error = None
         except Exception as exc:
-            print(f"[Recognizer] detect_faces error: {exc}")
-            return []
+            self.detector_error = str(exc)
+            raise RuntimeError(f"Face detection unavailable: {exc}") from exc
         out: list[dict] = []
-        for row in bboxes:
+        for index, row in enumerate(bboxes):
             score = float(row[4])
             if score < DET_SCORE_MIN:
                 continue
             out.append({"box": [int(row[0]), int(row[1]), int(row[2]), int(row[3])],
-                        "score": score})
+                        "score": score,
+                        "keypoints": tuple(tuple(float(v) for v in point) for point in _kpss[index])})
         return out
+
+    def _embed_detections(self, frame_bgr, detections):
+        """Embed the tracker's exact same-frame landmarks, without redetecting faces."""
+        from insightface.app.common import Face
+        result = []
+        with self._recognition_lock:
+            for row in detections:
+                points = np.asarray(row['keypoints'], dtype=np.float32)
+                if points.shape != (5, 2) or not np.isfinite(points).all():
+                    raise ValueError('Invalid same-frame face landmarks')
+                face = Face(bbox=np.asarray(row['box']), kps=points, det_score=row['score'])
+                self._recognition.get(frame_bgr, face)
+                result.append((list(row['box']), np.array(face.normed_embedding, copy=True), row['score'], None))
+        return result
 
     def enrollment_faces(self, frame_bgr: np.ndarray):
         """Return boxes and their embeddings from ONE raw enrollment frame."""
@@ -262,7 +308,7 @@ class FaceRecognizer:
         on a background thread), so it never blocks the UI thread with a model load.
         This is only a positioning hint — the actual capture uses InsightFace.
         """
-        if not self._models_loaded or frame_bgr is None or frame_bgr.size == 0:
+        if self._detector is None or frame_bgr is None or frame_bgr.size == 0:
             return False
         try:
             gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
@@ -403,7 +449,7 @@ class FaceRecognizer:
 
         return embeddings, best_box
 
-    def recognize_faces(self, frame_bgr: np.ndarray) -> list[dict]:
+    def recognize_faces(self, frame_bgr: np.ndarray, detections=None) -> list[dict]:
         """Detect ALL faces in frame and identify each against enrolled students.
 
         Returns list of dicts:
@@ -417,7 +463,8 @@ class FaceRecognizer:
         if not self._ensure_models():
             return []
         try:
-            dets = self._detect(frame_bgr)
+            dets = self._detect(frame_bgr) if detections is None else self._embed_detections(frame_bgr, detections)
+            self.last_error = None
             if not dets:
                 return []
 

@@ -22,6 +22,7 @@ from ui.components import (
 
 _STATE_LABELS = {
     "identifying": ("Identifying", COLOR_TEXT_MUTED),
+    "locating_torso": ("Locating torso", COLOR_TEXT_MUTED),
     "identity_uncertain": ("Identity uncertain", COLOR_WARNING),
     "checking_uniform": ("Checking uniform", COLOR_ACCENT),
     "uniform_compliant": ("Uniform compliant", COLOR_SAFE),

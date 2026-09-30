@@ -108,6 +108,7 @@ class DashboardNativeLifecycleTests(unittest.TestCase):
         from types import SimpleNamespace
         from unittest.mock import MagicMock, patch
         from core.camera import CameraSample
+        from core.model_readiness import ModelReadiness, ComponentStatus
         from database.db_manager import CBVMSDatabase
         from ui.dashboard import CBVMSDashboard
 
@@ -115,11 +116,14 @@ class DashboardNativeLifecycleTests(unittest.TestCase):
             database = CBVMSDatabase(Path(folder) / 'dashboard.db')
             database.initialize()
             recognizer = MagicMock()
+            recognizer.readiness = ModelReadiness()
+            recognizer.readiness._status = {name: ComponentStatus('ready') for name in ('face', 'recognition')}
+            recognizer.detect_faces.return_value = []
             recognizer.recognize_faces.return_value = []
             recognizer.last_error = None
             with patch.object(CBVMSDashboard, '_deferred_start_camera'), \
                  patch.object(CBVMSDashboard, '_load_camera_preference'), \
-                 patch.object(CBVMSDashboard, '_prewarm_models', lambda panel: panel._models_ready.set()):
+                 patch.object(CBVMSDashboard, '_prewarm_models', lambda panel: None):
                 app = CBVMSDashboard(database=database, recognizer=recognizer)
                 errors = []
                 app.report_callback_exception = lambda *args: errors.append(args)
@@ -133,10 +137,20 @@ class DashboardNativeLifecycleTests(unittest.TestCase):
                         CameraSample(frame, ('synthetic', next(sequence)), time.monotonic()))
                     deadline = time.monotonic() + 2
                     while time.monotonic() < deadline and (app.camera_feed._photo is None or not recognizer.recognize_faces.called):
-                        app.update()
-                        time.sleep(.01)
+                        # A continuously scheduled feed can keep update() draining
+                        # events forever. Exercise the same mainloop as production.
+                        app.after(100, app.quit)
+                        app.mainloop()
                     self.assertIsNotNone(app.camera_feed._photo)
                     self.assertTrue(recognizer.recognize_faces.called)
+                    app._status_camera.configure(text='Camera: Active · Checking uniform')
+                    app._status_fps.configure(text='Preview 30.0 FPS · Tracking 6.0/s · Analysis 2.0/s')
+                    app.update_idletasks()
+                    self.assertGreaterEqual(app._status_fps.winfo_rooty(),
+                        app._status_camera.winfo_rooty()+app._status_camera.winfo_height())
+                    self.assertLess(app._status_fps.winfo_rootx()+app._status_fps.winfo_width(),
+                        app._retry_model_btn.winfo_rootx())
+                    self.assertLess(app._status_camera.master.winfo_height(),120)
                     token = app._monitor_cancel
                     app._on_nav_select('enrollment')
                     self.assertTrue(token.is_set())
@@ -146,7 +160,8 @@ class DashboardNativeLifecycleTests(unittest.TestCase):
                     app._on_nav_select('enrollment')
                     self.assertIs(app._enrollment_panel, enrollment)
                     app._on_nav_select('live')
-                    app.update()
+                    app.after(100, app.quit)
+                    app.mainloop()
                     self.assertEqual(errors, [])
                 finally:
                     app._on_close()

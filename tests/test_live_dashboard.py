@@ -12,6 +12,7 @@ import numpy as np
 
 from core.camera import CameraSample
 from core.live_pipeline import MonitorTask, MonitorResult
+from core.model_readiness import ModelReadiness, ComponentStatus
 from core.live_state import FrameContext, LiveAssessment
 from ui.dashboard import CBVMSDashboard
 from ui.live_alerts import LiveAlertsModel
@@ -39,22 +40,30 @@ def dashboard():
         _monitor_last_offered=None, _monitor_last_rendered=None, _monitor_card_key=None,
         _monitor_render_key=None,
         _monitor_offer_time=0, _monitor_status_text=None,
-        _preview_times=deque(maxlen=120), _analysis_times=deque(maxlen=30), _metrics_time=0,
+        _preview_times=deque(maxlen=120), _analysis_times=deque(maxlen=30), _tracking_times=deque(maxlen=30), _metrics_time=0,
         _live_worker=types.SimpleNamespace(requests=queue.Queue(maxsize=1), results=queue.Queue(maxsize=1), offer=MagicMock()),
         _alerts_scroll=MagicMock(), _notification_out=queue.Queue(), _stats_out=queue.Queue(),
-        _models_ready=threading.Event(), _camera=MagicMock(), _camera_needed=lambda: True,
+        _readiness=ModelReadiness(), _retry_model_btn=MagicMock(), _camera=MagicMock(), _camera_needed=lambda: True,
         _active_nav="live", _checker=types.SimpleNamespace(check_uniform=True, check_earring=True),
         _mirror=types.SimpleNamespace(display_mirror=lambda: False, apply_anim=lambda frame: frame),
-        _status_camera=MagicMock(), _status_fps=MagicMock(), camera_feed=MagicMock(),
+        _status_camera=MagicMock(), _status_models=MagicMock(), _status_fps=MagicMock(), camera_feed=MagicMock(),
         _drain_camera_events=MagicMock(), _on_notification=MagicMock(),
         _feed_interval_ms=33, _feed_job=None, after=MagicMock(return_value="feed-job"),
         _last_frame_request=0, _latest_monitor_sample=lambda: sample(),
     )
-    panel._models_ready.set()
+    panel._readiness._status = {name: ComponentStatus("ready") for name in ("face", "recognition", "uniform")}
+    panel._tracking_result = None
+    panel._tracking_projections = {}
+    panel._tracking_last_offered = None
+    panel._tracking_offer_time = 0
+    panel._tracking_worker = types.SimpleNamespace(requests=queue.Queue(maxsize=1), results=queue.Queue(maxsize=1),
+                                                   offer=MagicMock(), stop=MagicMock(), last_error="", active_task=None)
+    panel._live_worker.last_error = ""
+    panel._live_worker.active_task = None
     panel.camera_feed.render.return_value = True
     panel.camera_feed.winfo_width.return_value = 640
     panel.camera_feed.winfo_height.return_value = 480
-    for name in ("_invalidate_monitor", "_monitor_rows", "_update_feed", "_clear_alerts", "_halt_camera"):
+    for name in ("_invalidate_monitor", "_monitor_rows", "_project_rows", "_update_feed", "_clear_alerts", "_halt_camera"):
         setattr(panel, name, getattr(CBVMSDashboard, name).__get__(panel))
     panel._measured_rate = CBVMSDashboard._measured_rate
     return panel
@@ -155,11 +164,11 @@ class LiveDashboardTests(unittest.TestCase):
 
     def test_model_loading_keeps_preview_live_without_offering_inference(self):
         panel = dashboard()
-        panel._models_ready.clear()
+        panel._readiness._status = {name: ComponentStatus("loading") for name in ("face", "recognition")}
         tick(panel)
         panel.camera_feed.render.assert_called_once()
         panel._live_worker.offer.assert_not_called()
-        self.assertIn("Loading recognition models", panel._status_camera.configure.call_args.kwargs['text'])
+        self.assertIn("Loading recognition", panel._status_models.configure.call_args.kwargs['text'])
 
     def test_stale_camera_sample_cancels_pending_work_and_shows_reconnect(self):
         panel = dashboard()
@@ -265,7 +274,7 @@ class LiveDashboardTests(unittest.TestCase):
         self.assertIsNone(panel._monitor_result)
         self.assertFalse(panel._monitor_projections)
         self.assertFalse(model.rows['2:track:1'].active)
-        self.assertIn("Identifying", panel._status_camera.configure.call_args.kwargs['text'])
+        self.assertIn("Waiting for analysis", panel._status_camera.configure.call_args.kwargs['text'])
 
     def test_uncertain_motion_drops_identity_and_uniform_together(self):
         panel = dashboard()

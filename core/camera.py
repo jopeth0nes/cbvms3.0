@@ -160,6 +160,9 @@ class CameraCapture:
             self._latest_frame = frame
             self._frame_sequence += 1
             self._frame_time = time.monotonic()
+            if self._frame_sequence == 1 or self._frame_sequence % 30 == 0:
+                from core.diagnostics import event
+                event("frames_captured", source=str(self._source_token), count=self._frame_sequence)
         return frame
 
     def get_latest_sample(self) -> CameraSample | None:

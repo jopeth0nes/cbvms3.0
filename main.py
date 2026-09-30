@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+import gc
 import os
 import sys
 import threading
@@ -20,24 +22,12 @@ from ui.dashboard import open_dashboard
 
 
 def _warm_models(recognizer: FaceRecognizer, person_detector) -> None:
-    """Load + prime the heavy CV models in the background while the user logs in, so the
-    Live Monitor scans the instant the dashboard opens (model load is the main cost)."""
-    import numpy as np
-    dummy = np.zeros((480, 640, 3), dtype=np.uint8)
-    try:
-        if recognizer._ensure_models():
-            recognizer.detect_faces(dummy)          # prime SCRFD detection graph
-    except Exception as exc:
-        print(f"[CBVMS] recognizer warm failed: {exc}")
-    try:
-        if person_detector is not None:
-            person_detector._ensure_model()
-            person_detector.detect_persons(dummy)   # prime YOLO graph
-    except Exception as exc:
-        print(f"[CBVMS] person-detector warm failed: {exc}")
+    from core.model_readiness import face_readiness
+    face_readiness(recognizer).start()
 
 
 def main() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     database = CBVMSDatabase()
     database.initialize()
 
@@ -54,11 +44,17 @@ def main() -> None:
             target=_warm_models, args=(recognizer, person_detector), daemon=True
         ).start()
 
-    auth = AuthManager(database)
+    auth = AuthManager(database, recognizer=recognizer)
 
     username = run_login(auth, on_ready=start_model_warmup)
     if not username:
+        if hasattr(recognizer,'readiness'):
+            recognizer.readiness.wait(5.)
         return  # login window closed — exit
+
+    # The login root has been destroyed. Dispose its cyclic font/widget objects
+    # here so a model/database worker cannot run Tk finalizers for that old root.
+    gc.collect()
 
     # Pick up any students who registered via the login screen's self-registration
     # window (the recognizer was created before login, so new enrollments are stale).

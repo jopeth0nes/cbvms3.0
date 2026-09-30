@@ -3,7 +3,7 @@
 One serial analysis owner handles every face in a submitted frame. Latest-only
 queues keep preview independent and prevent a growing inference backlog.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from collections import deque
 import queue
@@ -15,9 +15,10 @@ import cv2
 import numpy as np
 
 from core.live_state import FrameContext, LiveState, associate_faces_to_bodies, validate_torso
-from core.person_detector import skin_fraction
+from core.person_detector import MAX_TORSO_SKIN_FRACTION, skin_fraction
 from core.student_status import standing_label, suspension_label
 from core.uniform_matcher import fuse_uniform_prob
+from core.diagnostics import event
 
 
 def put_latest(q, item):
@@ -32,6 +33,22 @@ def put_latest(q, item):
 
 
 @dataclass(frozen=True)
+class TrackedFace:
+    box: tuple
+    score: float
+    keypoints: tuple
+    track_id: int
+    presence_id: str
+    body_index: int | None = None
+    body_box: tuple | None = None
+    torso_box: tuple | None = None
+    reason: str = ''
+
+    def detection(self):
+        return dict(box=self.box, score=self.score, keypoints=self.keypoints)
+
+
+@dataclass(frozen=True)
 class MonitorTask:
     context: FrameContext
     frame: np.ndarray
@@ -40,6 +57,7 @@ class MonitorTask:
     uniform_enabled: bool = True
     earring_enabled: bool = True
     camera_generation: int = 0
+    observations: tuple[TrackedFace, ...] | None = None
 
     def __post_init__(self):
         frame = self.frame.copy()
@@ -50,6 +68,9 @@ class MonitorTask:
         now = time.monotonic() if now is None else now
         return not self.cancelled.is_set() and 0 <= now-self.context.captured_at <= 3.0
 
+    def rejection(self):
+        return "session_cancelled" if self.cancelled.is_set() else "frame_expired"
+
 
 @dataclass(frozen=True)
 class MonitorResult:
@@ -57,6 +78,7 @@ class MonitorResult:
     assessments: tuple
     finished_at: float
     detail: str = ""
+    observations: tuple[TrackedFace, ...] | None = None
 
 
 class MotionProjection:
@@ -70,7 +92,11 @@ class MotionProjection:
         self.gray = self.gray_frame(frame)
         h, w = frame.shape[:2]
         self.scale = np.array([320/w, 240/h]*2)
+        # A real detector may include the cropped forehead above the image. Use
+        # the visible face for flow, instead of rejecting every projected result.
+        box = (max(0, box[0]), max(0, box[1]), min(w, box[2]), min(h, box[3]))
         self.box = np.array(box, dtype=float)*self.scale
+        self.origin_box = self.box.copy()
         mask = np.zeros((240,320),np.uint8)
         x1,y1,x2,y2 = self.box.astype(int)
         mask[max(0,y1):min(240,y2),max(0,x1):min(320,x2)] = 255
@@ -79,6 +105,10 @@ class MotionProjection:
     @staticmethod
     def gray_frame(frame):
         return cv2.cvtColor(cv2.resize(frame,(320,240)),cv2.COLOR_BGR2GRAY)
+
+    @property
+    def offset(self):
+        return tuple((self.box[:2]-self.origin_box[:2])/self.scale[:2])
 
     def advance(self, frame, gray=None):
         if frame.shape != self.shape or self.points is None or len(self.points)<6:
@@ -110,10 +140,13 @@ class MotionProjection:
         self.box+=np.tile(delta,2)
         box=self.box/self.scale
         h,w=frame.shape[:2]
-        if box[0]<0 or box[1]<0 or box[2]>w or box[3]>h:
+        visible = (max(0, box[0]), max(0, box[1]), min(w, box[2]), min(h, box[3]))
+        area = max(1., (box[2]-box[0])*(box[3]-box[1]))
+        if (min(visible[2]-visible[0], visible[3]-visible[1]) < 16 or
+                (visible[2]-visible[0])*(visible[3]-visible[1])/area < .8):
             self.points = None
             return None
-        return tuple(box)
+        return tuple(visible)
 
 
 class LiveProcessor:
@@ -132,9 +165,14 @@ class LiveProcessor:
         self.suspension_cooldowns={}
         self.write_count=0
         self._analyzed_frames = deque(maxlen=128)
+        self.readiness = None
+        self.publish_identity = None
+        self.identity_state = LiveState()
+        self._assessment_cursor = 0
 
     def analyze(self,task):
         if not task.valid():
+            event("frame_rejected", stage="analysis_start", reason=task.rejection())
             return None
         key = (task.context.generation, task.context.frame_id)
         if key in self._analyzed_frames:
@@ -142,11 +180,25 @@ class LiveProcessor:
         self._analyzed_frames.append(key)
         frame=task.frame
         # Snapshot dictionaries before enrichment; no dictionary is ever queued.
-        rows=[dict(row) for row in self.recognizer.recognize_faces(frame)]
+        started = time.monotonic()
+        if task.observations is None:
+            rows=[dict(row) for row in self.recognizer.recognize_faces(frame)]
+        else:
+            rows=[dict(row) for row in self.recognizer.recognize_faces(
+                frame, detections=[o.detection() for o in task.observations])]
+            if len(rows) != len(task.observations):
+                raise RuntimeError('Recognition did not preserve the same-frame tracked faces')
+            for row, observation in zip(rows, task.observations):
+                if tuple(row['box']) != observation.box:
+                    raise RuntimeError('Recognition changed the tracked face ownership')
+                row['owner_token'] = observation.presence_id
+        event("stage_complete", stage="recognition", frame_id=task.context.frame_id,
+              elapsed=time.monotonic()-started, faces=len(rows))
         error = getattr(self.recognizer, "last_error", None)
         if isinstance(error, str) and error:
             raise RuntimeError(f"Face recognition unavailable: {error}")
         if not task.valid():
+            event("frame_rejected", stage="recognition", reason=task.rejection())
             return None
         for row in rows:
             row.update(student_status="Unknown person",discipline_eligible=False,suspension_tag="")
@@ -161,15 +213,34 @@ class LiveProcessor:
                 row['discipline_eligible']=(student['student_status']=='Enrolled' and not student['registration_pending'])
                 suspension=self.database.get_active_suspension(student['student_id'])
                 row['suspension_tag']=suspension_label(suspension) if suspension else ''
+        if task.observations is None and self.publish_identity is not None and task.valid():
+            identities = self.identity_state.update(task.context, rows, now=time.monotonic())
+            self.publish_identity(MonitorResult(task, identities, time.monotonic(),
+                "Face detected · Identity uncertain" if rows and not any(a.reliable_identity for a in identities)
+                else "Recognition ready · Uniform not assessed" if rows else "No faces detected"))
         uniform_available=(task.uniform_enabled and self.person_detector is not None and
-                           (self.trainer.is_trained('uniform') or self.uniform_matcher.is_loaded()))
+                           (self.readiness is None or self.readiness.ready('uniform')) and
+                           self.trainer.is_trained('uniform'))
         bodies=[]
-        if uniform_available and any(r.get('matched') and r['discipline_eligible'] for r in rows):
+        started = time.monotonic()
+        if (task.observations is None and uniform_available
+                and any(r.get('matched') and r['discipline_eligible'] for r in rows)):
             bodies=self.person_detector.detect_persons(frame)
+        event("stage_complete", stage="body", elapsed=time.monotonic()-started, bodies=len(bodies))
         associations=associate_faces_to_bodies([r['box'] for r in rows],bodies)
-        for index,(row,association) in enumerate(zip(rows,associations)):
+        # Rotate who is assessed first if a crowded frame exhausts its freshness
+        # budget. Never let a slow first crop starve the same later person forever.
+        indices = list(range(len(rows)))
+        if indices:
+            start = self._assessment_cursor % len(indices)
+            indices = indices[start:] + indices[:start]
+            self._assessment_cursor += 1
+        for index in indices:
+            row, association = rows[index], associations[index]
             if not task.valid():
+                event("frame_rejected", stage="assessment", reason=task.rejection())
                 return None
+            crop_started = time.monotonic()
             row.update(uniform_available=False,uniform_label=None,uniform_confidence=0.0,
                        torso_box=None,torso_valid=False,association_valid=False,
                        body_index=None,body_box=None,reason="Uniform checking disabled" if not task.uniform_enabled else "Uniform model unavailable")
@@ -178,21 +249,38 @@ class LiveProcessor:
                 continue
             if uniform_available:
                 row['reason']=association.reason
-                if association.index is not None:
-                    body=bodies[association.index]
-                    row.update(body_index=association.index,body_box=tuple(body),association_valid=True)
+                body_error = getattr(self.person_detector, 'last_error', None)
+                if not bodies and isinstance(body_error, str) and body_error:
+                    row['reason']='Body detection failed; uniform not assessed'
+                observation = task.observations[index] if task.observations is not None else None
+                body = observation.body_box if observation is not None else (
+                    bodies[association.index] if association.index is not None else None)
+                if observation is not None:
+                    row['reason'] = observation.reason
+                if body is not None:
+                    body_index = observation.body_index if observation is not None else association.index
+                    row.update(body_index=body_index,body_box=tuple(body),association_valid=True)
                     try:
-                        region,method=self.person_detector.chest_region(frame,row['box'],body)
+                        region,method=(observation.torso_box, 'tracked') if observation is not None else self.person_detector.chest_region(frame,row['box'],body)
                         valid,reason=validate_torso(
                             row['box'], body, region, frame.shape,
                             other_faces=[r['box'] for i,r in enumerate(rows) if i!=index],
-                            other_bodies=[b for i,b in enumerate(bodies) if i!=association.index])
-                        row['reason']=reason
+                            other_bodies=[o.body_box for i,o in enumerate(task.observations)
+                                          if i!=index and o.body_box is not None] if task.observations is not None
+                                         else [b for i,b in enumerate(bodies) if i!=association.index])
+                        row['reason']=reason if region is not None else (
+                            observation.reason if observation is not None else 'Move back to show more of your shirt')
                         if valid:
                             x1,y1,x2,y2=map(int,region)
                             crop=frame[y1:y2,x1:x2]
-                            if skin_fraction(crop)>.4:
-                                row['reason']='Torso obscured or mostly skin'
+                            # Keep validated geometry visible even if the classifier abstains.
+                            # Evidence still requires uniform_available and repeated verdicts.
+                            row.update(torso_valid=True,torso_box=tuple(region))
+                            skin_ratio=skin_fraction(crop)
+                            event('torso_crop', frame_id=task.context.frame_id, face_index=index,
+                                  method=method, width=x2-x1, height=y2-y1, skin_fraction=skin_ratio)
+                            if skin_ratio>MAX_TORSO_SKIN_FRACTION:
+                                row['reason']='Shirt obscured or mostly skin; show more of your shirt'
                             else:
                                 p_cls=p_col=None
                                 if self.trainer.is_trained('uniform'):
@@ -201,19 +289,23 @@ class LiveProcessor:
                                 if self.uniform_matcher.is_loaded():
                                     verdict,p=self.uniform_matcher.is_uniform(crop)
                                     p_col=p if verdict is not None else None
-                                fused=fuse_uniform_prob(p_cls,p_col)
+                                # A colour match is supplementary evidence; it cannot
+                                # classify a garment when the trained classifier failed.
+                                fused=fuse_uniform_prob(p_cls,p_col) if p_cls is not None else None
                                 if fused is not None and np.isfinite(fused):
                                     confidence=max(fused,1-fused)
-                                    row.update(uniform_available=True,torso_valid=True,torso_box=tuple(region),
+                                    row.update(uniform_available=True,
                                                uniform_label=('correct_uniform' if fused>=.5 else 'wrong_uniform') if confidence>=.60 else None,
                                                uniform_confidence=float(confidence),reason='Checking uniform')
                                 else:
                                     row['reason']='Uniform classifier could not assess this crop'
                     except Exception as exc:
                         row['reason']='Uniform assessment unavailable'
+                        event("uniform_assessment_failed", error=str(exc))
             # Existing earring rule: male and eligible, independent category.
             row['earring_violation']=False
-            if task.earring_enabled and row.get('gender','').lower()=='male' and self.trainer.is_trained('earring'):
+            if (task.earring_enabled and (self.readiness is None or self.readiness.ready('earring'))
+                    and row.get('gender','').lower()=='male' and self.trainer.is_trained('earring')):
                 try:
                     x1,y1,x2,y2=map(int,row['box'])
                     h,w=frame.shape[:2]
@@ -223,11 +315,28 @@ class LiveProcessor:
                     row['earring_confidence']=float(conf)
                 except Exception:
                     row['earring_violation']=False
+            event("stage_complete", stage="uniform", face_index=index,
+                  elapsed=time.monotonic()-crop_started, reason=row['reason'])
         if not task.valid():
+            event("frame_rejected", stage="uniform", reason=task.rejection())
             return None
         assessments=self.state.update(task.context,rows,now=time.monotonic())
+        if task.observations is not None:
+            assessments=tuple(replace(a, track_id=o.track_id, presence_id=o.presence_id)
+                              for a,o in zip(assessments,task.observations))
+        for a in assessments:
+            event('person_assessed', frame_id=task.context.frame_id, presence_id=a.presence_id,
+                  state=a.state, reason=a.reason, reliable_identity=a.reliable_identity,
+                  torso_valid=a.torso_box is not None, accepted=a.accepted_categories)
+        event("frame_analyzed", frame_id=task.context.frame_id, faces=len(rows),
+              reliable_identities=sum(a.reliable_identity for a in assessments),
+              valid_torsos=sum(bool(r.get('torso_valid')) for r in rows),
+              accepted_assessments=sum(bool(a.accepted_categories) for a in assessments),
+              assessment_elapsed=time.monotonic()-started)
         return MonitorResult(task,assessments,time.monotonic(),
-                             "No faces detected" if not rows else "")
+                             "No faces detected" if not rows else
+                             "Face detected · Identity uncertain" if not any(a.reliable_identity for a in assessments) else
+                             "Uniform not assessed" if not any(r.get('uniform_available') for r in rows) else "")
 
     def assessment_failed(self, task):
         """An unobserved frame breaks evidence without recycling presence IDs."""
@@ -256,6 +365,8 @@ class LiveProcessor:
             box=assessment.face_box
             projection=MotionProjection(task.frame,box)
             if latest.frame_id!=task.context.frame_id and projection.advance(latest.frame) is None:
+                event('database_write_withheld', presence_id=assessment.presence_id,
+                      frame_id=task.context.frame_id, reason='motion_not_verified')
                 continue
             def guard(assessment=assessment, task_ref=weakref.ref(task)):
                 task = task_ref()
@@ -281,8 +392,9 @@ class LiveProcessor:
                             ok=False
                         if ok:
                             self.attendance_cooldowns[key]=now
-                    except Exception:
-                        pass
+                        event("database_presence_outcome", student_id=sid, committed=bool(ok))
+                    except Exception as exc:
+                        event("database_presence_failed", student_id=sid, error=str(exc))
                 tag=assessment.suspension_tag
                 suspension_key=(sid,tag)
                 if tag and guard() and now-self.suspension_cooldowns.get(suspension_key,-30)>=30:
@@ -294,6 +406,8 @@ class LiveProcessor:
                 categories=('unknown_person',)
             for code in categories:
                 if not guard():
+                    event('database_write_withheld', presence_id=assessment.presence_id,
+                          frame_id=task.context.frame_id, reason='freshness_or_motion_changed')
                     return
                 key=(sid if assessment.reliable_identity else assessment.presence_id,code)
                 if now-self.cooldowns.get(key,-300)<300:
@@ -320,37 +434,140 @@ class LiveProcessor:
                             violation_type=display,violation_code=code,snapshot_jpeg=jpeg.tobytes(),
                             detected_at=observed,status='pending_review',valid_if=guard)
                     if written is None:
+                        event("database_write_rejected", category=code, student_id=sid)
                         continue
-                except Exception:
+                except Exception as exc:
+                    event("database_write_failed", category=code, student_id=sid, error=str(exc))
                     continue
+                event("database_write_committed", category=code, student_id=sid, record_id=written)
                 self.cooldowns[key]=now
                 self.write_count+=1
                 if guard():
                     self.notifier.notify(assessment.name, display, valid_if=guard, observed_at=task.observed_at)
 
 
+class FaceTrackingProcessor:
+    """Owns presence IDs and localizes anonymous torsos on the same captured frame."""
+    def __init__(self, recognizer, person_detector=None, readiness=None, on_localized=None):
+        self.recognizer = recognizer
+        self.person_detector = person_detector
+        self.readiness = readiness
+        self.on_localized = on_localized
+        self.state = LiveState()
+
+    def analyze(self, task):
+        started = time.monotonic()
+        rows = [dict(row, identity_uncertain=True) for row in self.recognizer.detect_faces(task.frame)]
+        bodies=[]
+        ready = self.person_detector is not None and (self.readiness is None or self.readiness.ready('body'))
+        if rows and ready:
+            bodies=self.person_detector.detect_persons(task.frame)
+        associations=associate_faces_to_bodies([r['box'] for r in rows],bodies)
+        for index,(row,association) in enumerate(zip(rows,associations)):
+            row['reason'] = association.reason if ready else 'Loading torso detector'
+            error = getattr(self.person_detector, 'last_error', None)
+            if isinstance(error, str) and error:
+                row['reason'] = 'Body detection failed; retrying on the next frame'
+            if association.index is None:
+                continue
+            body=bodies[association.index]
+            region,method=self.person_detector.chest_region(task.frame,row['box'],body)
+            valid,reason=validate_torso(row['box'],body,region,task.frame.shape,
+                other_faces=[r['box'] for i,r in enumerate(rows) if i!=index],
+                other_bodies=[b for i,b in enumerate(bodies) if i!=association.index])
+            row.update(body_index=association.index,body_box=tuple(body),association_valid=True,
+                       torso_valid=valid,torso_box=tuple(region) if valid else None,
+                       reason='Checking uniform' if valid else reason)
+            event('torso_localized', frame_id=task.context.frame_id, face_index=index,
+                  valid=valid, reason=row['reason'], method=method)
+        if not task.valid():
+            event("frame_rejected", stage="tracking", reason=task.rejection())
+            return None
+        tracks = self.state.update(task.context, rows, now=time.monotonic())
+        uniform_ready=task.uniform_enabled and (self.readiness is None or self.readiness.ready('uniform'))
+        unavailable='Uniform checking disabled' if not task.uniform_enabled else 'Uniform model loading or unavailable'
+        tracks = tuple(replace(a, state=('Checking uniform' if uniform_ready else 'Uniform not assessed') if a.torso_box else
+                               'Locating torso' if ready else 'Identifying', name='Identifying',
+                               reason=r['reason'] if not a.torso_box or uniform_ready else unavailable)
+                       for a,r in zip(tracks,rows))
+        observations=tuple(TrackedFace(tuple(r['box']),float(r.get('score',1.)),tuple(r.get('keypoints',())),
+            a.track_id,a.presence_id,a.body_index,a.body_box,a.torso_box,r['reason'])
+            for r,a in zip(rows,tracks))
+        event("stage_complete", stage="tracking", frame_id=task.context.frame_id,
+              elapsed=time.monotonic()-started, faces=len(tracks))
+        result=MonitorResult(task, tracks, time.monotonic(),
+                             'Identifying · Checking uniform' if any(a.torso_box for a in tracks) else
+                             'Locating torso' if tracks and ready else
+                             "Face detected · Identifying" if tracks else "No faces detected", observations)
+        if self.on_localized is not None and task.valid():
+            self.on_localized(result)
+        return result
+
+    def persist(self, result):
+        pass
+
+
 class LiveWorker:
     """One stoppable worker with single-slot input/output queues."""
-    def __init__(self,processor):
+    def __init__(self,processor, *, persistence_worker=False):
         self.processor=processor
         self.requests=queue.Queue(maxsize=1)
         self.results=queue.Queue(maxsize=1)
         self.stop_event=threading.Event()
         self.done=threading.Event()
         self.active_task = None
+        self.last_error = ""
+        self.active_since = 0.
+        self.writes = queue.Queue(maxsize=1)
+        self.active_write = None
+        self.writes_done = threading.Event()
+        self.persistence_worker = persistence_worker
+        if not persistence_worker:
+            self.writes_done.set()
+        if persistence_worker:
+            processor.publish_identity = lambda result: put_latest(self.results, result)
         self.thread=threading.Thread(target=self._run,daemon=True,name='live-monitor-analysis')
 
     def start(self):
         self.thread.start()
+        if self.persistence_worker:
+            threading.Thread(target=self._persist, daemon=True, name="live-monitor-database").start()
+
+    def _persist(self):
+        try:
+            while not self.stop_event.is_set():
+                try:
+                    result = self.writes.get(timeout=.2)
+                except queue.Empty:
+                    continue
+                self.active_write = result.task
+                try:
+                    if not self.stop_event.is_set() and result.task.valid():
+                        self.processor.persist(result)
+                    else:
+                        event("frame_rejected", stage="persistence", reason="stopped_or_expired")
+                except Exception as exc:
+                    event("database_worker_failed", error=str(exc))
+                finally:
+                    self.active_write = None
+        finally:
+            self.writes_done.set()
 
     def offer(self,task):
         if not self.stop_event.is_set():
+            event("frame_submitted", worker=type(self.processor).__name__, frame_id=task.context.frame_id)
             put_latest(self.requests,task)
 
     def stop(self):
         self.stop_event.set()
         if self.active_task is not None:
             self.active_task.cancelled.set()
+        if self.active_write is not None:
+            self.active_write.cancelled.set()
+        try:
+            self.writes.get_nowait().task.cancelled.set()
+        except queue.Empty:
+            pass
         put_latest(self.requests,None)
 
     def _run(self):
@@ -361,15 +578,24 @@ class LiveWorker:
                 except queue.Empty:
                     continue
                 if task is None or not task.valid():
+                    if task is not None:
+                        event("frame_rejected", stage="queue", reason=task.rejection())
                     continue
                 try:
                     self.active_task = task
+                    self.active_since = time.monotonic()
                     result=self.processor.analyze(task)
                     if result is not None and task.valid() and not self.stop_event.is_set():
-                        self.processor.persist(result)
+                        self.last_error = ""
+                        if self.persistence_worker:
+                            put_latest(self.writes, result)
+                        else:
+                            self.processor.persist(result)
                         if task.valid() and not self.stop_event.is_set():
                             put_latest(self.results,result)
                 except Exception as exc:
+                    self.last_error = str(exc)
+                    event("analysis_failed", error=str(exc), frame_id=task.context.frame_id)
                     print(f"[LiveMonitor] assessment unavailable: {exc}")
                     if task.valid():
                         failed = getattr(self.processor, "assessment_failed", None)
@@ -377,5 +603,7 @@ class LiveWorker:
                             failed(task)
                         put_latest(self.results,MonitorResult(task,(),time.monotonic(),
                                                            'Assessment unavailable'))
+                finally:
+                    self.active_task = None
         finally:
             self.done.set()

@@ -27,6 +27,8 @@ class CBVMSLoginWindow(ctk.CTk):
         super().__init__()
         self.withdraw()  # Map only after the intro covers the prepared form.
         self._auth = auth_manager
+        self._registration_model = ({"recognizer": auth_manager.recognizer}
+                                    if auth_manager.recognizer is not None else {})
         self._on_ready = on_ready
         self.result_username: str | None = None
         self.result: dict | None = None
@@ -251,11 +253,15 @@ def run_login(auth_manager: AuthManager, on_ready=None) -> str | None:
       or return None (exit) when the portal window is closed directly.
     - closed login window → return None.
     """
+    import gc
+
     while True:
         app = CBVMSLoginWindow(auth_manager, on_ready=on_ready)
         on_ready = None
         app.mainloop()
         result = app.result
+        del app
+        gc.collect()  # Finalize the destroyed Tk root on its owning thread.
         if not result:
             return None
 
@@ -265,9 +271,13 @@ def run_login(auth_manager: AuthManager, on_ready=None) -> str | None:
             portal = StudentPortal(
                 student_id=result["student_id"],
                 display_name=result["display_name"],
+                database=auth_manager._db,
             )
             portal.mainloop()
-            if getattr(portal, "logged_out", False):
+            logged_out = portal.logged_out
+            del portal
+            gc.collect()
+            if logged_out:
                 continue  # back to the login screen
             return None  # portal closed directly → exit the app
 

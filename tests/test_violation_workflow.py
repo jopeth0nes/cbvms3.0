@@ -184,9 +184,10 @@ class ViolationWorkflowTests(unittest.TestCase):
         self.assertEqual(row["status"], DISMISSED)
         self.assertEqual(row["dismissal_reason"], "False positive")
         self.assertEqual(self.db.get_strike_count(self.STUDENT_A, "wrong_uniform"), 0)
-        self.assertEqual(self.db.get_visible_violations_for_student(
-            self.STUDENT_A, now=decided_at
-        ), [])
+        history = self.db.get_visible_violations_for_student(self.STUDENT_A, now=decided_at)
+        self.assertEqual([r["id"] for r in history], [violation_id])
+        self.assertEqual(history[0]["appeal_window_status"], "resolved")
+        self.assertFalse(history[0]["can_appeal"])
         self.assertEqual(self.db.get_notifications_for_student(self.STUDENT_A), [])
 
     def test_04_no_admin_action_for_five_days_auto_confirms(self) -> None:

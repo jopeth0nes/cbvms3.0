@@ -17,6 +17,7 @@ import numpy as np
 
 Box = tuple[int, int, int, int]
 IDENTIFYING = "Identifying"
+LOCATING_TORSO = "Locating torso"
 IDENTITY_UNCERTAIN = "Identity uncertain"
 CHECKING_UNIFORM = "Checking uniform"
 UNIFORM_COMPLIANT = "Uniform compliant"
@@ -218,6 +219,7 @@ class _Track:
     box: Box
     last_at: float
     embedding: np.ndarray | None
+    owner_token: str | None = None
     velocity: tuple[float, float] = (0., 0.)
     candidate_id: str = ""
     identity_hits: int = 0
@@ -296,10 +298,12 @@ class LiveState:
             return None
         return .40 + .30 * distance
 
-    def _associate(self, boxes, embeddings, captured_at):
+    def _associate(self, boxes, embeddings, captured_at, tokens=None):
         candidates: dict[tuple[int, int], float] = {}
         for ti, track in enumerate(self._tracks):
             for di, (box, emb) in enumerate(zip(boxes, embeddings)):
+                if tokens is not None and tokens[di] != track.owner_token:
+                    continue
                 cost = self._pair_cost(track, box, emb, captured_at)
                 if cost is not None:
                     candidates[ti, di] = cost
@@ -343,7 +347,8 @@ class LiveState:
         rows = [dict(row) for row in rows if _box(row.get("box")) is not None]
         boxes = [_box(row["box"]) for row in rows]
         embeddings = [_embedding(row) for row in rows]
-        matches, ambiguous, retire = self._associate(boxes, embeddings, context.captured_at)
+        tokens = [row.get('owner_token') for row in rows] if any('owner_token' in r for r in rows) else None
+        matches, ambiguous, retire = self._associate(boxes, embeddings, context.captured_at, tokens)
         matched_tracks = set(matches.values())
         for index, track in enumerate(self._tracks):
             if index not in matched_tracks:
@@ -366,14 +371,21 @@ class LiveState:
                 track = self._tracks[matches[di]]
                 dt = context.captured_at - track.last_at
                 if dt > 0:
-                    track.velocity = tuple((b - a) / dt for a, b in zip(_center(track.box), _center(box)))
+                    # Smooth detector jitter; a single small fast-step error must not
+                    # extrapolate a stationary face far away after a brief missed frame.
+                    track.velocity = tuple(.7*v + .3*(b-a)/dt for v,a,b in
+                                           zip(track.velocity, _center(track.box), _center(box)))
                 track.box, track.last_at = box, context.captured_at
                 if emb is not None:
                     track.embedding = emb.copy()
             else:
-                track = _Track(self._next_id, box, context.captured_at, emb)
+                track = _Track(self._next_id, box, context.captured_at, emb,
+                               owner_token=row.get('owner_token'))
                 self._next_id += 1
                 new_tracks.append(track)
+                from core.diagnostics import event
+                event('track_created', track_id=track.id, frame_id=context.frame_id,
+                      owner_token=track.owner_token, ambiguous=uncertain)
             assessments.append(self._assess(track, context, row, uncertain))
         self._tracks = [t for i, t in enumerate(self._tracks) if i not in retire] + new_tracks
         return tuple(assessments)

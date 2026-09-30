@@ -22,6 +22,15 @@ class ProfilePhotoTests(unittest.TestCase):
         self.db.insert_student("S2", "Two", "BSIT", "1A", b"other", b"other-photo")
         self.portal = SimpleNamespace(db=self.db, student_id="S1", _toast=Mock(),
                                       _show=Mock(), _log_activity=Mock())
+        # Exercise the operation and its delivery separately from the native worker tests.
+        def run_action(operation, callback):
+            try:
+                result = operation(self.db, "S1")
+            except Exception as exc:
+                self.portal._toast(str(exc), "error")
+            else:
+                callback(result)
+        self.portal._run_action = run_action
 
     def choose(self, path):
         with patch("ui.student_portal.filedialog.askopenfilename", return_value=str(path)):

@@ -93,9 +93,9 @@ class StudentRegistrationWindow(ctk.CTkToplevel):
                     if rec is None:
                         from core.recognizer import FaceRecognizer
                         rec = FaceRecognizer(self.database)
-                        if not rec._ensure_models():
-                            raise RuntimeError("Face model unavailable")
                         self._model_cache["recognizer"] = rec
+                    if not rec._ensure_models():
+                        raise RuntimeError(rec.last_error or "Face model unavailable")
                     self._model_results.put((rec, None))
                 except Exception as exc:
                     self._model_results.put((None, str(exc)))

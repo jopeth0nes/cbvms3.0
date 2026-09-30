@@ -123,60 +123,57 @@ class RecognitionEvidenceTests(unittest.TestCase):
 
 
 class SharedModelTests(unittest.TestCase):
-    def test_detection_recognition_and_enrollment_inference_do_not_overlap(self):
-        recognizer = RecognitionEvidenceTests().recognizer()
-        counts = {"active": 0, "max_active": 0, "calls": 0}
-        lock = threading.Lock()
+    def test_recognition_uses_preview_scale_when_large_input_misses_close_face(self):
+        r = RecognitionEvidenceTests().recognizer()
+        r._app = object()
+        keypoints = np.ones((1, 5, 2))
+        detector = MagicMock(side_effect=[(np.empty((0, 5)), None),
+                                         (np.array([[10, 20, 60, 80, .9]]), keypoints)])
+        r._detector = SimpleNamespace(detect=detector)
+        def embed(frame, face):
+            np.testing.assert_array_equal(face.kps, keypoints[0])
+            face.normed_embedding = np.array([1., 0.])
+        r._recognition = SimpleNamespace(get=embed)
+        with patch.dict('sys.modules', {'insightface.app.common': SimpleNamespace(Face=SimpleNamespace)}):
+            faces = r._detect(np.zeros((100, 100, 3), np.uint8))
+        self.assertEqual(len(faces), 1)
+        self.assertEqual([c.kwargs['input_size'] for c in detector.call_args_list], [(640, 640), (320, 320)])
 
-        def inference(detection_only=False):
-            with lock:
-                counts["active"] += 1
-                counts["calls"] += 1
-                counts["max_active"] = max(counts["max_active"], counts["active"])
+    def test_detection_remains_available_during_recognition_inference(self):
+        r = RecognitionEvidenceTests().recognizer()
+        entered, release = threading.Event(), threading.Event()
+        def recognition(frame, face):
+            entered.set()
+            release.wait(2)
+            face.normed_embedding = np.array([1., 0.])
+        r._detector = SimpleNamespace(detect=lambda *a, **kw: (np.array([[10,20,60,80,.9]]), np.zeros((1,5,2))))
+        r._app = SimpleNamespace(det_model=r._detector)
+        r._recognition = SimpleNamespace(get=recognition)
+        frame = np.zeros((100,100,3), np.uint8)
+        with patch.dict("sys.modules", {"insightface.app.common": SimpleNamespace(Face=SimpleNamespace)}):
+            worker = threading.Thread(target=r._detect, args=(frame,))
+            worker.start()
+            try:
+                self.assertTrue(entered.wait(1))
+                self.assertEqual(len(r.detect_faces(frame)), 1)
+            finally:
+                release.set()
+                worker.join(2)
+
+    def test_concurrent_first_load_finishes_once_per_component(self):
+        r = RecognitionEvidenceTests().recognizer()
+        r._models_loaded = False
+        counts = {"detection": 0, "recognition": 0}
+        def load(filename, task):
+            counts[task] += 1
             time.sleep(.01)
-            with lock:
-                counts["active"] -= 1
-            if detection_only:
-                return np.array([[10, 20, 60, 80, .9]]), None
-            return [SimpleNamespace(bbox=np.array([10, 20, 60, 80]),
-                                    normed_embedding=np.array([1., 0.]), det_score=.9, sex="F")]
-
-        recognizer._app = SimpleNamespace(
-            get=lambda _frame: inference(),
-            det_model=SimpleNamespace(detect=lambda _frame, **_kwargs: inference(True)),
-        )
-        frame = np.zeros((100, 100, 3), np.uint8)
-        methods = [recognizer.detect_faces, recognizer.recognize_faces,
-                   recognizer.enrollment_faces, recognizer.encode_face] * 3
-        with ThreadPoolExecutor(max_workers=6) as pool:
-            futures = [pool.submit(method, frame) for method in methods]
-            for future in futures:
-                self.assertTrue(future.result(timeout=2))
-        self.assertEqual(counts["calls"], 12)
-        self.assertEqual(counts["max_active"], 1)
-
-    def test_concurrent_first_load_finishes_once_without_lock_deadlock(self):
-        recognizer = RecognitionEvidenceTests().recognizer()
-        recognizer._models_loaded = False
-        recognizer._app = SimpleNamespace(
-            get=lambda _frame: [],
-            det_model=SimpleNamespace(detect=lambda _frame, **_kwargs: (np.empty((0, 5)), None)),
-        )
-
-        def load():
-            time.sleep(.02)
-            recognizer._models_loaded = True
-            return True
-
-        frame = np.zeros((100, 100, 3), np.uint8)
-        with patch.object(recognizer, "_load_models", side_effect=load) as loader:
-            with ThreadPoolExecutor(max_workers=3) as pool:
-                futures = [pool.submit(method, frame) for method in (
-                    recognizer.detect_faces, recognizer.recognize_faces, recognizer.enrollment_faces
-                )]
-                for future in futures:
-                    self.assertEqual(future.result(timeout=2), [])
-            loader.assert_called_once()
+            return SimpleNamespace(detect=lambda *a, **kw: (np.empty((0,5)), None),
+                                   get_feat=lambda frame: np.ones((1,512)))
+        with patch.object(r, "_local_model", side_effect=load):
+            with ThreadPoolExecutor(max_workers=6) as pool:
+                results = list(pool.map(lambda _: r._ensure_models(), range(12)))
+        self.assertTrue(all(results))
+        self.assertEqual(counts, {"detection": 1, "recognition": 1})
 
 
 if __name__ == "__main__":
