@@ -1,11 +1,10 @@
 """Dedicated asynchronous appeal inbox and case review workspace."""
-import io
 import queue
 from concurrent.futures import ThreadPoolExecutor
 from tkinter import messagebox
 import customtkinter as ctk
-from PIL import Image, ImageOps
 from core.discipline import display_local_datetime as ts
+from core.evidence_integrity import original_evidence, supporting_evidence, INTEGRITY_HELP
 from ui.components import COLOR_BG, COLOR_SURFACE, COLOR_TEXT, COLOR_ACCENT, COLOR_DANGER
 
 
@@ -20,6 +19,9 @@ class AppealsPanel(ctk.CTkFrame):
         self._read_future = None
         self.closed = False
         self.drafts = {}
+        self.case = {}
+        self.violation_id = None
+        self._case_windows = []
         self.inbox_scroll = 0.
         self.listing = None
         self.results = queue.Queue()
@@ -92,6 +94,12 @@ class AppealsPanel(ctk.CTkFrame):
         self._poll_job = self.after(50, self._poll)
 
     def _clear(self):
+        self.case = {}
+        self.violation_id = None
+        for window in self._case_windows:
+            if window.winfo_exists():
+                window.destroy()
+        self._case_windows.clear()
         for parent in (self.body, self.footer):
             for widget in parent.winfo_children():
                 widget.destroy()
@@ -106,6 +114,7 @@ class AppealsPanel(ctk.CTkFrame):
     def on_hide(self):
         self._remember_reason()
         self.generation += 1
+        self._clear()
 
     def refresh(self):
         if self.busy:
@@ -146,7 +155,7 @@ class AppealsPanel(ctk.CTkFrame):
             card.grid_columnconfigure(0, weight=1)
             label = ctk.CTkLabel(card, anchor='w', justify='left', text=(
                 f"{row['student_name'] or 'Unknown student'} · {row['student_id']}\n"
-                f"{row['violation_type']} · {row['status'].title()}\nSubmitted: {ts(row['submitted_at'])}"))
+                f"Appeal #{row['id']} · Violation #{row['violation_id']} · {row['violation_type']} · {row['status'].title()}\nSubmitted: {ts(row['submitted_at'])}"))
             label.grid(row=0, column=0, sticky='ew', padx=12, pady=6)
             card.bind('<Configure>', lambda e, label=label: label.configure(wraplength=max(160,e.width-150)))
             ctk.CTkButton(card, text='Open Case', width=110,
@@ -183,23 +192,29 @@ class AppealsPanel(ctk.CTkFrame):
         self.back.pack(side='left', padx=20)
         self.toolbar.grid_remove()
         self._clear()
+        generation = self.generation
         def load():
             case = self.database.get_appeal_case(appeal_id, username=self.username)
-            blobs = [case.pop('snapshot'), case['evidence'][0]['file_data'] if case['evidence'] else None]
-            case['images'] = []
-            for blob in blobs:
-                try:
-                    with Image.open(io.BytesIO(blob)) as image:
-                        image = ImageOps.exif_transpose(image).convert('RGB')
-                        image.thumbnail((1000, 800))
-                        case['images'].append(image.copy())
-                except Exception:
-                    case['images'].append(None)
+            if case['id'] != appeal_id:
+                raise ValueError('Appeal response does not match the selected case.')
+            case['original'] = original_evidence(case)
+            case['supporting'] = [supporting_evidence(e) for e in case['evidence']]
+            case['evidence_keys'] = tuple(e['key'] for e in [case['original'], *case['supporting']])
+            case['integrity_blocked'] = any(e['blocked'] for e in [case['original'], *case['supporting']])
+            case['images'] = [case['original']['image'],
+                              case['supporting'][0]['image'] if case['supporting'] else None]
+            case['_request'] = (generation, appeal_id, case['violation_id'])
             return case
         self._request(load, self._case_loaded)
 
     def _case_loaded(self, case):
+        if (self.closed or case.get('_request') != (self.generation, self.case_id, case['violation_id'])
+                or case['id'] != self.case_id
+                or (self.violation_id is not None and self.violation_id != case['violation_id'])):
+            return
+        self.violation_id = case['violation_id']
         self.case = case
+        self.heading.configure(text=f"Appeal #{case['id']} · Violation #{case['violation_id']}")
         # Only the evidence/details area scrolls at small sizes. Decisions stay in a fixed footer.
         content = ctk.CTkScrollableFrame(self.body, fg_color=COLOR_SURFACE)
         content.grid(row=0, column=0, sticky='nsew')
@@ -207,23 +222,36 @@ class AppealsPanel(ctk.CTkFrame):
         details = ctk.CTkLabel(content, justify='left', anchor='w', text=(
             f"{case['student_name']} · {case['student_id']} · {case['course'] or ''} {case['year_and_section'] or ''}\n"
             f"{case['violation_type']} · Violation: {case['violation_status']} · Appeal: {case['status'].title()}\n"
-            f"Detected: {ts(case['detection_time'])} · Submitted: {ts(case['submitted_at'])}\n"
+            f"Detected: {ts(case['detection_time'])}\n"
+            f"Published: {ts(case['appeal_opened_at'], 'Not recorded (legacy)')}\n"
+            f"Submitted: {ts(case['submitted_at'])} · Decision: {ts(case['decided_at'])}\n"
             f"Appeal deadline: {ts(case['appeal_deadline'])} · Active strike: {'Yes' if case['strike_active'] else 'No'}"))
         details.grid(row=0,column=0,columnspan=2,sticky='ew',padx=8,pady=4)
         content.bind('<Configure>',lambda e: details.configure(wraplength=max(240,e.width-30)), add='+')
-        for col, (label, picture) in enumerate(zip(('Original detection evidence','Student supporting image'),case['images'])):
-            box = ctk.CTkFrame(content,fg_color='transparent')
-            box.grid(row=1,column=col,sticky='nsew',padx=6)
-            ctk.CTkLabel(box,text=label).pack()
+        sources = [case['original'], *(case['supporting'] or [supporting_evidence({})])]
+        image_columns = [ctk.CTkFrame(content, fg_color='transparent') for _ in range(2)]
+        for col, container in enumerate(image_columns):
+            container.grid(row=1, column=col, sticky='nsew')
+        for col, source in enumerate(sources):
+            label, picture = source['label'], source['image']
+            box = ctk.CTkFrame(image_columns[min(col, 1)],fg_color='transparent')
+            box.pack(fill='both', expand=True, padx=6, pady=4)
+            caption = ctk.CTkLabel(box,text=label, wraplength=220)
+            caption.pack(fill='x')
+            box.bind('<Configure>', lambda e, text=caption: text.configure(
+                wraplength=max(120, int(self._reverse_widget_scaling(e.width))-12)), add='+')
             if picture:
                 thumbnail=picture.copy();thumbnail.thumbnail((240,140))
                 ref=ctk.CTkImage(thumbnail,size=thumbnail.size)
                 button=ctk.CTkButton(box,text='',image=ref,height=140,fg_color='transparent',
-                    command=lambda p=picture,title=label:self._enlarge(p,title))
-                button.pack(); button._ref=ref
+                    command=lambda p=picture,title=label,key=source['key']:self._enlarge(p,title,key))
+                button.pack(); button._ref=ref; button._evidence_key=source['key']
                 ctk.CTkLabel(box,text='Click image to enlarge',font=ctk.CTkFont(size=12)).pack()
             else:
-                ctk.CTkLabel(box,text='Image unavailable',height=140).pack()
+                warning = ctk.CTkLabel(box,text=source['warning'] or 'Image unavailable',height=140,wraplength=220)
+                warning.pack(fill='x')
+                box.bind('<Configure>', lambda e, text=warning: text.configure(
+                    wraplength=max(120, int(self._reverse_widget_scaling(e.width))-12)), add='+')
         ctk.CTkLabel(content,text='Student explanation',anchor='w').grid(row=2,column=0,sticky='w',padx=8)
         ctk.CTkButton(content,text='Read full explanation',height=26,width=160,
             command=lambda:self._full_text(case['reason'])).grid(row=2,column=1,sticky='e',padx=8)
@@ -250,18 +278,27 @@ class AppealsPanel(ctk.CTkFrame):
         self.reject.grid(row=0,column=1,sticky='ew')
         ctk.CTkLabel(controls,text='Resolves without a strike',font=ctk.CTkFont(size=12)).grid(row=1,column=0)
         ctk.CTkLabel(controls,text='Awards one strike',font=ctk.CTkFont(size=12)).grid(row=1,column=1)
+        self._enable_decisions(True)
+        if case['integrity_blocked']:
+            self.status.configure(text=INTEGRITY_HELP)
         if case['status']!='pending':
             self._enable_decisions(False)
             self.reason.configure(state='disabled')
             self.status.configure(text=f"{case['status'].title()} by {case['decided_by']} · {ts(case['decided_at'])}")
 
     def _enable_decisions(self, enabled):
-        for button in (getattr(self,'approve',None),getattr(self,'reject',None)):
+        allowed = enabled and self.case.get('status') == 'pending'
+        for name in ('approve', 'reject'):
+            button = getattr(self, name, None)
             if button and button.winfo_exists():
-                button.configure(state='normal' if enabled else 'disabled')
+                blocked = name == 'reject' and self.case.get('integrity_blocked')
+                button.configure(state='normal' if allowed and not blocked else 'disabled')
 
     def _decide(self, decision):
-        if self.busy:
+        if self.busy or self.case.get('id') != self.case_id:
+            return
+        if decision == 'rejected' and self.case.get('integrity_blocked'):
+            self.status.configure(text=INTEGRITY_HELP)
             return
         notes=self.reason.get('1.0','end-1c').strip()
         if not notes:
@@ -274,11 +311,13 @@ class AppealsPanel(ctk.CTkFrame):
         self.busy=True
         self._enable_decisions(False)
         aid=self.case_id
+        vid, evidence_keys = self.violation_id, self.case['evidence_keys']
         def save():
-            ok=self.database.update_appeal_decision(aid,decision,notes,decided_by=self.username)
+            ok=self.database.update_appeal_decision(aid,decision,notes,decided_by=self.username,
+                expected_violation_id=vid, expected_evidence_keys=evidence_keys)
             outcome=self.database.get_appeal_case(aid,username=self.username)
             if not ok and outcome['status']=='pending':
-                raise ValueError('Decision could not be saved. Verify administrator access and retry.')
+                raise ValueError('Decision could not be saved. Refresh to check the evidence integrity, case association, and administrator access.')
             return outcome
         def saved(outcome):
             self.drafts.pop(aid,None)
@@ -287,8 +326,11 @@ class AppealsPanel(ctk.CTkFrame):
                 self.on_change()
         self._request(save,saved,action=True)
 
-    def _enlarge(self,picture,title):
+    def _enlarge(self,picture,title,key=None):
         window=ctk.CTkToplevel(self); window.title(title); window.geometry('900x700')
+        self._case_windows.append(window)
+        window._evidence_key = key
+        window._evidence_image = picture
         window.grid_columnconfigure(0,weight=1);window.grid_rowconfigure(0,weight=1)
         label=ctk.CTkLabel(window,text='');label.grid(row=0,column=0,sticky='nsew')
         def resize(event):
@@ -299,6 +341,7 @@ class AppealsPanel(ctk.CTkFrame):
 
     def _full_text(self,text):
         window=ctk.CTkToplevel(self);window.title('Student explanation');window.geometry('650x400')
+        self._case_windows.append(window)
         box=ctk.CTkTextbox(window,wrap='word');box.pack(fill='both',expand=True,padx=12,pady=12)
         box.insert('1.0',text);box.configure(state='disabled')
 

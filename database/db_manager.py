@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import sqlite3
 from datetime import datetime
 from pathlib import Path
@@ -30,6 +31,7 @@ from database.models import ALL_TABLES
 from database.student_management import StudentManagement, migrate_student_management
 from core.student_status import validate_contacts
 from core.appeal_evidence import validate_evidence
+from core.evidence_integrity import digest, original_evidence, supporting_evidence, INTEGRITY_HELP
 
 DEFAULT_ADMIN_USERNAME = "admin"
 DEFAULT_ADMIN_PASSWORD = "admin123"
@@ -239,6 +241,8 @@ class CBVMSDatabase(StudentManagement):
                 "appeal_deadline": "TEXT",
                 "appeal_opened_at": "TEXT",
                 "lifecycle_origin": "TEXT",
+                "snapshot_sha256": "TEXT",
+                "snapshot_provenance": "TEXT",
                 "appeal_window_closed_at": "TEXT",
                 "review_decided_at": "TEXT",
                 "reviewed_by": "TEXT DEFAULT ''",
@@ -249,6 +253,11 @@ class CBVMSDatabase(StudentManagement):
                 if col not in violation_cols:
                     conn.execute(f"ALTER TABLE violations ADD COLUMN {col} {declaration}")
 
+            evidence_cols = {r[1] for r in conn.execute("PRAGMA table_info(evidence_files)")}
+            if "file_sha256" not in evidence_cols:
+                conn.execute("ALTER TABLE evidence_files ADD COLUMN file_sha256 TEXT")
+
+            # Legacy bytes and timestamps remain untouched; NULL means no recorded hash/capture provenance.
             strike_event_cols = {
                 r[1] for r in conn.execute("PRAGMA table_info(strike_events)").fetchall()
             }
@@ -558,6 +567,7 @@ class CBVMSDatabase(StudentManagement):
         detected_at: datetime | str | None = None,
         semester_id: int | None = None,
         valid_if: Callable[[], bool] | None = None,
+        evidence_provenance: dict | None = None,
     ) -> int | None:
         """Persist and immediately publish a camera/manual detection for appeal.
 
@@ -568,6 +578,7 @@ class CBVMSDatabase(StudentManagement):
         after obtaining the write lock and again immediately before commit.
         """
 
+        snapshot_jpeg = bytes(snapshot_jpeg) if snapshot_jpeg is not None else None
         safe_student_id = (student_id or "").strip() or "unknown"
         safe_student_name = (student_name or "").strip() or "Unknown"
         safe_violation_type = (violation_type or "").strip() or "unknown_violation"
@@ -625,6 +636,15 @@ class CBVMSDatabase(StudentManagement):
                 ),
             )
             violation_id = _inserted_row_id(cursor)
+            provenance = None
+            if evidence_provenance is not None:
+                provenance = dict(evidence_provenance, version=1, violation_id=violation_id,
+                    student_id=safe_student_id, detected_at=detected_text, sha256=digest(snapshot_jpeg))
+                if not snapshot_jpeg or not all(provenance.get(k) for k in
+                        ('captured_at', 'camera_session', 'frame_id', 'presence_id', 'face_box')):
+                    raise ValueError("Camera evidence requires capture and association metadata")
+            conn.execute("UPDATE violations SET snapshot_sha256=?, snapshot_provenance=? WHERE id=?",
+                (digest(snapshot_jpeg), json.dumps(provenance, sort_keys=True) if provenance else None, violation_id))
             if standing and is_disciplinary_code(safe_code):
                 self._publish_violation_conn(conn, violation_id, utc_now(), "live_publication")
             if valid_if is not None and not valid_if():
@@ -988,7 +1008,8 @@ class CBVMSDatabase(StudentManagement):
             instant = clock()
             rows = conn.execute(f"SELECT * FROM violations WHERE {due}",
                                 (instant.strftime("%Y-%m-%d %H:%M:%S.%f"), *scope_args)).fetchall()
-            rows = [r for r in rows if instant > parse_db_datetime(r["appeal_deadline"])]
+            rows = [r for r in rows if instant > parse_db_datetime(r["appeal_deadline"])
+                    and not original_evidence(r)["blocked"]]
             for row in rows:
                 # Compare aware values as well as SQL strings at fractional boundaries.
                 if instant <= parse_db_datetime(row["appeal_deadline"]):
@@ -1519,7 +1540,7 @@ class CBVMSDatabase(StudentManagement):
     # Appeals helpers
     # ------------------------------------------------------------------
 
-    def get_appeals_for_student(self, student_id: str, *, limit: int | None = None, offset: int = 0) -> list[dict]:
+    def get_appeals_for_student(self, student_id: str, *, limit: int | None = None, offset: int = 0, appeal_id: int | None = None) -> list[dict]:
         """All appeals for a student, newest first."""
         paging = " LIMIT ? OFFSET ?" if limit is not None else ""
         params = (int(limit), int(offset)) if limit is not None else ()
@@ -1528,16 +1549,16 @@ class CBVMSDatabase(StudentManagement):
                 f"""
                 SELECT a.*, v.violation_type, v.violation_code,
                        v.timestamp AS violation_ts, v.confirmed_at,
-                       v.appeal_deadline, v.status AS violation_status,
+                       v.appeal_opened_at, v.appeal_deadline, v.status AS violation_status,
                        st.is_active AS strike_active,
                        st.deactivation_reason AS strike_removal_reason
                 FROM appeals a
                 JOIN violations v ON v.id = a.violation_id
                 LEFT JOIN strikes st ON st.violation_id = v.id
-                WHERE a.student_id = ? AND v.student_id = a.student_id
+                WHERE a.student_id = ? AND v.student_id = a.student_id AND (? IS NULL OR a.id=?)
                 ORDER BY a.submitted_at DESC, a.id DESC {paging}
                 """,
-                ((student_id or "").strip(), *params),
+                ((student_id or "").strip(), appeal_id, appeal_id, *params),
             ).fetchall()
         return [dict(r) for r in rows]
 
@@ -1608,9 +1629,9 @@ class CBVMSDatabase(StudentManagement):
                         return None
                     conn.execute(
                         """INSERT INTO evidence_files
-                           (appeal_id, student_id, filename, file_type, file_data)
-                           VALUES (?, ?, ?, ?, ?)""",
-                        (appeal_id, sid, filename, file_type, file_data),
+                           (appeal_id, student_id, filename, file_type, file_data, uploaded_at, file_sha256)
+                           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                        (appeal_id, sid, filename, file_type, file_data, submitted_text, digest(file_data)),
                     )
                 conn.commit()
                 return appeal_id
@@ -1692,10 +1713,10 @@ class CBVMSDatabase(StudentManagement):
                     return None
                 cursor = conn.execute(
                     """INSERT INTO evidence_files
-                       (appeal_id, student_id, filename, file_type, file_data)
-                       VALUES (?, ?, ?, ?, ?)""",
+                       (appeal_id, student_id, filename, file_type, file_data, file_sha256)
+                       VALUES (?, ?, ?, ?, ?, ?)""",
                     (appeal_id, (student_id or "").strip(),
-                     (filename or "").strip(), (file_type or "image").strip(), file_data),
+                     (filename or "").strip(), (file_type or "image").strip(), file_data, digest(file_data)),
                 )
                 conn.commit()
                 return _inserted_row_id(cursor)
@@ -1753,6 +1774,8 @@ class CBVMSDatabase(StudentManagement):
         decided_by: str = "",
         *,
         decided_at: datetime | str | None = None,
+        expected_violation_id: int | None = None,
+        expected_evidence_keys: tuple | None = None,
     ) -> bool:
         """Atomically apply the admin's final appeal decision and audit effects."""
 
@@ -1798,6 +1821,15 @@ class CBVMSDatabase(StudentManagement):
                 if violation is None or violation["student_id"] != row["student_id"] or violation["status"] in (DISMISSED, "resolved"):
                     conn.rollback()
                     return False
+                if expected_violation_id is not None and row['violation_id'] != expected_violation_id:
+                    raise ValueError("The appeal association changed; refresh before deciding.")
+                evidence = [original_evidence(violation)] + [supporting_evidence(e) for e in conn.execute(
+                    "SELECT * FROM evidence_files WHERE appeal_id=? AND student_id=? ORDER BY id",
+                    (appeal_id, row['student_id']))]
+                if expected_evidence_keys is not None and tuple(e['key'] for e in evidence) != tuple(expected_evidence_keys):
+                    raise ValueError("Evidence changed; refresh and review this exact case again.")
+                if safe_decision == 'rejected' and any(e['blocked'] for e in evidence):
+                    raise ValueError(INTEGRITY_HELP)
                 conn.execute("UPDATE violations SET status=?, appeal_window_closed_at=? WHERE id=?",
                     ("resolved" if safe_decision == "approved" else CONFIRMED, decision_text, row["violation_id"]))
                 if safe_decision == "rejected":
@@ -1921,17 +1953,18 @@ class CBVMSDatabase(StudentManagement):
                 (instr(lower(a.student_id),lower(?))>0 OR instr(lower(COALESCE(s.name,'')),lower(?))>0)"""
             params = (status, status, search.strip(), search.strip())
             total = conn.execute("SELECT COUNT(*) " + query, params).fetchone()[0]
-            rows = conn.execute("SELECT a.id,a.student_id,a.status,a.submitted_at,v.violation_type,s.name student_name "
+            rows = conn.execute("SELECT a.id,a.violation_id,a.student_id,a.status,a.submitted_at,v.violation_type,s.name student_name "
                 + query + " ORDER BY a.submitted_at DESC,a.id DESC LIMIT ? OFFSET ?",
                 (*params, min(50,max(1,limit)), max(0,offset))).fetchall()
         return {"rows": [dict(r) for r in rows], "total": total}
 
     def get_appeal_case(self, appeal_id, *, username):
         with self.connect() as conn:
+            conn.execute("BEGIN")
             self._require_admin_conn(conn, username)
             row = conn.execute("""SELECT a.*,v.violation_type,v.violation_code,
                 v.timestamp detection_time,v.appeal_opened_at,v.appeal_deadline,
-                v.status violation_status,v.snapshot,v.lifecycle_origin,
+                v.status violation_status,v.snapshot,v.snapshot_sha256,v.snapshot_provenance,v.lifecycle_origin,
                 s.name student_name,s.course,s.year_and_section,
                 COALESCE(st.is_active,0) strike_active FROM appeals a
                 JOIN violations v ON v.id=a.violation_id AND v.student_id=a.student_id
@@ -1944,6 +1977,14 @@ class CBVMSDatabase(StudentManagement):
                 "SELECT * FROM evidence_files WHERE appeal_id=? AND student_id=? ORDER BY id",
                 (appeal_id, row["student_id"]))]
         return case
+
+    def get_student_original_evidence(self, violation_id, student_id):
+        with self.connect() as conn:
+            row = conn.execute("SELECT * FROM violations WHERE id=? AND student_id=?",
+                               (violation_id, student_id)).fetchone()
+        if row is None:
+            raise ValueError("Original evidence unavailable for this account and violation.")
+        return dict(row)
 
     def get_student_appeal_evidence(self, appeal_id, student_id):
         with self.connect() as conn:

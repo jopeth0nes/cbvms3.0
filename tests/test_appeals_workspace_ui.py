@@ -94,7 +94,7 @@ class AppealsWorkspaceTests(unittest.TestCase):
         self.assertTrue(self.db.update_appeal_decision(aid,'rejected','Other admin decided',decided_by='admin'))
         self.panel.reason.insert('1.0','Approve this evidence')
         with patch('ui.appeals_panel.messagebox.askyesno',return_value=True):self.panel.approve.invoke()
-        self.until(lambda:self.panel.case['status']=='rejected')
+        self.until(lambda:self.panel.case.get('status')=='rejected')
         self.assertEqual(self.panel.reason.get('1.0','end-1c'),'Other admin decided')
         self.assertEqual(self.panel.approve.cget('state'),'disabled')
         self.assertEqual(len(self.db.get_decision_history()),1)

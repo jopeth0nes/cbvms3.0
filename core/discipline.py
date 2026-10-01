@@ -210,4 +210,18 @@ def default_academic_term(*, now: datetime | str | None = None) -> dict[str, str
 
 def display_local_datetime(value, fallback="—"):
     parsed = parse_db_datetime(value)
-    return parsed.astimezone().strftime("%b %d, %Y · %H:%M %Z") if parsed else fallback
+    if not parsed:
+        return fallback
+    import os
+    from pathlib import Path
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+    name = os.environ.get('CBVMS_TIMEZONE') or os.environ.get('TZ', '').lstrip(':')
+    if not name:
+        path = str(Path('/etc/localtime').resolve())
+        name = path.split('/zoneinfo/')[-1] if '/zoneinfo/' in path else ''
+    try:
+        local = parsed.astimezone(ZoneInfo(name)) if name else parsed.astimezone()
+    except (ZoneInfoNotFoundError, ValueError):
+        local, name = parsed.astimezone(), ''
+    offset = local.strftime('%z')
+    return f"{local:%b %d, %Y · %H:%M} {name or 'Local time'} (UTC{offset[:3]}:{offset[3:]})"

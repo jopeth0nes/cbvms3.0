@@ -334,12 +334,14 @@ class PortalNativeTests(unittest.TestCase):
     def test_evidence_on_demand_and_profile_update(self):
         output = io.BytesIO()
         Image.new('RGB', (60, 40), 'blue').save(output, format='JPEG')
-        self.detect(snapshot=output.getvalue())
+        vid = self.detect(snapshot=output.getvalue())
         self.click('violations')
         self.button('View Detection Evidence').invoke()
         self.until(lambda: self.app._action_request is None)
         modal = next(w for w in self.app.winfo_children() if isinstance(w, ctk.CTkToplevel))
-        self.assertTrue(any(getattr(w, '_img_ref', None) for w in self.widgets(modal)))
+        from core.evidence_integrity import digest
+        self.assertEqual(modal._evidence_key, ('violation', vid, digest(output.getvalue())))
+        self.assertIsNotNone(modal._evidence_image)
         modal.destroy()
         self.click('profile')
         self.button('Update Profile').invoke()

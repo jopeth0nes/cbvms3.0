@@ -21,6 +21,7 @@ class CameraSample:
     frame: np.ndarray
     frame_id: tuple
     captured_at: float
+    captured_wall_time: float | None = None
 
 
 class CameraCapture:
@@ -52,6 +53,7 @@ class CameraCapture:
         self._latest_frame: np.ndarray | None = None
         self._frame_sequence = 0
         self._frame_time = 0.0
+        self._frame_wall_time = None
         self._source_token = uuid.uuid4().hex
 
     def _backend(self) -> int | None:
@@ -119,6 +121,8 @@ class CameraCapture:
 
     def open(self) -> bool:
         self.release()
+        self._source_token = uuid.uuid4().hex
+        self._frame_sequence = 0
         if self._source_url:
             cap = self._try_open_url(self._source_url)
             if cap is not None:
@@ -160,6 +164,7 @@ class CameraCapture:
             self._latest_frame = frame
             self._frame_sequence += 1
             self._frame_time = time.monotonic()
+            self._frame_wall_time = time.time()
             if self._frame_sequence == 1 or self._frame_sequence % 30 == 0:
                 from core.diagnostics import event
                 event("frames_captured", source=str(self._source_token), count=self._frame_sequence)
@@ -171,7 +176,7 @@ class CameraCapture:
             if self._latest_frame is None:
                 return None
             return CameraSample(self._latest_frame.copy(), (self._source_token, self._frame_sequence),
-                                self._frame_time)
+                                self._frame_time, self._frame_wall_time)
 
     def get_settings(self) -> dict:
         """Backend-reported settings; call on the camera owner thread after open.

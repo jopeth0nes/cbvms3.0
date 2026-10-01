@@ -19,6 +19,7 @@ from PIL import Image, ImageTk
 
 from database.db_manager import CBVMSDatabase
 from core.discipline import display_local_datetime
+from core.evidence_integrity import original_evidence, supporting_evidence
 from core.reports import (VIOLATION_HEADERS, violation_values, write_csv,
                           report_html, open_print_preview)
 from ui.attendance_panel import AttendancePanel
@@ -193,6 +194,8 @@ class RecordsPanel(ctk.CTkFrame):
         self._viol_frame.rowconfigure(2, weight=1)
         self._violation_rows = {}
         self._snapshot_source = None
+        self._snapshot_evidence = None
+        self._record_windows = []
         self._snapshot_message = "Select a record to view evidence"
         self._evidence_width = 340
         self._split_resize_job = None
@@ -330,7 +333,10 @@ class RecordsPanel(ctk.CTkFrame):
             return
         source = self._snapshot_source.copy()
         modal = ctk.CTkToplevel(self)
-        modal.title("Violation Evidence")
+        self._record_windows.append(modal)
+        modal._evidence_key = self._snapshot_evidence["key"]
+        modal._evidence_image = source
+        modal.title(f"Violation #{self._snapshot_evidence['key'][1]} — {self._snapshot_evidence['label']}")
         modal.geometry("800x700")
         modal.minsize(440, 360)
         modal.transient(self.winfo_toplevel())
@@ -384,6 +390,11 @@ class RecordsPanel(ctk.CTkFrame):
         self._on_viol_select()
 
     def _on_viol_select(self, _e=None) -> None:
+        for window in self._record_windows:
+            if window.winfo_exists():
+                window.destroy()
+        self._record_windows.clear()
+        self._snapshot_evidence = None
         sel = self._viol_tree.selection()
         r = self._violation_rows.get(sel[0]) if sel else None
         self._snapshot_source = None
@@ -408,7 +419,7 @@ class RecordsPanel(ctk.CTkFrame):
             COLOR_WARNING if status == "pending_review" else COLOR_DANGER
             if status in ("confirmed", "auto_confirmed") else COLOR_TEXT_MUTED))
         fields = {
-            "date": f"Date & time (UTC): {_ts(r.get('timestamp', ''))}",
+            "date": f"Detected: {_ts(r.get('timestamp', ''))}\nPublished: {_ts(r.get('appeal_opened_at', ''))}",
             "course": f"Course / year & section: {r.get('course') or '—'} · {r.get('year_and_section') or '—'}",
             "semester": f"Semester: {r.get('semester_name') or '—'} · {r.get('school_year') or '—'}",
             "strike": f"Strike: {'Active' if r.get('strike_active') else 'Inactive / Not Awarded'}",
@@ -416,14 +427,11 @@ class RecordsPanel(ctk.CTkFrame):
         }
         for key, value in fields.items():
             self._vd_fields[key].configure(text=value)
-        snap = r.get("snapshot") or r.get("violation_snapshot")
-        if snap:
-            try:
-                with Image.open(io.BytesIO(snap)) as img:
-                    self._snapshot_source = img.convert("RGB")
-                self._vd_enlarge.configure(state="normal")
-            except Exception:
-                self._snapshot_message = "Snapshot unavailable"
+        source = self._snapshot_evidence = original_evidence(r)
+        self._snapshot_source = source['image']
+        self._snapshot_message = source['warning'] or 'Original evidence unavailable'
+        if self._snapshot_source is not None:
+            self._vd_enlarge.configure(state='normal')
         self._render_violation_snapshot()
 
     def _export_violations(self) -> None:
@@ -534,8 +542,14 @@ class RecordsPanel(ctk.CTkFrame):
             self._ev_tree.insert("", "end", iid=str(r["id"]),
                                  values=(name, r["filename"], r["file_type"],
                                          _ts(r["uploaded_at"])))
+        self._on_ev_select()
 
     def _on_ev_select(self, _e=None) -> None:
+        self._current_evidence = None
+        self._ev_preview.configure(image='', text='Supporting image unavailable')
+        self._ev_preview._ref = None
+        self._ev_preview._evidence_key = None
+        self._ev_meta.configure(text='Select an evidence record')
         sel = self._ev_tree.selection()
         if not sel:
             return
@@ -545,22 +559,18 @@ class RecordsPanel(ctk.CTkFrame):
             return
         self._current_evidence = ev
         self._ev_meta.configure(
-            text=f"File: {ev['filename']}\n"
+            text=f"Appeal #{ev['appeal_id']} · Evidence #{ev['id']}\nFile: {ev['filename']}\n"
                  f"Type: {ev['file_type']}\n"
                  f"Size: {len(ev['file_data']) // 1024 + 1} KB\n"
                  f"Uploaded: {_ts(ev['uploaded_at'])}")
-        if ev.get("file_type") == "image":
-            try:
-                img = Image.open(io.BytesIO(ev["file_data"])).convert("RGB")
-                img.thumbnail((480, 360), Image.LANCZOS)
-                ph = ImageTk.PhotoImage(img)
-                self._image_refs.append(ph)
-                self._ev_preview.configure(image=ph, text="")
-                self._ev_preview._ref = ph
-                return
-            except Exception:
-                pass
-        self._ev_preview.configure(image="", text=f"[{ev['file_type'].upper()}]\n{ev['filename']}")
+        source = supporting_evidence(ev, size=(480,360))
+        self._ev_preview._evidence_key = source['key']
+        if source['image']:
+            ph = ImageTk.PhotoImage(source['image'])
+            self._ev_preview.configure(image=ph, text='')
+            self._ev_preview._ref = ph
+        else:
+            self._ev_preview.configure(image='', text=source['warning'], wraplength=460)
 
     def _download_evidence(self) -> None:
         if self._current_evidence is None:

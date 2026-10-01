@@ -5,6 +5,7 @@ sees only data belonging to their own student_id. Launched from auth/login.py.
 """
 
 from __future__ import annotations
+from core.evidence_integrity import original_evidence, supporting_evidence
 
 import time
 from core.portal_state import PortalRequests, page_snapshot, prepare_photo, PAGE_SIZE, comparable, violation_group
@@ -132,6 +133,7 @@ class StudentPortal(WorkspaceWindow):
         self._page_offset = 0
         self._focused_violation = None
         self._focused_appeal_id = None
+        self._evidence_windows = []
         self._unread_count = 0
         self._violation_counts = {}
         self._pending_appeals = 0
@@ -307,10 +309,11 @@ class StudentPortal(WorkspaceWindow):
         if self._closed or self._action_request or (self._request and not self._request.cancelled.is_set()):
             return
         page, offset, group, focus = self._active, self._page_offset, self._violation_filter, self._focused_violation
+        focused_appeal = self._focused_appeal_id
         appeal_ids = tuple({vid for button, vid in self._appeal_buttons if button.winfo_exists()})
         self._request = self._refresh.request(page, self._page_generation,
             lambda db, sid: page_snapshot(db, sid, page, offset=offset, group=group,
-                                         violation_id=focus, appeal_ids=appeal_ids))
+                                         violation_id=focus, appeal_ids=appeal_ids, appeal_id=focused_appeal))
         if self._request:
             self._last_workflow_refresh = time.monotonic()
             self._page_status.configure(text='Refreshing…' if self._page_scroll else 'Loading…', text_color=SP_MUTED)
@@ -458,6 +461,10 @@ class StudentPortal(WorkspaceWindow):
     def _show(self, key: str, *, reload: bool = True, preserve_page=False) -> None:
         if self._closed:
             return
+        for window in self._evidence_windows:
+            if window.winfo_exists():
+                window.destroy()
+        self._evidence_windows.clear()
         self._click_started = time.monotonic()
         if self._request:
             self._request.cancelled.set()
@@ -759,7 +766,7 @@ class StudentPortal(WorkspaceWindow):
         ctk.CTkFrame(card, width=4, fg_color=SP_DANGER if strike_active else SP_SAFE,
                      corner_radius=8).grid(row=0, column=0, rowspan=8, sticky="nsw",
                                            padx=(0, 12), pady=2)
-        ctk.CTkLabel(card, text=violation_label, font=_f(14, "bold"),
+        ctk.CTkLabel(card, text=f"Violation #{viol_id} · {violation_label}", font=_f(14, "bold"),
                      text_color=SP_TEXT, anchor="w").grid(row=0, column=1, sticky="w", pady=(12, 0))
         ctk.CTkLabel(card, text=_display_ts(viol.get("timestamp")), font=_f(11),
                      text_color=SP_MUTED, anchor="e").grid(
@@ -775,7 +782,7 @@ class StudentPortal(WorkspaceWindow):
 
         timing_text = (
             f"Detected: {_display_ts(viol.get('timestamp'))}  ·  "
-            f"Confirmed: {_display_ts(viol.get('confirmed_at'))}"
+            f"Published: {_display_ts(viol.get('appeal_opened_at'))}"
         )
         ctk.CTkLabel(card, text=timing_text, font=_f(11), text_color=SP_MUTED,
                      anchor="w", justify="left", wraplength=720).grid(
@@ -870,7 +877,7 @@ class StudentPortal(WorkspaceWindow):
     def _make_appeal_button(self, parent, viol: dict, *, outcome_label=None, deadline_label=None):
         button = ctk.CTkButton(
             parent, width=235, height=30, corner_radius=8, font=_f(12),
-            command=lambda: self._open_appeal_form(viol),
+            command=lambda selected=dict(viol): self._open_appeal_form(selected),
         )
         button._appeal_outcome_label = outcome_label
         button._appeal_deadline_label = deadline_label
@@ -921,6 +928,7 @@ class StudentPortal(WorkspaceWindow):
         self._appeal_buttons = alive
 
     def _open_appeal_form(self, viol: dict) -> None:
+        viol = dict(viol)  # This form owns one selection even if its card is refreshed.
         viol_id = viol.get("id")
         if not viol_id:
             return
@@ -931,7 +939,9 @@ class StudentPortal(WorkspaceWindow):
             return
 
         modal = ctk.CTkToplevel(self)
-        modal.title("Submit Appeal")
+        self._evidence_windows.append(modal)
+        modal.title(f"Submit Appeal — Violation #{viol_id}")
+        modal._violation_id = viol_id
         modal.configure(fg_color=SP_BG)
         modal.geometry("520x660")
         modal.resizable(False, True)
@@ -946,15 +956,9 @@ class StudentPortal(WorkspaceWindow):
 
         ctk.CTkLabel(inner, text="Submit Appeal", font=_f(20, "bold"),
                      text_color=SP_TEXT).grid(row=0, column=0, sticky="w", pady=(0, 4))
-        violation_label = viol.get("violation_label") or violation_display_name(
-            viol.get("violation_code"), viol.get("violation_type"))
-        appeal_meta = (
-            f"Violation: {violation_label}\n"
-            f"Detected: {_display_ts(viol.get('timestamp'))}\n"
-            f"Appeal deadline: {_display_ts(viol.get('appeal_deadline'))}"
-        )
-        ctk.CTkLabel(inner, text=appeal_meta, font=_f(12), text_color=SP_MUTED,
-                     justify="left").grid(row=1, column=0, sticky="w", pady=(0, 16))
+        metadata = ctk.CTkLabel(inner, text=self._appeal_selection_text(viol), font=_f(12),
+            text_color=SP_MUTED, justify='left', wraplength=440)
+        metadata.grid(row=1, column=0, sticky='w', pady=(0,16))
 
         original = ctk.CTkFrame(inner, fg_color=SP_SURFACE)
         original.grid(row=2, column=0, sticky="ew", pady=6)
@@ -963,7 +967,7 @@ class StudentPortal(WorkspaceWindow):
         original_photo.pack(pady=4)
         ctk.CTkButton(original, text="View Detection Evidence",
             command=lambda: self._open_snapshot(viol)).pack(pady=4)
-        self._load_form_detection(viol_id, original_photo)
+        self._load_form_detection(viol_id, original_photo, metadata)
         ctk.CTkLabel(
             inner,
             text=(f"Appeals must be submitted within {_APPEAL_DAYS} days of publication in My Violations. "
@@ -1085,79 +1089,78 @@ class StudentPortal(WorkspaceWindow):
                       fg_color=SP_SURFACE, hover_color=SP_HOVER_LIGHT, text_color=SP_TEXT,
                       border_width=1, border_color=SP_BORDER, command=modal.destroy).pack(side="right")
 
-    def _load_form_detection(self, violation_id, label):
-        """Independent owner-scoped read; evidence loading never blocks a form submission."""
+    @staticmethod
+    def _appeal_selection_text(violation):
+        label = violation.get('violation_label') or violation_display_name(
+            violation.get('violation_code'), violation.get('violation_type'))
+        return (f"You are appealing violation #{violation['id']}, detected on {_display_ts(violation.get('timestamp'))}.\n"
+                f"Type: {label}\nPublished: {_display_ts(violation.get('appeal_opened_at'), fallback='Not recorded (legacy)')}\n"
+                f"Appeal deadline: {_display_ts(violation.get('appeal_deadline'))}")
+
+    def _load_form_detection(self, violation_id, label, metadata=None):
+        """Each form has a fixed record ID, owner, and independent response channel."""
         owner, database = self.student_id, CBVMSDatabase(self.db.db_path, timeout=.75)
+        label._violation_id = violation_id
         results = queue.Queue(maxsize=1)
         def read():
             try:
-                with database.connect() as conn:
-                    row = conn.execute("SELECT snapshot FROM violations WHERE id=? AND student_id=?",
-                                       (violation_id, owner)).fetchone()
-                prepared = prepare_photo(row[0], (260, 120)) if row and row[0] else None
-                results.put((prepared, None))
+                row = database.get_student_original_evidence(violation_id, owner)
+                results.put((original_evidence(row, size=(260, 120)), row, None))
             except Exception as exc:
-                results.put((None, str(exc)))
+                results.put((None, None, str(exc)))
         def deliver():
-            if not label.winfo_exists() or owner != self.student_id:
+            if self._closed or not label.winfo_exists() or owner != self.student_id or label._violation_id != violation_id:
                 return
             try:
-                picture, error = results.get_nowait()
+                source, row, error = results.get_nowait()
             except queue.Empty:
                 self._schedule_ui(50, deliver)
                 return
-            if picture:
-                label._ref = ctk.CTkImage(picture, size=picture.size)
-                label.configure(text='', image=label._ref)
-            else:
-                label.configure(text='Original image unavailable. Use View Detection Evidence to retry.')
+            if source:
+                if metadata is not None and metadata.winfo_exists():
+                    metadata.configure(text=self._appeal_selection_text(row))
+                label._evidence_key = source['key']
+                label._evidence_image = source['image']
+                picture = source['image']
+                if picture:
+                    label._ref = ctk.CTkImage(picture, size=picture.size)
+                    label.configure(text=source['label'], image=label._ref, compound='top', wraplength=420)
+                    return
+            label.configure(image=None, text=(source['warning'] if source else error) or 'Original evidence unavailable', wraplength=420)
         threading.Thread(target=read, daemon=True, name='appeal-detection-preview').start()
         self._schedule_ui(50, deliver)
 
     def _open_snapshot(self, viol: dict) -> None:
-        violation_label = viol.get("violation_label") or violation_display_name(
-            viol.get("violation_code"), viol.get("violation_type"))
+        violation_id = int(viol['id'])
         modal = ctk.CTkToplevel(self)
-        modal.title(f"Violation Snapshot — {violation_label}")
+        self._evidence_windows.append(modal)
+        modal.title(f"Original detection evidence — Violation #{violation_id}")
         modal.configure(fg_color=SP_BG)
-        modal.geometry("520x420")
-        modal.resizable(False, False)
+        modal.geometry('850x700')
         modal.transient(self)
-        self._schedule_ui(120, lambda: modal.winfo_exists() and modal.lift())
-        self._schedule_ui(200, lambda: modal.winfo_exists() and modal.grab_set())
-
-        holder = tk.Label(modal, bg=SP_BG, bd=0)
-        holder.pack(padx=20, pady=(20, 8))
-        holder.configure(text='Loading image…', fg=SP_MUTED)
+        label = ctk.CTkLabel(modal, text='Loading original detection evidence…', wraplength=760)
+        label.pack(fill='both', expand=True, padx=20, pady=20)
         def load(db, sid):
-            with db.connect() as conn:
-                row = conn.execute('SELECT snapshot FROM violations WHERE id = ? AND student_id = ?',
-                                   (viol['id'], sid)).fetchone()
-            if not row or not row[0]:
-                raise ValueError('No evidence image is available for this record')
-            return prepare_photo(row[0], (480, 300))
-        def display(prepared):
-            if holder.winfo_exists():
-                photo = ImageTk.PhotoImage(prepared, master=modal)
-                holder.configure(image=photo, text='')
-                holder._img_ref = photo
-            self._page_status.configure(text='Up to date', text_color=SP_MUTED)
+            return original_evidence(db.get_student_original_evidence(violation_id, sid), size=(780, 520))
+        def display(source):
+            if not modal.winfo_exists() or source['key'][:2] != ('violation', violation_id):
+                return
+            modal._evidence_key = label._evidence_key = source['key']
+            modal._evidence_image = source['image']
+            if source['image']:
+                label._ref = ctk.CTkImage(source['image'], size=source['image'].size)
+                label.configure(image=label._ref, text=source['label'], compound='top')
+            else:
+                label.configure(image=None, text=source['warning'])
         def failed(message):
-            if holder.winfo_exists():
-                holder.configure(text=f'Could not load image: {message}')
+            if label.winfo_exists():
+                label.configure(image=None, text=f'Original evidence unavailable: {message}')
         def retry():
-            if self._run_action(load, display, failed):
-                self._page_status.configure(text='Loading image…', text_color=SP_MUTED)
+            label.configure(image=None, text='Loading original detection evidence…')
+            self._run_action(load, display, failed)
         ctk.CTkButton(modal, text='Reload image', command=retry).pack(pady=4)
+        ctk.CTkButton(modal, text='Close', command=modal.destroy).pack(pady=8)
         retry()
-
-        ctk.CTkLabel(modal, text=violation_label, font=_f(14, "bold"),
-                     text_color=SP_TEXT).pack()
-        ctk.CTkLabel(modal, text=_display_ts(viol.get("timestamp")), font=_f(11),
-                     text_color=SP_MUTED).pack(pady=(0, 6))
-        ctk.CTkButton(modal, text="Close", width=120, height=34, corner_radius=8,
-                      fg_color=SP_ACCENT, hover_color=SP_ACCENT_HOVER, text_color=SP_WHITE,
-                      command=modal.destroy).pack(pady=(0, 12))
 
     # ------------------------------------------------------------------
     # Notifications panel
@@ -1313,24 +1316,19 @@ class StudentPortal(WorkspaceWindow):
                                                                                    pady=(14, 0))
 
     def _view_appeal(self, appeal_id):
-        # Resolve the exact case's page using student-scoped metadata in the worker.
-        def locate(db, sid):
-            rows = db.get_appeals_for_student(sid)
-            return next((i // PAGE_SIZE * PAGE_SIZE for i, row in enumerate(rows)
-                         if row['id'] == appeal_id), 0)
-        def show(offset):
-            self._show('appeals')
-            self._page_offset = offset
-            self._focused_appeal_id = appeal_id
-            if self._request:
-                self._request.cancelled.set()
-                self._request = None
-            self._reload_workflow_data()
-        self._run_action(locate, show)
+        # Exact owner-scoped lookup survives inserts, filtering, and pagination changes.
+        self._show('appeals')
+        self._focused_appeal_id = appeal_id
+        self._page_offset = 0
+        if self._request:
+            self._request.cancelled.set()
+            self._request = None
+        self._reload_workflow_data()
 
     def _open_appeal_evidence(self, appeal_id):
         modal = ctk.CTkToplevel(self)
-        modal.title("Supporting Image")
+        self._evidence_windows.append(modal)
+        modal.title(f"Supporting Image — Appeal #{appeal_id}")
         modal.geometry("700x600")
         label = ctk.CTkLabel(modal, text="Loading supporting image…")
         label.pack(fill="both", expand=True, padx=16, pady=16)
@@ -1338,11 +1336,16 @@ class StudentPortal(WorkspaceWindow):
             rows = db.get_student_appeal_evidence(appeal_id, sid)
             if not rows:
                 raise ValueError("Supporting image is unavailable.")
-            return prepare_photo(rows[0]['file_data'], (650, 520))
-        def show(image):
-            if modal.winfo_exists():
-                label._ref = ctk.CTkImage(image, size=image.size)
-                label.configure(text='', image=label._ref)
+            return supporting_evidence(rows[0], size=(650, 520))
+        def show(source):
+            if modal.winfo_exists() and source['key'][:2] == ('appeal', appeal_id):
+                modal._evidence_key = source['key']
+                modal._evidence_image = source['image']
+                if source['image']:
+                    label._ref = ctk.CTkImage(source['image'], size=source['image'].size)
+                    label.configure(text=source['label'], image=label._ref, compound='top', wraplength=620)
+                else:
+                    label.configure(text=source['warning'], image=None, wraplength=620)
         self._run_action(load, show,
             lambda error: label.configure(text=error) if label.winfo_exists() else None)
 
@@ -1365,7 +1368,7 @@ class StudentPortal(WorkspaceWindow):
 
         vtype = violation_display_name(
             appeal.get("violation_code"), appeal.get("violation_type"))
-        ctk.CTkLabel(card, text=f"Appeal #{appeal['id']} · {vtype}", font=_f(14, "bold"),
+        ctk.CTkLabel(card, text=f"Appeal #{appeal['id']} · Violation #{appeal['violation_id']} · {vtype}", font=_f(14, "bold"),
                      text_color=SP_TEXT, anchor="w").grid(row=0, column=1, sticky="w",
                                                           pady=(12, 0))
 
@@ -1374,7 +1377,7 @@ class StudentPortal(WorkspaceWindow):
 
         meta = (
             f"Detected: {_display_ts(appeal.get('violation_ts'))}  ·  "
-            f"Confirmed: {_display_ts(appeal.get('confirmed_at'))}\n"
+            f"Published: {_display_ts(appeal.get('appeal_opened_at'))}\n"
             f"Appeal deadline: {_display_ts(appeal.get('appeal_deadline'))}  ·  "
             f"Submitted: {_display_ts(appeal.get('submitted_at'))}"
         )
@@ -1408,6 +1411,9 @@ class StudentPortal(WorkspaceWindow):
 
         ctk.CTkButton(reason_frame, text="View Supporting Image",
             command=lambda aid=appeal["id"]: self._open_appeal_evidence(aid)).pack(anchor="w", padx=12, pady=6)
+
+        ctk.CTkButton(reason_frame, text="View Original Detection Evidence",
+            command=lambda vid=appeal['violation_id']: self._open_snapshot({'id': vid})).pack(anchor='w', padx=12, pady=6)
 
         # AI recommendation section
         ai_rec = (appeal.get("ai_recommendation") or "").strip()

@@ -78,11 +78,11 @@ class RecordsUITests(unittest.TestCase):
             self.assertEqual([r["id"] for r in panel._report_violations()], [missing])
             panel._viol_tree.selection_set(str(missing))
             panel._on_viol_select()
-            self.assertEqual(panel._snapshot_message, "No snapshot on file")
+            self.assertEqual(panel._snapshot_message, "Original evidence unavailable")
             panel._viol_search.set("")
             panel._viol_tree.selection_set(str(corrupt))
             panel._on_viol_select()
-            self.assertEqual(panel._snapshot_message, "Snapshot unavailable")
+            self.assertEqual(panel._snapshot_message, "Evidence unavailable: image is unreadable.")
             self.assertEqual(panel._vd_enlarge.cget("state"), "disabled")
             for tab in ("attendance", "appeals", "evidence", "history", "violations"):
                 panel._switch_tab(tab)

@@ -1370,7 +1370,7 @@ class CBVMSDashboard(WorkspaceWindow):
                             and started-self._tracking_offer_time >= .12):
                         self._tracking_worker.offer(MonitorTask(
                             FrameContext(self._monitor_generation, sample.frame_id, sample.captured_at),
-                            sample.frame, time.time()-(started-sample.captured_at), self._monitor_cancel,
+                            sample.frame, sample.captured_wall_time or time.time()-(started-sample.captured_at), self._monitor_cancel,
                             uniform_enabled=self._checker.check_uniform, earring_enabled=self._checker.check_earring,
                             camera_generation=self._camera_generation))
                         self._tracking_last_offered = sample.frame_id

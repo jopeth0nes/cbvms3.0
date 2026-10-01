@@ -360,6 +360,8 @@ class LiveProcessor:
         if not 0<=now-latest.captured_at<=1:
             return
         for assessment in result.assessments:
+            if assessment.context != task.context:
+                continue  # Never persist an assessment against a different captured frame.
             if not task.valid():
                 return
             box=assessment.face_box
@@ -432,7 +434,19 @@ class LiveProcessor:
                     else:
                         written=self.database.log_violation(student_id=sid,student_name=assessment.name,
                             violation_type=display,violation_code=code,snapshot_jpeg=jpeg.tobytes(),
-                            detected_at=observed,status='pending_review',valid_if=guard)
+                            detected_at=observed,status='pending_review',valid_if=guard,
+                            evidence_provenance=dict(
+                                captured_at=observed.isoformat(),
+                                camera_session=str(task.context.frame_id[0]),
+                                frame_id=list(task.context.frame_id),
+                                monitor_generation=task.context.generation,
+                                camera_generation=task.camera_generation,
+                                presence_id=assessment.presence_id, track_id=assessment.track_id,
+                                face_box=list(assessment.face_box),
+                                body_box=list(assessment.body_box) if assessment.body_box else None,
+                                torso_box=list(assessment.torso_box) if assessment.torso_box else None,
+                                crop_box=[max(0,x1),max(0,y1),min(w,x2),min(h,y2)],
+                                frame_size=[w,h]))
                     if written is None:
                         event("database_write_rejected", category=code, student_id=sid)
                         continue

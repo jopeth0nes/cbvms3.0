@@ -91,7 +91,7 @@ def prepare_photo(blob, size):
         return image.copy()
 
 
-def page_snapshot(database, student_id, page, *, offset=0, group='All', violation_id=None, appeal_ids=()):
+def page_snapshot(database, student_id, page, *, offset=0, group='All', violation_id=None, appeal_ids=(), appeal_id=None):
     """Load only a page's metadata; evidence bytes are fetched on explicit request."""
     started = time.monotonic()
     database.process_expired_deadlines(student_id=student_id)
@@ -139,7 +139,8 @@ def page_snapshot(database, student_id, page, *, offset=0, group='All', violatio
                 related[vid] = record
         data['_notification_violations'] = related
     if page == 'appeals':
-        rows = database.get_appeals_for_student(student_id, limit=PAGE_SIZE+1, offset=offset)
+        rows = database.get_appeals_for_student(student_id, limit=PAGE_SIZE+1,
+            offset=0 if appeal_id else offset, appeal_id=appeal_id)
         data['_has_more'], data['_appeals'] = len(rows) > PAGE_SIZE, rows[:PAGE_SIZE]
     records = data.get('_violations', []) + list(data.get('_notification_violations', {}).values())
     eligibility = {r['id']: {'eligible': bool(r.get('can_appeal')),

@@ -287,7 +287,7 @@ class AppealFlowWidgetTests(AppealFlowFixture):
                 records.reason.insert('1.0', 'Reviewed the submitted picture.')
                 with patch('ui.appeals_panel.messagebox.askyesno',return_value=True):
                     (records.approve if decision == 'approved' else records.reject).invoke()
-                self.until(lambda: records.case['status'] == decision)
+                self.until(lambda: records.case.get('status') == decision)
                 portal._refresh_appeal_results()
                 self.loaded()
                 updated = next(a for a in portal._appeals if a['id'] == aid)
