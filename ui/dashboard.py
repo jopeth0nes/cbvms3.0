@@ -39,6 +39,7 @@ from ui.notifications_panel import NotificationsPanel
 from ui.settings import SettingsPanel
 from ui.training_panel import TrainingPanel
 from ui.records_panel import RecordsPanel
+from ui.appeals_panel import AppealsPanel
 from ui.suspensions_panel import SuspensionsPanel
 from ui.violation_log import ViolationLogPanel
 from ui.account_manager import AccountManagerPanel
@@ -260,12 +261,37 @@ class CBVMSDashboard(WorkspaceWindow):
         self.grid_columnconfigure(2, weight=0, minsize=280)
         self.grid_rowconfigure(0, weight=0)
         self.grid_rowconfigure(1, weight=1)
-        welcome_banner(self, self.username, "Administrator").grid(
+        self._welcome_banner = welcome_banner(self, self.username, "Administrator")
+        self._welcome_banner.grid(
             row=0, column=1, columnspan=2, sticky="ew", padx=16, pady=(16, 0))
 
         self._build_left_sidebar()
         self._build_center_panel()
         self._build_right_sidebar()
+        self._appeal_counts = queue.Queue(maxsize=1)
+        self._appeal_count_busy = threading.Event()
+        self._refresh_appeal_counts()
+
+    def _refresh_appeal_counts(self):
+        counts = _drain(self._appeal_counts)
+        if counts is not None:
+            pending, self._appeal_unread = counts
+            self._nav_buttons["appeals"].configure(text=f"Appeals ({pending})")
+            self._update_bell_badge()
+        def read():
+            try:
+                self._database.process_expired_deadlines()
+                counts = (self._database.admin_appeal_pending_count(), self._database.admin_appeal_unread_count())
+                if self._appeal_counts.empty():
+                    self._appeal_counts.put_nowait(counts)
+            except Exception:
+                pass
+            finally:
+                self._appeal_count_busy.clear()
+        if not self._appeal_count_busy.is_set():
+            self._appeal_count_busy.set()
+            threading.Thread(target=read, daemon=True, name="appeal-counts").start()
+        self._appeal_count_job = self.after(5000, self._refresh_appeal_counts)
 
     def _build_left_sidebar(self) -> None:
         sidebar = ctk.CTkFrame(
@@ -310,6 +336,7 @@ class CBVMSDashboard(WorkspaceWindow):
             ("suspensions", "⏸  Suspensions"),
             ("violations", "⚠  Violation Log"),
             ("records",    "🗄  Records"),
+            ("appeals",    "Appeals"),
             ("training",   "🎓  Training"),
             ("accounts",   "🔑  Account Manager"),
             ("settings",   "⚙  Settings"),
@@ -352,12 +379,12 @@ class CBVMSDashboard(WorkspaceWindow):
         ).pack(fill="x")
 
     def _build_center_panel(self) -> None:
-        center = ctk.CTkFrame(self, fg_color="transparent")
+        center = self._center_panel = ctk.CTkFrame(self, fg_color="transparent")
         center.grid(row=1, column=1, sticky="nsew", padx=PADDING, pady=PADDING)
         center.grid_columnconfigure(0, weight=1)
         center.grid_rowconfigure(1, weight=1)
 
-        title_row = ctk.CTkFrame(center, fg_color="transparent")
+        title_row = self._title_row = ctk.CTkFrame(center, fg_color="transparent")
         title_row.grid(row=0, column=0, sticky="ew", pady=(0, PADDING))
 
         self._center_title = ctk.CTkLabel(
@@ -466,7 +493,7 @@ class CBVMSDashboard(WorkspaceWindow):
             on_open_suspensions=self._open_student_suspensions,
         )),
             "suspensions": ("_suspensions_panel", lambda: SuspensionsPanel(
-            self._view_host, database=self._database, username=self.username)),
+            self._view_host, database=self._database, username=self.username, on_open_appeals=lambda aid=None: self._open_alert_record("appeals", aid))),
             "violations": ("_violation_panel", lambda: ViolationLogPanel(self._view_host, database=self._database)),
             "training": ("_training_panel", lambda: TrainingPanel(
             self._view_host,
@@ -494,6 +521,7 @@ class CBVMSDashboard(WorkspaceWindow):
             database=self._database, on_open=self._open_alert_record,
         )),
             "records": ("_records_panel", lambda: RecordsPanel(self._view_host, database=self._database, username=self.username)),
+            "appeals": ("_appeals_panel", lambda: AppealsPanel(self._view_host, database=self._database, username=self.username, on_change=self._update_bell_badge)),
             "accounts": ("_account_manager_panel", lambda: AccountManagerPanel(
             self._view_host, database=self._database)),
         }
@@ -527,7 +555,7 @@ class CBVMSDashboard(WorkspaceWindow):
         return row
 
     def _build_right_sidebar(self) -> None:
-        sidebar = ctk.CTkFrame(
+        sidebar = self._activity_sidebar = ctk.CTkFrame(
             self, width=SIDEBAR_RIGHT_WIDTH, fg_color=COLOR_SURFACE,
             corner_radius=CORNER_RADIUS, border_width=1, border_color=COLOR_BORDER,
         )
@@ -604,6 +632,20 @@ class CBVMSDashboard(WorkspaceWindow):
         if previous_nav != key:
             self._invalidate_monitor()
         self._active_nav = key
+        if previous_nav == "appeals" and key != "appeals":
+            self._appeals_panel.on_hide()
+        if key == "appeals":
+            self._activity_sidebar.grid_remove()
+            self._title_row.grid_remove()
+            self._welcome_banner.grid_remove()
+            self.grid_columnconfigure(2, minsize=0)
+            self._center_panel.grid_configure(columnspan=2)
+        elif previous_nav == "appeals":
+            self._activity_sidebar.grid()
+            self._title_row.grid()
+            self._welcome_banner.grid()
+            self.grid_columnconfigure(2, minsize=280)
+            self._center_panel.grid_configure(columnspan=1)
 
         # Power saver: entering Live (re)opens the camera if it was released; leaving Live
         # is handled lazily by the idle watchdog in _update_feed (with a grace window).
@@ -659,6 +701,8 @@ class CBVMSDashboard(WorkspaceWindow):
                 self._training_panel.on_show()
             if key == "violations" and self._violation_panel is not None:
                 self._violation_panel.refresh()
+            if key == "appeals":
+                self._appeals_panel.on_show()
             if key == "records" and self._records_panel is not None:
                 self._records_panel.on_show()
             if key == "accounts" and self._account_manager_panel is not None:
@@ -708,7 +752,7 @@ class CBVMSDashboard(WorkspaceWindow):
         if badge is None:
             return
         try:
-            count = self._notifier.unread_count() + self._database.admin_appeal_unread_count()
+            count = self._notifier.unread_count() + getattr(self, "_appeal_unread", 0)
             if count <= 0:
                 badge.place_forget()
                 return
@@ -727,6 +771,10 @@ class CBVMSDashboard(WorkspaceWindow):
         self._on_nav_select("alerts")
 
     def _open_alert_record(self, category: str, record_id: int | None) -> None:
+        if category == "appeals":
+            self._on_nav_select("appeals")
+            self._appeals_panel.open_alert(category, record_id)
+            return
         self._on_nav_select("records")
         if self._records_panel is not None:
             self._records_panel.open_alert(category, record_id)
@@ -1452,7 +1500,7 @@ class CBVMSDashboard(WorkspaceWindow):
             except Exception:
                 pass
             self._camera_switch_job = None
-        for job_attr in ("_feed_job", "_clock_job", "_stats_job"):
+        for job_attr in ("_feed_job", "_clock_job", "_stats_job", "_appeal_count_job"):
             job = getattr(self, job_attr, None)
             if job:
                 try:

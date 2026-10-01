@@ -113,7 +113,8 @@ class StudentManagementTests(unittest.TestCase):
                 self.db.impose_suspension("S1", **values)
 
     def test_existing_appeal_and_strike_survive_status_change(self):
-        vid = self.db.log_violation("S1", "Student One", "wrong_uniform", detected_at=self.now)
+        with patch("database.db_manager.utc_now", return_value=self.now):
+            vid = self.db.log_violation("S1", "Student One", "wrong_uniform", detected_at=self.now)
         self.assertTrue(self.db.confirm_violation(vid, confirmed_at=self.now))
         with patch("database.db_manager.utc_now", return_value=self.now):
             from tests.evidence_fixture import picture_evidence
@@ -122,9 +123,9 @@ class StudentManagementTests(unittest.TestCase):
         self.change_status("Graduate")
         self.assertEqual(self.db.get_appeal_for_violation(vid)["status"], "pending")
         self.assertTrue(self.db.update_appeal_decision(aid, "approved", "Evidence reviewed",
-            decided_by="osa.person", decided_at=self.now + timedelta(hours=1)))
+            decided_by="admin", decided_at=self.now + timedelta(hours=1)))
         with self.db.connect() as conn:
-            self.assertEqual(conn.execute("SELECT is_active FROM strikes WHERE violation_id=?", (vid,)).fetchone()[0], 0)
+            self.assertEqual(conn.execute("SELECT COALESCE(SUM(is_active),0) FROM strikes WHERE violation_id=?", (vid,)).fetchone()[0], 0)
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM violations WHERE id=?", (vid,)).fetchone()[0], 1)
 
     def test_continuous_presence_is_one_entry_and_return_is_another(self):

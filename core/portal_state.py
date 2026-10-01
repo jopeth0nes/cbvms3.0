@@ -5,10 +5,10 @@ from core.diagnostics import event
 
 
 def violation_group(row):
+    if row.get("status") in ("dismissed", "resolved") or row.get("appeal_status") == "approved":
+        return "Resolved"
     if row.get("status") in ("pending_review", "unreviewed"):
         return "Pending"
-    if row.get("status") == "dismissed" or row.get("appeal_status") == "approved":
-        return "Resolved"
     return "Confirmed"
 
 
@@ -112,9 +112,9 @@ def page_snapshot(database, student_id, page, *, offset=0, group='All', violatio
         with database.connect() as conn:
             counts = conn.execute('''SELECT
                 SUM(v.status IN ('pending_review','unreviewed')) AS pending,
-                SUM(v.status NOT IN ('pending_review','unreviewed','dismissed')
+                SUM(v.status NOT IN ('pending_review','unreviewed','dismissed','resolved')
                     AND COALESCE(a.status,'') != 'approved') AS confirmed,
-                SUM(v.status = 'dismissed' OR a.status = 'approved') AS resolved
+                SUM(v.status IN ('dismissed','resolved') OR a.status = 'approved') AS resolved
                 FROM violations v LEFT JOIN appeals a ON a.violation_id = v.id
                 WHERE v.student_id = ?''', (student_id,)).fetchone()
             data['_violation_counts'] = {k: int(v or 0) for k, v in dict(counts).items()}

@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Callable
 
 from core.discipline import (
-    ADMIN_REVIEW_DAYS,
     AUTO_CONFIRMED,
     CONFIRMED,
     CONFIRMED_STATUSES,
@@ -131,6 +130,8 @@ CREATE TABLE IF NOT EXISTS appeals (
 """
 
 WORKFLOW_INDEXES = (
+    "CREATE INDEX IF NOT EXISTS idx_violations_appeal_deadline ON violations(appeal_deadline) "
+    "WHERE appeal_opened_at IS NOT NULL AND appeal_window_closed_at IS NULL",
     "CREATE INDEX IF NOT EXISTS idx_violations_review_deadline "
     "ON violations(status, review_deadline)",
     "CREATE INDEX IF NOT EXISTS idx_violations_student_status "
@@ -236,6 +237,8 @@ class CBVMSDatabase(StudentManagement):
                 "review_deadline": "TEXT",
                 "confirmed_at": "TEXT",
                 "appeal_deadline": "TEXT",
+                "appeal_opened_at": "TEXT",
+                "lifecycle_origin": "TEXT",
                 "appeal_window_closed_at": "TEXT",
                 "review_decided_at": "TEXT",
                 "reviewed_by": "TEXT DEFAULT ''",
@@ -272,9 +275,8 @@ class CBVMSDatabase(StudentManagement):
                 (legacy_term_id,),
             )
 
-            # Backfill only identity/timestamps. Pre-feature `unreviewed` rows deliberately
-            # remain legacy records with no automatic deadline: retroactively confirming the
-            # user's old camera history would create an unexpected strike/notification flood.
+            # Normalize category identities before the versioned publication migration.
+            # Historical finalized rows keep their existing disciplinary outcomes.
             rows = conn.execute(
                 "SELECT id, violation_type, violation_code FROM violations"
             ).fetchall()
@@ -289,45 +291,6 @@ class CBVMSDatabase(StudentManagement):
                         (stable_code, row["id"]),
                     )
 
-            # Old eager notices sometimes promised a seven-day appeal period.  Keep
-            # every historical notification row, but repeat-safely neutralize wording
-            # that conflicts with the new five-day, strike-backed workflow.  Notices
-            # linked to legacy unreviewed rows remain hidden by delivery queries.
-            conn.execute(
-                """UPDATE student_notifications
-                   SET title = 'Historical Violation Record',
-                       message = ('A historical violation record is available in your '
-                                  || 'portal. Migration did not create a retroactive '
-                                  || 'strike or a new appeal window.')
-                   WHERE violation_id IN (
-                       SELECT id FROM violations
-                       WHERE status IN ('unreviewed', 'reviewed')
-                   )
-                     AND lower(message) LIKE '%7 day%'"""
-            )
-
-            conn.execute(
-                """
-                UPDATE violations
-                SET review_deadline = datetime(timestamp, '+' || ? || ' days')
-                WHERE status = ? AND review_deadline IS NULL
-                """,
-                (ADMIN_REVIEW_DAYS, PENDING_REVIEW),
-            )
-            confirmed_placeholders = ",".join("?" for _ in CONFIRMED_STATUSES)
-            conn.execute(
-                f"""
-                UPDATE violations
-                SET confirmed_at = COALESCE(confirmed_at, timestamp),
-                    appeal_deadline = COALESCE(
-                        appeal_deadline,
-                        datetime(COALESCE(confirmed_at, timestamp), '+' || ? || ' days')
-                    )
-                WHERE status IN ({confirmed_placeholders})
-                """,
-                (STUDENT_APPEAL_DAYS, *CONFIRMED_STATUSES),
-            )
-
             # Repair multiple current rows before installing the partial unique index.
             current_rows = conn.execute(
                 "SELECT id FROM academic_terms WHERE is_current = 1 ORDER BY id"
@@ -336,6 +299,8 @@ class CBVMSDatabase(StudentManagement):
                 conn.execute("UPDATE academic_terms SET is_current = 0 WHERE id = ?", (extra["id"],))
             for ddl in WORKFLOW_INDEXES:
                 conn.execute(ddl)
+            from database.appeal_migration import migrate_appeals
+            migrate_appeals(self, conn, utc_now())
             conn.commit()
         self._seed_default_admin()
         # Normal startup processing makes persisted deadlines reliable even after the
@@ -594,7 +559,7 @@ class CBVMSDatabase(StudentManagement):
         semester_id: int | None = None,
         valid_if: Callable[[], bool] | None = None,
     ) -> int | None:
-        """Persist a camera/manual detection in administrative review.
+        """Persist and immediately publish a camera/manual detection for appeal.
 
         ``violation_type`` remains the evidence/display text. ``violation_code`` is
         the stable category identity and never includes classifier confidence.
@@ -612,7 +577,7 @@ class CBVMSDatabase(StudentManagement):
         if detected_dt is None:
             raise ValueError("detected_at must be a valid datetime")
         detected_text = format_db_datetime(detected_dt)
-        review_deadline = format_db_datetime(add_calendar_days(detected_dt, ADMIN_REVIEW_DAYS))
+        review_deadline = None  # appeal timing begins at transactional publication
 
         with self.connect() as conn:
             # Check current standing inside the same write transaction.
@@ -660,6 +625,8 @@ class CBVMSDatabase(StudentManagement):
                 ),
             )
             violation_id = _inserted_row_id(cursor)
+            if standing and is_disciplinary_code(safe_code):
+                self._publish_violation_conn(conn, violation_id, utc_now(), "live_publication")
             if valid_if is not None and not valid_if():
                 conn.rollback()
                 return None
@@ -872,159 +839,65 @@ class CBVMSDatabase(StudentManagement):
             ).fetchone()
         return event, created
 
-    def _ensure_confirmation_side_effects_conn(
-        self,
-        conn: sqlite3.Connection,
-        violation: sqlite3.Row,
-    ) -> None:
-        status = (violation["status"] or "").lower()
-        if status not in (CONFIRMED, AUTO_CONFIRMED):
+    def _publish_violation_conn(self, conn, violation_id, now, origin):
+        opened = format_db_datetime(now)
+        deadline = format_db_datetime(add_calendar_days(opened, STUDENT_APPEAL_DAYS))
+        conn.execute("""UPDATE violations SET appeal_opened_at=?, appeal_deadline=?,
+            review_deadline=NULL, lifecycle_origin=? WHERE id=?""",
+            (opened, deadline, origin, violation_id))
+        row = conn.execute("SELECT * FROM violations WHERE id=?", (violation_id,)).fetchone()
+        label = violation_display_name(row["violation_code"], row["violation_type"])
+        self._insert_event_notification_conn(conn, student_id=row["student_id"],
+            title=f"Appeal available: {label}",
+            message="A violation is available in My Violations. You have 120 hours from publication "
+                    "to appeal with an explanation and picture. No strike while appeal is available or pending. "
+                    "Open the record to see your local deadline.",
+            event_key=f"violation:{violation_id}:published", created_at=opened, violation_id=violation_id)
+
+    def _award_final_strike_conn(self, conn, violation, changed_at, cause):
+        """Called only by locked expiry/decision transitions; unique ledger prevents retries."""
+        sid, code, term = violation["student_id"], violation["violation_code"], violation["semester_id"]
+        if not term or not is_disciplinary_code(code) or not self._student_exists_conn(conn, sid):
             return
-        student_id = (violation["student_id"] or "").strip()
-        code = normalize_violation_code(violation["violation_code"])
-        semester_id = violation["semester_id"]
-        confirmed_at = violation["confirmed_at"] or format_db_datetime(utc_now())
-        if (
-            semester_id is None
-            or not is_disciplinary_code(code)
-            or not self._student_exists_conn(conn, student_id)
-        ):
-            return
+        cur = conn.execute("""INSERT OR IGNORE INTO strikes
+            (violation_id,student_id,violation_code,semester_id,awarded_at,is_active)
+            VALUES (?,?,?,?,?,1)""", (violation["id"], sid, code, term, changed_at))
+        if not cur.rowcount:
+            if cause != "appeal_rejected":
+                return
+            cur = conn.execute("""UPDATE strikes SET is_active=1, awarded_at=?
+                WHERE violation_id=? AND is_active=0
+                AND deactivation_reason='pending_appeal_reconciliation'""", (changed_at, violation["id"]))
+            if not cur.rowcount:
+                return
+        self._insert_event_notification_conn(conn, student_id=sid,
+            title="Violation finalized — one strike", message=(
+                "The appeal was rejected." if cause == "appeal_rejected" else
+                "The five-day appeal deadline passed without an appeal.") + " One strike is now active.",
+            event_key=f"violation:{violation['id']}:strike", created_at=changed_at,
+            violation_id=violation["id"])
+        event, created = self._sync_third_strike_event_conn(conn, student_id=sid,
+            violation_code=code, semester_id=term, changed_at=changed_at)
+        if created:
+            self._insert_event_notification_conn(conn, student_id=sid,
+                title="Third Strike Reached", message="Three finalized strikes require office review. Contact the office.",
+                event_key=f"strike_event:{event['id']}:reached", created_at=changed_at,
+                violation_id=violation["id"])
 
-        conn.execute(
-            """INSERT OR IGNORE INTO strikes
-               (violation_id, student_id, violation_code, semester_id, awarded_at, is_active)
-               VALUES (?, ?, ?, ?, ?, 1)""",
-            (violation["id"], student_id, code, semester_id, confirmed_at),
-        )
-
-        label = violation_display_name(code, violation["violation_type"])
-        appeal_deadline = violation["appeal_deadline"] or ""
-        self._insert_event_notification_conn(
-            conn,
-            student_id=student_id,
-            title=f"Violation Confirmed: {label}",
-            message=(
-                f"Your {label} violation was confirmed. One strike is active. "
-                f"You may submit an appeal until {appeal_deadline} UTC."
-            ),
-            violation_id=int(violation["id"]),
-            event_key=f"violation:{violation['id']}:confirmed",
-            created_at=confirmed_at,
-            reuse_legacy_violation_notification=True,
-        )
-
-        event, created = self._sync_third_strike_event_conn(
-            conn,
-            student_id=student_id,
-            violation_code=code,
-            semester_id=int(semester_id),
-            changed_at=confirmed_at,
-        )
-        if event is not None and created:
-            term = conn.execute(
-                "SELECT semester_name, school_year FROM academic_terms WHERE id = ?",
-                (semester_id,),
-            ).fetchone()
-            term_label = (
-                f"{term['semester_name']} {term['school_year']}" if term else "current semester"
-            )
-            self._insert_event_notification_conn(
-                conn,
-                student_id=student_id,
-                title=f"Third Strike Reached: {label}",
-                message=(
-                    f"You have reached {STRIKE_LIMIT} active {label} strikes for "
-                    f"{term_label}. Action is required."
-                ),
-                violation_id=int(violation["id"]),
-                event_key=f"strike_event:{event['id']}:reached",
-                created_at=confirmed_at,
-            )
-
-    def confirm_violation(
-        self,
-        violation_id: int,
-        *,
-        decided_by: str = "admin",
-        confirmed_at: datetime | str | None = None,
-        auto: bool = False,
-    ) -> bool:
-        """Confirm a pending violation and atomically deliver its strike/notice."""
-
-        now_dt = parse_db_datetime(confirmed_at) if confirmed_at is not None else utc_now()
-        if now_dt is None:
-            return False
-        now_text = format_db_datetime(now_dt)
+    def confirm_violation(self, violation_id, *, decided_by="admin", confirmed_at=None, auto=False):
+        """Administrative classification never awards a strike or resets an appeal window."""
         with self.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            row = conn.execute(
-                "SELECT * FROM violations WHERE id = ?", (violation_id,)
-            ).fetchone()
-            if row is None:
-                conn.rollback()
+            row = conn.execute("SELECT * FROM violations WHERE id=?", (violation_id,)).fetchone()
+            if row is None or row["status"] in (DISMISSED, "resolved"):
                 return False
-            current = (row["status"] or "").lower()
-            if current == "reviewed":
-                # Legacy reviewed records remain historical and do not gain retroactive strikes.
-                conn.commit()
+            if row["status"] in CONFIRMED_STATUSES:
                 return True
-            if current == DISMISSED:
-                conn.rollback()
+            if row["status"] != PENDING_REVIEW or auto:
                 return False
-            if current in (CONFIRMED, AUTO_CONFIRMED):
-                self._ensure_confirmation_side_effects_conn(conn, row)
-                conn.commit()
-                return True
-            # Pre-feature ``unreviewed`` rows are immutable legacy history.  Only
-            # records created by the new workflow may enter a strike-bearing state.
-            if current != PENDING_REVIEW:
-                conn.rollback()
-                return False
-            deadline = parse_db_datetime(row["review_deadline"])
-            if auto:
-                if deadline is None or now_dt < deadline:
-                    conn.rollback()
-                    return False
-            elif deadline is not None and now_dt >= deadline:
-                # A late manual click cannot bypass the automatic transition that
-                # logically occurred when the review window expired.
-                auto = True
-                now_dt = deadline
-                now_text = format_db_datetime(now_dt)
-
-            code = normalize_violation_code(row["violation_code"] or row["violation_type"])
-            eligible = (
-                is_disciplinary_code(code)
-                and self._student_exists_conn(conn, (row["student_id"] or "").strip())
-            )
-            appeal_deadline = (
-                format_db_datetime(add_calendar_days(now_dt, STUDENT_APPEAL_DAYS))
-                if eligible
-                else None
-            )
-            new_status = AUTO_CONFIRMED if auto else CONFIRMED
-            conn.execute(
-                """UPDATE violations
-                   SET status = ?, violation_code = ?, confirmed_at = ?,
-                       appeal_deadline = ?, appeal_window_closed_at = NULL,
-                       review_decided_at = ?, reviewed_by = ?, dismissal_reason = ''
-                   WHERE id = ?""",
-                (
-                    new_status,
-                    code,
-                    now_text,
-                    appeal_deadline,
-                    now_text,
-                    (decided_by or ("system" if auto else "admin")).strip(),
-                    violation_id,
-                ),
-            )
-            confirmed = conn.execute(
-                "SELECT * FROM violations WHERE id = ?", (violation_id,)
-            ).fetchone()
-            self._ensure_confirmation_side_effects_conn(conn, confirmed)
-            conn.commit()
+            now = format_db_datetime(confirmed_at or utc_now())
+            conn.execute("""UPDATE violations SET status=?, confirmed_at=?, review_decided_at=?,
+                reviewed_by=? WHERE id=?""", (CONFIRMED, now, now, decided_by, violation_id))
         return True
 
     def dismiss_violation(
@@ -1058,23 +931,12 @@ class CBVMSDatabase(StudentManagement):
             if status != PENDING_REVIEW:
                 conn.rollback()
                 return False
-            deadline = parse_db_datetime(row["review_deadline"])
-            if deadline is not None and now_dt >= deadline:
-                conn.rollback()
-                # The review window already ended; establish the persisted automatic
-                # outcome at the deadline and reject this late admin transition.
-                self.confirm_violation(
-                    violation_id,
-                    decided_by="system:auto_review",
-                    confirmed_at=deadline,
-                    auto=True,
-                )
-                return False
+            if conn.execute("SELECT 1 FROM appeals WHERE violation_id=?", (violation_id,)).fetchone():
+                return False  # decide the appeal in its dedicated workspace
             conn.execute(
                 """UPDATE violations
                    SET status = ?, review_decided_at = ?, reviewed_by = ?,
-                       dismissal_reason = ?, confirmed_at = NULL,
-                       appeal_deadline = NULL, appeal_window_closed_at = NULL
+                       dismissal_reason = ?
                    WHERE id = ?""",
                 (
                     DISMISSED,
@@ -1107,61 +969,36 @@ class CBVMSDatabase(StudentManagement):
             conn.commit()
         return True
 
-    def process_expired_deadlines(
-        self, *, now: datetime | str | None = None, student_id: str | None = None
-    ) -> dict[str, int]:
-        """Idempotently auto-confirm reviews and close unused appeal windows."""
-
-        now_dt = parse_db_datetime(now) if now is not None else utc_now()
-        if now_dt is None:
-            raise ValueError("now must be a valid datetime")
-        now_text = format_db_datetime(now_dt)
-        scope = " AND student_id = ?" if student_id is not None else ""
+    def process_expired_deadlines(self, *, now=None, student_id=None):
+        """Finalize unused publication windows, including after restart, exactly once."""
+        scope = " AND student_id=?" if student_id is not None else ""
         scope_args = (student_id,) if student_id is not None else ()
+        due = """appeal_opened_at IS NOT NULL
+            AND status IN ('pending_review','confirmed','auto_confirmed')
+            AND appeal_deadline < ? AND appeal_window_closed_at IS NULL
+            AND NOT EXISTS (SELECT 1 FROM appeals a WHERE a.violation_id=violations.id)""" + scope
+        def clock():
+            return parse_db_datetime(now) if now is not None else utc_now()
         with self.connect() as conn:
-            pending_rows = [
-                (int(row["id"]), row["review_deadline"])
-                for row in conn.execute(
-                    f"""SELECT id, review_deadline FROM violations
-                       WHERE status = ? AND review_deadline IS NOT NULL
-                         AND review_deadline <= ? {scope}
-                       ORDER BY review_deadline, id""",
-                    (PENDING_REVIEW, now_text, *scope_args),
-                ).fetchall()
-            ]
-
-        auto_confirmed = 0
-        for violation_id, review_deadline in pending_rows:
-            # Auto-confirmation logically occurs at the persisted deadline even if the
-            # desktop app was closed and only processes it on a later restart.
-            if self.confirm_violation(
-                violation_id,
-                decided_by="system:auto_review",
-                confirmed_at=review_deadline,
-                auto=True,
-            ):
-                auto_confirmed += 1
-
-        placeholders = ",".join("?" for _ in CONFIRMED_STATUSES)
-        # A normal read with no due transitions must not take SQLite's writer lock.
-        due = f"""status IN ({placeholders}) AND appeal_deadline IS NOT NULL
-                  AND appeal_deadline < ? AND appeal_window_closed_at IS NULL
-                  AND NOT EXISTS (SELECT 1 FROM appeals a WHERE a.violation_id = violations.id)
-                  {scope}"""
-        args = (*CONFIRMED_STATUSES, now_text, *scope_args)
-        appeal_windows_expired = 0
-        with self.connect() as conn:
-            if conn.execute(f"SELECT 1 FROM violations WHERE {due} LIMIT 1", args).fetchone():
-                cursor = conn.execute(
-                    f"UPDATE violations SET appeal_window_closed_at = ? WHERE {due}",
-                    (now_text, *args),
-                )
-                appeal_windows_expired = int(cursor.rowcount)
-                conn.commit()
-        return {
-            "auto_confirmed": auto_confirmed,
-            "appeal_windows_expired": appeal_windows_expired,
-        }
+            # Avoid taking the writer lock on every background refresh.
+            if not conn.execute(f"SELECT 1 FROM violations WHERE {due} LIMIT 1",
+                                (clock().strftime("%Y-%m-%d %H:%M:%S.%f"), *scope_args)).fetchone():
+                return {"auto_confirmed": 0, "appeal_windows_expired": 0}
+            conn.execute("BEGIN IMMEDIATE")
+            instant = clock()
+            rows = conn.execute(f"SELECT * FROM violations WHERE {due}",
+                                (instant.strftime("%Y-%m-%d %H:%M:%S.%f"), *scope_args)).fetchall()
+            rows = [r for r in rows if instant > parse_db_datetime(r["appeal_deadline"])]
+            for row in rows:
+                # Compare aware values as well as SQL strings at fractional boundaries.
+                if instant <= parse_db_datetime(row["appeal_deadline"]):
+                    continue
+                stamp = format_db_datetime(instant)
+                conn.execute("""UPDATE violations SET status='auto_confirmed',
+                    confirmed_at=COALESCE(confirmed_at,?), appeal_window_closed_at=? WHERE id=?""",
+                    (stamp, stamp, row["id"]))
+                self._award_final_strike_conn(conn, row, stamp, "deadline_expired")
+        return {"auto_confirmed": len(rows), "appeal_windows_expired": len(rows)}
 
     def delete_violation(self, violation_id: int) -> bool:
         """Delete only a pre-workflow legacy row.
@@ -1251,8 +1088,8 @@ class CBVMSDatabase(StudentManagement):
             self.process_expired_deadlines(now=now_dt, student_id=student_id)
         sid = (student_id or "").strip()
         filters = {"All": "1", "Pending": "v.status IN ('pending_review','unreviewed')",
-                   "Resolved": "(v.status = 'dismissed' OR a.status = 'approved')",
-                   "Confirmed": "v.status NOT IN ('pending_review','unreviewed','dismissed') AND COALESCE(a.status,'') != 'approved'"}
+                   "Resolved": "(v.status IN ('dismissed','resolved') OR a.status = 'approved')",
+                   "Confirmed": "v.status NOT IN ('pending_review','unreviewed','dismissed','resolved') AND COALESCE(a.status,'') != 'approved'"}
         condition = filters[group]
         params = [sid]
         if violation_id is not None:
@@ -1296,9 +1133,7 @@ class CBVMSDatabase(StudentManagement):
             item["appeal_remaining_seconds"] = (
                 max(0, int((deadline - now_dt).total_seconds())) if deadline else 0
             )
-            if item.get("status") in ("pending_review", "unreviewed"):
-                item["appeal_window_status"] = "not_started"
-            elif item.get("status") == "dismissed":
+            if item.get("status") in ("dismissed", "resolved"):
                 item["appeal_window_status"] = "resolved"
             elif item.get("appeal_id"):
                 item["appeal_window_status"] = "submitted"
@@ -1340,11 +1175,11 @@ class CBVMSDatabase(StudentManagement):
         if row is None:
             return {"eligible": False, "reason": "not_found", "deadline": None}
         if (row["student_id"] or "").strip() != sid:
-            return {"eligible": False, "reason": "not_owner", "deadline": row["appeal_deadline"]}
-        if (row["status"] or "").lower() not in (CONFIRMED, AUTO_CONFIRMED):
+            return {"eligible": False, "reason": "not_owner", "deadline": None}
+        if (row["status"] or "").lower() not in (PENDING_REVIEW, CONFIRMED, AUTO_CONFIRMED):
             return {
                 "eligible": False,
-                "reason": "not_confirmed",
+                "reason": "resolved",
                 "deadline": row["appeal_deadline"],
             }
         if row["appeal_id"] is not None:
@@ -1353,16 +1188,10 @@ class CBVMSDatabase(StudentManagement):
                 "reason": "already_submitted",
                 "deadline": row["appeal_deadline"],
             }
-        if not int(row["strike_active"] or 0):
-            return {
-                "eligible": False,
-                "reason": "no_active_strike",
-                "deadline": row["appeal_deadline"],
-            }
         deadline = parse_db_datetime(row["appeal_deadline"])
         if deadline is None:
             return {"eligible": False, "reason": "no_deadline", "deadline": None}
-        if now_dt > deadline:
+        if row["appeal_window_closed_at"] or now_dt > deadline:
             return {
                 "eligible": False,
                 "reason": "deadline_expired",
@@ -1407,9 +1236,7 @@ class CBVMSDatabase(StudentManagement):
             term_row = conn.execute(
                 "SELECT * FROM academic_terms WHERE id = ?", (semester_id,)
             ).fetchone()
-            # Derive student-facing categories from the strike ledger, not raw
-            # detections.  This prevents pending/dismissed categories from leaking
-            # into the portal before confirmation while retaining approved history.
+            # Categories come from the finalized strike ledger, preserving history.
             code_rows = conn.execute(
                 """SELECT DISTINCT violation_code FROM strikes
                    WHERE student_id = ? AND semester_id = ?""",
@@ -1628,24 +1455,22 @@ class CBVMSDatabase(StudentManagement):
             return None
 
     def get_notifications_for_student(self, student_id: str, *, limit: int | None = None, offset: int = 0) -> list[dict]:
-        """Delivered notifications only; pending/dismissed detections stay hidden."""
+        """Owner-scoped publication and decision notices, including pending records."""
         paging = " LIMIT ? OFFSET ?" if limit is not None else ""
         params = (int(limit), int(offset)) if limit is not None else ()
-        placeholders = ",".join("?" for _ in CONFIRMED_STATUSES)
         with self.connect() as conn:
             rows = conn.execute(
                 f"""SELECT n.* FROM student_notifications n
                     LEFT JOIN violations v ON v.id = n.violation_id
                     WHERE n.student_id = ?
                       AND (n.violation_id IS NULL
-                           OR (v.student_id = n.student_id AND v.status IN ({placeholders})))
+                           OR (v.student_id = n.student_id))
                     ORDER BY datetime(n.created_at) DESC, n.id DESC {paging}""",
-                ((student_id or "").strip(), *CONFIRMED_STATUSES, *params),
+                ((student_id or "").strip(), *params),
             ).fetchall()
         return [dict(r) for r in rows]
 
     def get_unread_notification_count(self, student_id: str) -> int:
-        placeholders = ",".join("?" for _ in CONFIRMED_STATUSES)
         with self.connect() as conn:
             row = conn.execute(
                 f"""SELECT COUNT(*) AS count
@@ -1653,8 +1478,8 @@ class CBVMSDatabase(StudentManagement):
                     LEFT JOIN violations v ON v.id = n.violation_id
                     WHERE n.student_id = ? AND n.is_read = 0
                       AND (n.violation_id IS NULL
-                           OR (v.student_id = n.student_id AND v.status IN ({placeholders})))""",
-                ((student_id or "").strip(), *CONFIRMED_STATUSES),
+                           OR (v.student_id = n.student_id))""",
+                ((student_id or "").strip(),),
             ).fetchone()
         return int(row["count"] if row else 0)
 
@@ -1753,7 +1578,7 @@ class CBVMSDatabase(StudentManagement):
                 submitted_dt = utc_now()
                 submitted_text = format_db_datetime(submitted_dt)
                 row = conn.execute(
-                    """SELECT v.*, a.id AS existing_appeal_id,
+                    """SELECT v.*, a.id AS appeal_id,
                               st.is_active AS strike_active
                        FROM violations v
                        LEFT JOIN appeals a ON a.violation_id = v.id
@@ -1764,15 +1589,7 @@ class CBVMSDatabase(StudentManagement):
                 if row is None:
                     conn.rollback()
                     return None
-                deadline = parse_db_datetime(row["appeal_deadline"])
-                valid = (
-                    (row["student_id"] or "").strip() == sid
-                    and (row["status"] or "").lower() in (CONFIRMED, AUTO_CONFIRMED)
-                    and row["existing_appeal_id"] is None
-                    and bool(int(row["strike_active"] or 0))
-                    and deadline is not None
-                    and submitted_dt <= deadline
-                )
+                valid = self._appeal_eligibility_from_row(row, sid, submitted_dt)["eligible"]
                 if not valid:
                     conn.rollback()
                     return None
@@ -1909,25 +1726,8 @@ class CBVMSDatabase(StudentManagement):
                      student_name: str, violation_type: str, decision: str,
                      previous_status: str, admin_notes: str,
                      decided_by: str = "admin", ai_recommendation: str = "") -> bool:
-        try:
-            with self.connect() as conn:
-                conn.execute(
-                    """INSERT INTO decision_history
-                       (appeal_id, violation_id, student_id, student_name,
-                        violation_type, decision, previous_status, admin_notes,
-                        decided_by, ai_recommendation)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (appeal_id, violation_id, (student_id or "").strip(),
-                     (student_name or "").strip(), (violation_type or "").strip(),
-                     (decision or "").strip(), (previous_status or "pending").strip(),
-                     (admin_notes or "").strip(), (decided_by or "admin").strip(),
-                     (ai_recommendation or "").strip()),
-                )
-                conn.commit()
-            return True
-        except Exception as exc:
-            print(f"[DB] log_decision error: {exc}")
-            return False
+        # Compatibility entry point must use the same transactional decision boundary.
+        return self.update_appeal_decision(appeal_id, decision, admin_notes, decided_by=decided_by)
 
     def get_decision_history(self, limit: int = 200) -> list[dict]:
         with self.connect() as conn:
@@ -1950,7 +1750,7 @@ class CBVMSDatabase(StudentManagement):
         appeal_id: int,
         decision: str,
         admin_notes: str,
-        decided_by: str = "admin",
+        decided_by: str = "",
         *,
         decided_at: datetime | str | None = None,
     ) -> bool:
@@ -1964,10 +1764,15 @@ class CBVMSDatabase(StudentManagement):
             return False
         decision_text = format_db_datetime(decision_dt)
         notes = (admin_notes or "").strip()
-        actor = (decided_by or "admin").strip()
+        actor = (decided_by or "").strip()
+        if not notes or not actor:
+            return False
         try:
             with self.connect() as conn:
                 conn.execute("BEGIN IMMEDIATE")
+                if not conn.execute("SELECT 1 FROM users WHERE username=?", (actor,)).fetchone():
+                    return False
+                decision_text = format_db_datetime(decided_at or utc_now())
                 row = conn.execute(
                     """SELECT a.status, a.violation_id, a.student_id,
                               a.ai_recommendation, a.submitted_at,
@@ -1989,6 +1794,14 @@ class CBVMSDatabase(StudentManagement):
                        WHERE id = ? AND status = 'pending'""",
                     (safe_decision, notes, decision_text, actor, appeal_id),
                 )
+                violation = conn.execute("SELECT * FROM violations WHERE id=?", (row["violation_id"],)).fetchone()
+                if violation is None or violation["student_id"] != row["student_id"] or violation["status"] in (DISMISSED, "resolved"):
+                    conn.rollback()
+                    return False
+                conn.execute("UPDATE violations SET status=?, appeal_window_closed_at=? WHERE id=?",
+                    ("resolved" if safe_decision == "approved" else CONFIRMED, decision_text, row["violation_id"]))
+                if safe_decision == "rejected":
+                    self._award_final_strike_conn(conn, violation, decision_text, "appeal_rejected")
                 if safe_decision == "approved" and row["strike_id"] is not None:
                     if int(row["strike_active"] or 0):
                         conn.execute(
@@ -2029,9 +1842,9 @@ class CBVMSDatabase(StudentManagement):
                     row["violation_code"], row["violation_type"]
                 )
                 effect = (
-                    "The associated strike was removed."
+                    "The violation is resolved without an active strike."
                     if safe_decision == "approved"
-                    else "The associated strike remains active."
+                    else "One strike is active for this violation."
                 )
                 message = f"Your appeal for {label} was {safe_decision}. {effect}"
                 if notes:
@@ -2052,6 +1865,92 @@ class CBVMSDatabase(StudentManagement):
             return False
 
     decide_appeal = update_appeal_decision
+
+    def reconcile_pending_appeal_strike(self, violation_id, *, username, reason):
+        """Explicit historical repair only; never called by initialization or refresh.
+
+        Preserve the ledger row, append a reconciliation audit, and leave all
+        office-imposed suspensions untouched. A later rejection can reactivate
+        this same ledger entry; approval leaves it inactive.
+        """
+        if not reason or not reason.strip():
+            raise ValueError("A reconciliation reason is required.")
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            self._require_admin_conn(conn, username)
+            row = conn.execute("""SELECT st.* FROM strikes st
+                JOIN appeals a ON a.violation_id=st.violation_id
+                JOIN violations v ON v.id=st.violation_id
+                WHERE st.violation_id=? AND st.is_active=1 AND a.status='pending'
+                AND a.student_id=v.student_id AND v.status NOT IN ('dismissed','resolved')""",
+                (violation_id,)).fetchone()
+            if row is None:
+                return False
+            stamp = format_db_datetime(utc_now())
+            conn.execute("INSERT INTO discipline_reconciliations VALUES (?,?,?,?,?)",
+                (violation_id, row["id"], username, reason.strip(), stamp))
+            conn.execute("""UPDATE strikes SET is_active=0, deactivated_at=?,
+                deactivation_reason='pending_appeal_reconciliation' WHERE id=?""", (stamp, row["id"]))
+            conn.execute("UPDATE violations SET lifecycle_origin='legacy_reconciled' WHERE id=?", (violation_id,))
+            self._sync_third_strike_event_conn(conn, student_id=row["student_id"],
+                violation_code=row["violation_code"], semester_id=row["semester_id"], changed_at=stamp,
+                resolution_reason="pending_appeal_reconciliation")
+            self._insert_event_notification_conn(conn, student_id=row["student_id"],
+                title="Pending appeal — strike corrected", message="Your pending appeal has no active strike. "
+                "An administrator will review your appeal. Any existing office clearance remains required.",
+                event_key=f"violation:{violation_id}:reconciled", created_at=stamp, violation_id=violation_id)
+        return True
+
+    @staticmethod
+    def _require_admin_conn(conn, username):
+        if not username or not conn.execute("SELECT 1 FROM users WHERE username=?", (username,)).fetchone():
+            raise PermissionError("An authenticated administrator is required.")
+
+    def admin_appeal_pending_count(self):
+        with self.connect() as conn:
+            return conn.execute("SELECT COUNT(*) FROM appeals WHERE status='pending'").fetchone()[0]
+
+    def get_appeal_inbox(self, *, username, status="pending", search="", offset=0, limit=12):
+        if status not in ("pending", "approved", "rejected", "all"):
+            raise ValueError("Unknown appeal filter")
+        with self.connect() as conn:
+            self._require_admin_conn(conn, username)
+            query = """FROM appeals a JOIN violations v ON v.id=a.violation_id
+                LEFT JOIN students s ON s.student_id=a.student_id
+                WHERE (?='all' OR a.status=?) AND
+                (instr(lower(a.student_id),lower(?))>0 OR instr(lower(COALESCE(s.name,'')),lower(?))>0)"""
+            params = (status, status, search.strip(), search.strip())
+            total = conn.execute("SELECT COUNT(*) " + query, params).fetchone()[0]
+            rows = conn.execute("SELECT a.id,a.student_id,a.status,a.submitted_at,v.violation_type,s.name student_name "
+                + query + " ORDER BY a.submitted_at DESC,a.id DESC LIMIT ? OFFSET ?",
+                (*params, min(50,max(1,limit)), max(0,offset))).fetchall()
+        return {"rows": [dict(r) for r in rows], "total": total}
+
+    def get_appeal_case(self, appeal_id, *, username):
+        with self.connect() as conn:
+            self._require_admin_conn(conn, username)
+            row = conn.execute("""SELECT a.*,v.violation_type,v.violation_code,
+                v.timestamp detection_time,v.appeal_opened_at,v.appeal_deadline,
+                v.status violation_status,v.snapshot,v.lifecycle_origin,
+                s.name student_name,s.course,s.year_and_section,
+                COALESCE(st.is_active,0) strike_active FROM appeals a
+                JOIN violations v ON v.id=a.violation_id AND v.student_id=a.student_id
+                LEFT JOIN students s ON s.student_id=a.student_id
+                LEFT JOIN strikes st ON st.violation_id=v.id WHERE a.id=?""", (appeal_id,)).fetchone()
+            if not row:
+                raise ValueError("Appeal no longer available.")
+            case = dict(row)
+            case["evidence"] = [dict(r) for r in conn.execute(
+                "SELECT * FROM evidence_files WHERE appeal_id=? AND student_id=? ORDER BY id",
+                (appeal_id, row["student_id"]))]
+        return case
+
+    def get_student_appeal_evidence(self, appeal_id, student_id):
+        with self.connect() as conn:
+            return [dict(r) for r in conn.execute("""SELECT e.* FROM evidence_files e
+                JOIN appeals a ON a.id=e.appeal_id JOIN violations v ON v.id=a.violation_id
+                WHERE a.id=? AND a.student_id=? AND v.student_id=a.student_id
+                AND e.student_id=a.student_id ORDER BY e.id""", (appeal_id, student_id))]
 
     def get_all_appeals_full(self) -> list[dict]:
         """All appeals joined with violation + student info, newest first."""

@@ -21,6 +21,7 @@ from database.db_manager import CBVMSDatabase
 from ui.dashboard import CBVMSDashboard
 from ui.notifications_panel import NotificationsPanel
 from ui.records_panel import RecordsPanel
+from ui.appeals_panel import AppealsPanel
 from ui.student_portal import StudentPortal, SP_APPEAL, SP_DISABLED
 
 
@@ -49,6 +50,8 @@ class AppealFlowFixture(unittest.TestCase):
         self.db = CBVMSDatabase(Path(self.tmp.name) / "appeals.db")
         self.db.initialize()
         self.db.insert_student("S1", "Student One", "BSIT", "3A", b"", b"")
+        with self.db.connect() as conn:
+            conn.execute("INSERT INTO users (username,password_hash) VALUES ('osa.reviewer','test-only')")
         self.confirmed = datetime(2099, 8, 4, tzinfo=timezone.utc)
         self.clock = patch("database.db_manager.utc_now", return_value=self.confirmed)
         self.clock_mock = self.clock.start()
@@ -58,7 +61,6 @@ class AppealFlowFixture(unittest.TestCase):
     def new_violation(self):
         vid = self.db.log_violation("S1", "Student One", "wrong_uniform",
             detected_at=self.confirmed - timedelta(days=2))
-        self.db.confirm_violation(vid, confirmed_at=self.confirmed)
         return vid
 
     def submit(self, vid=None, evidence=None):
@@ -67,7 +69,7 @@ class AppealFlowFixture(unittest.TestCase):
 
 
 class AppealFlowBackendTests(AppealFlowFixture):
-    def test_confirmation_not_detection_starts_five_days_with_exact_boundary(self):
+    def test_publication_not_detection_starts_five_days_with_exact_boundary(self):
         deadline = self.confirmed + timedelta(days=5)
         self.assertEqual(self.db.get_appeal_eligibility(self.vid, "S1")["deadline"],
                          deadline.strftime("%Y-%m-%d %H:%M:%S"))
@@ -274,27 +276,28 @@ class AppealFlowWidgetTests(AppealFlowFixture):
                     self.loaded()
                 aid = self.db.get_appeal_for_violation(self.vid)['id']
                 broker = Notifier()
-                records = RecordsPanel(portal, database=self.db, username='osa.reviewer')
+                records = AppealsPanel(portal, database=self.db, username='osa.reviewer')
                 alerts = NotificationsPanel(portal, notifier=broker, database=self.db, on_open=records.open_alert)
                 alerts._select_category('appeals')
                 index = next(i for i, n in enumerate(alerts._visible_items()) if n.id == aid)
                 self.button(alerts._list.winfo_children()[index], 'Open Appeal Management').invoke()
-                self.assertEqual(records._current_appeal['id'], aid)
-                self.assertTrue(records._ap_ev_img.cget('image'))
-                records._open_appeal_picture()
-                self.assertTrue(any(isinstance(w, ctk.CTkToplevel) for w in records.winfo_children()))
-                records._ap_notes.insert('1.0', 'Reviewed the submitted picture.')
-                (records._ap_approve_btn if decision == 'approved' else records._ap_reject_btn).invoke()
+                self.until(lambda: getattr(records,'case',{}).get('id') == aid)
+                self.assertEqual(records.case_id, aid)
+                self.assertIsNotNone(records.case['images'][1])
+                records.reason.insert('1.0', 'Reviewed the submitted picture.')
+                with patch('ui.appeals_panel.messagebox.askyesno',return_value=True):
+                    (records.approve if decision == 'approved' else records.reject).invoke()
+                self.until(lambda: records.case['status'] == decision)
                 portal._refresh_appeal_results()
                 self.loaded()
                 updated = next(a for a in portal._appeals if a['id'] == aid)
                 self.assertEqual(updated['status'], decision)
                 self.assertEqual(updated['decided_by'], 'osa.reviewer')
-                outcome_text = 'Appeal Approved — Strike Removed' if decision == 'approved' else 'Appeal Rejected — Strike Remains'
+                outcome_text = 'Appeal Approved — No active strike' if decision == 'approved' else 'Appeal Rejected — One finalized strike'
                 self.assertTrue(any(isinstance(w, ctk.CTkLabel) and w.cget('text') == outcome_text
                                     for w in widgets(portal._page_body)))
                 with self.db.connect() as conn:
-                    active = conn.execute('SELECT is_active FROM strikes WHERE violation_id=?', (self.vid,)).fetchone()[0]
+                    active = conn.execute('SELECT COALESCE(SUM(is_active),0) FROM strikes WHERE violation_id=?', (self.vid,)).fetchone()[0]
                 self.assertEqual(active, int(decision == 'rejected'))
                 self.navigate('notifications')
                 self.assertTrue(any(n['title'].startswith(f'Appeal {decision.title()}') for n in portal._notifications))
@@ -310,7 +313,7 @@ class AppealFlowWidgetTests(AppealFlowFixture):
         broker.sound_enabled = False
         broker.notify("Student One", "Wrong uniform")
         dashboard = types.SimpleNamespace(_notifier=broker, _database=self.db, _bell_badge=Mock(),
-                                         _on_nav_select=Mock(), _records_panel=Mock())
+                                         _on_nav_select=Mock(), _records_panel=Mock(), _appeals_panel=Mock(), _appeal_unread=1)
         CBVMSDashboard._open_alerts_from_bell(dashboard)
         dashboard._on_nav_select.assert_called_once_with("alerts")
         self.assertEqual(self.db.admin_appeal_unread_count(), 1)
@@ -318,7 +321,7 @@ class AppealFlowWidgetTests(AppealFlowFixture):
         CBVMSDashboard._update_bell_badge(dashboard)
         dashboard._bell_badge.configure.assert_called_with(text="2")
         CBVMSDashboard._open_alert_record(dashboard, "appeals", aid)
-        dashboard._records_panel.open_alert.assert_called_with("appeals", aid)
+        dashboard._appeals_panel.open_alert.assert_called_with("appeals", aid)
         CBVMSDashboard._open_alert_record(dashboard, "violations", None)
         dashboard._records_panel.open_alert.assert_called_with("violations", None)
         panel = NotificationsPanel(self.root, notifier=broker, database=self.db)

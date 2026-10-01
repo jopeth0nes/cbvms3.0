@@ -17,7 +17,8 @@ from core.portal_state import PortalRefresh, comparable, snapshot, violation_gro
 from database.db_manager import CBVMSDatabase
 from tests.test_live_pipeline import PipelineFixture
 from tests import test_violation_workflow as workflow
-DETECTED_AT = workflow.DETECTED_AT
+from datetime import datetime, timezone
+DETECTED_AT = datetime(2099,8,1,2,tzinfo=timezone.utc)
 from tests.test_live_dashboard import dashboard, sample, tick
 
 
@@ -170,30 +171,43 @@ class ReadinessTests(unittest.TestCase):
 
 
 class PortalTests(unittest.TestCase):
-    # Reuse only the real temporary database fixture and its record helpers.
-    setUp = workflow.ViolationWorkflowTests.setUp
-    tearDown = workflow.ViolationWorkflowTests.tearDown
-    _insert_student = workflow.ViolationWorkflowTests._insert_student
-    _detect = workflow.ViolationWorkflowTests._detect
-    _confirm = workflow.ViolationWorkflowTests._confirm
-    _count = workflow.ViolationWorkflowTests._count
     STUDENT_A = '2023-00883'
     STUDENT_B = '0000-00002'
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory(); self.addCleanup(self._tmp.cleanup)
+        self.db_path = Path(self._tmp.name)/'test.db'
+        self.db = CBVMSDatabase(self.db_path); self.db.initialize()
+        for sid in (self.STUDENT_A,self.STUDENT_B):
+            self.db.insert_student(sid,'Fixture','BSIT','3A',b'',b'')
+        clock = patch('database.db_manager.utc_now',return_value=DETECTED_AT)
+        clock.start();self.addCleanup(clock.stop)
+
+    def _detect(self, student_id=None):
+        return self.db.log_violation(student_id or self.STUDENT_A,'Fixture','wrong_uniform')
+
+    def _confirm(self, vid):
+        return self.db.confirm_violation(vid,confirmed_at=DETECTED_AT+timedelta(days=1))
+
+    def _count(self,table):
+        with self.db.connect() as conn:
+            return conn.execute(f'SELECT COUNT(*) FROM {table}').fetchone()[0]
 
     def test_pending_visible_only_to_authenticated_string_owner(self):
         violation = self._detect()
         rows = self.db.get_visible_violations_for_student(self.STUDENT_A, now=DETECTED_AT)
         self.assertEqual([r['id'] for r in rows], [violation])
         self.assertEqual(violation_group(rows[0]), 'Pending')
-        self.assertEqual(rows[0]['appeal_window_status'], 'not_started')
-        self.assertIsNone(rows[0]['appeal_deadline'])
-        self.assertFalse(rows[0]['can_appeal'] or rows[0]['strike_active'])
+        self.assertEqual(rows[0]['appeal_window_status'], 'eligible')
+        self.assertIsNotNone(rows[0]['appeal_deadline'])
+        self.assertTrue(rows[0]['can_appeal'])
+        self.assertFalse(rows[0]['strike_active'])
         self.assertEqual(self.db.get_visible_violations_for_student(self.STUDENT_B, now=DETECTED_AT), [])
         self.assertTrue(self._confirm(violation))
         confirmed = self.db.get_visible_violations_for_student(self.STUDENT_A, now=DETECTED_AT+timedelta(days=1))[0]
         self.assertEqual(confirmed['id'], violation)
         self.assertTrue(confirmed['can_appeal'])
-        self.assertEqual(confirmed['appeal_deadline'], '2099-08-07 02:00:00')
+        self.assertEqual(confirmed['appeal_deadline'], '2099-08-06 02:00:00')
         self.assertEqual(self._count('violations'), 1)
 
     def test_background_refresh_sees_committed_record_without_logout(self):

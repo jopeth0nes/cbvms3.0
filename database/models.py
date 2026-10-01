@@ -54,6 +54,8 @@ CREATE TABLE IF NOT EXISTS violations (
     review_deadline TEXT,
     confirmed_at TEXT,
     appeal_deadline TEXT,
+    appeal_opened_at TEXT,
+    lifecycle_origin TEXT,
     appeal_window_closed_at TEXT,
     review_decided_at TEXT,
     reviewed_by TEXT DEFAULT '',

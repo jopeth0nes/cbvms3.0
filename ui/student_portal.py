@@ -11,6 +11,7 @@ from core.portal_state import PortalRequests, page_snapshot, prepare_photo, PAGE
 from core.diagnostics import event
 import io
 import queue
+import threading
 import tkinter as tk
 from datetime import date, datetime
 
@@ -21,6 +22,7 @@ import os
 from tkinter import filedialog
 
 from core.appeal_analyzer import analyze_appeal
+from core.discipline import display_local_datetime
 from core.appeal_evidence import MAX_EVIDENCE_BYTES, validate_evidence
 from core.student_status import CONTACT_FIELDS, standing_label, suspension_label
 from core.discipline import (
@@ -90,10 +92,7 @@ def _parse_ts(ts: str | None) -> datetime | None:
 
 
 def _display_ts(ts: str | None, *, fallback: str = "—") -> str:
-    parsed = _parse_ts(ts or "")
-    if parsed is None:
-        return str(ts or fallback)
-    return parsed.strftime("%b %d, %Y · %H:%M")
+    return display_local_datetime(ts, fallback)
 
 
 class StudentPortal(WorkspaceWindow):
@@ -132,6 +131,7 @@ class StudentPortal(WorkspaceWindow):
         self._page_state = 'loading'
         self._page_offset = 0
         self._focused_violation = None
+        self._focused_appeal_id = None
         self._unread_count = 0
         self._violation_counts = {}
         self._pending_appeals = 0
@@ -237,6 +237,7 @@ class StudentPortal(WorkspaceWindow):
                         self._page_error(f"Could not save: {error}. Retry the action.")
                         if error_callback:
                             error_callback(error)
+                        self._refresh_appeal_buttons()
                     else:
                         request.state = 'loaded'
                         self._page_state = 'empty' if self._page_is_empty() else 'loaded'
@@ -470,6 +471,7 @@ class StudentPortal(WorkspaceWindow):
         if not preserve_page:
             self._page_offset = 0
             self._focused_violation = None
+            self._focused_appeal_id = None
         self._active = key
         self._timings = {'database_ms': 0., 'prepare_ms': 0.}
         self._snapshot_key = None
@@ -537,8 +539,10 @@ class StudentPortal(WorkspaceWindow):
     def _status_pill(self, parent, status: str) -> ctk.CTkLabel:
         normalized = (status or "").lower()
         labels = {
-            "pending_review": "Pending review — no strike yet",
-            "unreviewed": "Pending review — no strike yet",
+            "pending_review": "Pending violation",
+            "appeal_open": "Appeal available — no strike",
+            "appeal_pending": "Pending Admin Decision",
+            "unreviewed": "Historical record",
             "dismissed": "Resolved — detection dismissed",
             "approved": "Resolved — appeal approved",
             "confirmed": "Confirmed",
@@ -760,7 +764,7 @@ class StudentPortal(WorkspaceWindow):
         ctk.CTkLabel(card, text=_display_ts(viol.get("timestamp")), font=_f(11),
                      text_color=SP_MUTED, anchor="e").grid(
             row=0, column=2, sticky="e", padx=(0, 16), pady=(12, 0))
-        self._status_pill(card, "approved" if appeal_status == "approved" else viol.get("status", "confirmed")).grid(
+        self._status_pill(card, "approved" if appeal_status == "approved" else "appeal_pending" if appeal_status == "pending" else "appeal_open" if viol.get("can_appeal") else viol.get("status", "confirmed")).grid(
             row=1, column=1, sticky="w", pady=(4, 0))
 
         term_name = viol.get("semester_name") or "Legacy / Unassigned"
@@ -778,20 +782,21 @@ class StudentPortal(WorkspaceWindow):
             row=2, column=1, columnspan=2, sticky="w", padx=(0, 16), pady=(6, 0))
 
         removal_reason = (viol.get("strike_removal_reason") or "").replace("_", " ").title()
-        if violation_group(viol) == "Pending":
-            strike_text, strike_color = "Pending review — no strike yet", SP_WARNING
+        if strike_active and appeal_status == "pending":
+            strike_text, strike_color = "Historical strike conflict — administrator reconciliation required", SP_WARNING
+        elif viol.get("can_appeal") or appeal_status == "pending":
+            strike_text, strike_color = "No strike while appeal is available/pending", SP_WARNING
         elif strike_active:
             strike_text, strike_color = "Strike Status: Active", SP_DANGER
         elif removal_reason:
             strike_text, strike_color = f"Strike Status: Removed — {removal_reason}", SP_SAFE
         else:
-            strike_text, strike_color = "Strike Status: Not Active (historical record)", SP_MUTED
+            strike_text, strike_color = "No active strike", SP_MUTED
         ctk.CTkLabel(card, text=strike_text, font=_f(11, "bold"), text_color=strike_color,
                      anchor="w").grid(row=3, column=1, columnspan=2, sticky="w", pady=(4, 0))
 
         deadline = viol.get("appeal_deadline")
-        deadline_text = ("Appeal window starts on confirmation" if violation_group(viol) == "Pending" else
-                         "Resolved — no appeal required" if viol.get("status") == "dismissed" else
+        deadline_text = ("Resolved — no appeal required" if viol.get("status") == "dismissed" else
                          f"Appeal deadline: {_display_ts(deadline)}")
         if viol.get("can_appeal"):
             deadline_text += f"  ·  {remaining_time_text(deadline)}"
@@ -800,20 +805,20 @@ class StudentPortal(WorkspaceWindow):
         deadline_label.grid(row=4, column=1, columnspan=2, sticky="w", pady=(3, 0))
 
         outcomes = {
-            "pending": ("Appeal Pending — Strike Remains", SP_WARNING),
-            "approved": ("Appeal Approved — Strike Removed", SP_SAFE),
-            "rejected": ("Appeal Rejected — Strike Remains", SP_DANGER),
+            "pending": ("Pending Admin Decision — No strike while appeal is pending", SP_WARNING),
+            "approved": ("Appeal Approved — No active strike", SP_SAFE),
+            "rejected": ("Appeal Rejected — One finalized strike", SP_DANGER),
         }
-        if violation_group(viol) == "Pending":
-            outcome_text, outcome_color = "Awaiting review · Appeal window has not started", SP_WARNING
-        elif viol.get("status") == "dismissed":
+        if strike_active and appeal_status == "pending":
+            outcomes["pending"] = ("Pending Admin Decision — historical strike requires reconciliation", SP_WARNING)
+        if viol.get("status") == "dismissed":
             outcome_text, outcome_color = "Resolved — detection dismissed", SP_SAFE
         elif appeal_status in outcomes:
             outcome_text, outcome_color = outcomes[appeal_status]
         elif viol.get("appeal_eligibility_reason") == "deadline_expired":
             outcome_text, outcome_color = "Appeal Period Expired", SP_MUTED
         elif not viol.get("can_appeal"):
-            outcome_text, outcome_color = "Appeal Unavailable", SP_MUTED
+            outcome_text, outcome_color = self._appeal_ineligible_message(viol.get("appeal_eligibility_reason")), SP_MUTED
         else:
             outcome_text, outcome_color = "Student Appeal Window Open", SP_WARNING
         outcome_label = ctk.CTkLabel(card, text=outcome_text, font=_f(11, "bold"),
@@ -823,14 +828,15 @@ class StudentPortal(WorkspaceWindow):
         action_row = ctk.CTkFrame(card, fg_color="transparent")
         action_row.grid(row=6, column=1, columnspan=2, sticky="w", pady=(8, 0))
         if viol.get("has_snapshot") or viol.get("snapshot"):
-            ctk.CTkButton(action_row, text="📷  View Photo", width=120, height=30, corner_radius=8,
+            ctk.CTkButton(action_row, text="View Detection Evidence", width=120, height=30, corner_radius=8,
                           fg_color=SP_ACCENT, hover_color=SP_ACCENT_HOVER, text_color=SP_WHITE,
                           font=_f(12), command=lambda x=viol: self._open_snapshot(x)).pack(
                 side="left", padx=(0, 8))
 
         if appeal_status != "not_submitted":
-            self._appeal_status_pill(action_row, appeal_status).pack(side="left")
-        elif viol_id and violation_group(viol) == "Confirmed":
+            ctk.CTkButton(action_row, text="View Appeal" if appeal_status == "pending" else "View Decision",
+                command=lambda aid=viol.get("appeal_id"): self._view_appeal(aid)).pack(side="left")
+        elif viol_id and viol.get("status") not in ("dismissed", "resolved"):
             self._make_appeal_button(action_row, viol, outcome_label=outcome_label,
                                      deadline_label=deadline_label).pack(side="left")
 
@@ -855,7 +861,7 @@ class StudentPortal(WorkspaceWindow):
             "already_submitted": "You have already submitted an appeal for this violation.",
             "deadline_expired": "The five-day appeal period has expired.",
             "not_owner": "This violation does not belong to your account.",
-            "not_confirmed": "This violation is not eligible for a student appeal.",
+            "resolved": "This violation is resolved or historical and cannot receive a new appeal.",
             "no_active_strike": "This violation no longer has an active strike to appeal.",
             "no_deadline": "No appeal deadline is available for this historical record.",
             "not_found": "The violation could not be found.",
@@ -889,6 +895,7 @@ class StudentPortal(WorkspaceWindow):
             deadline = parse_db_datetime(eligibility.get("deadline"))
             if enabled and deadline is not None and utc_now() > deadline:
                 enabled, reason = False, "deadline_expired"
+            enabled = enabled and not bool(getattr(self, "_action_request", None))
             text = ("Submit Appeal" if enabled
                     else "Appeal Period Expired" if reason == "deadline_expired"
                     else "Appeal Submitted" if reason == "already_submitted"
@@ -901,7 +908,8 @@ class StudentPortal(WorkspaceWindow):
             )
             outcome = getattr(button, "_appeal_outcome_label", None)
             if outcome is not None and outcome.winfo_exists():
-                outcome.configure(text="Student Appeal Window Open" if enabled else text,
+                outcome.configure(text="Student Appeal Window Open" if enabled else
+                                  self._appeal_ineligible_message(reason) if reason in ("no_deadline", "resolved") else text,
                                   text_color=SP_WARNING if enabled else SP_MUTED)
             deadline_label = getattr(button, "_appeal_deadline_label", None)
             if deadline_label is not None and deadline_label.winfo_exists():
@@ -942,17 +950,23 @@ class StudentPortal(WorkspaceWindow):
             viol.get("violation_code"), viol.get("violation_type"))
         appeal_meta = (
             f"Violation: {violation_label}\n"
-            f"Confirmed: {_display_ts(viol.get('confirmed_at'))}\n"
+            f"Detected: {_display_ts(viol.get('timestamp'))}\n"
             f"Appeal deadline: {_display_ts(viol.get('appeal_deadline'))}"
         )
         ctk.CTkLabel(inner, text=appeal_meta, font=_f(12), text_color=SP_MUTED,
                      justify="left").grid(row=1, column=0, sticky="w", pady=(0, 16))
 
-        ctk.CTkLabel(inner, text="⚠️  Important", font=_f(13, "bold"),
-                     text_color=SP_WARNING).grid(row=2, column=0, sticky="w")
+        original = ctk.CTkFrame(inner, fg_color=SP_SURFACE)
+        original.grid(row=2, column=0, sticky="ew", pady=6)
+        original_photo = ctk.CTkLabel(original, text="Loading original detection evidence…",
+                                      text_color=SP_MUTED)
+        original_photo.pack(pady=4)
+        ctk.CTkButton(original, text="View Detection Evidence",
+            command=lambda: self._open_snapshot(viol)).pack(pady=4)
+        self._load_form_detection(viol_id, original_photo)
         ctk.CTkLabel(
             inner,
-            text=(f"Appeals must be submitted within {_APPEAL_DAYS} days of confirmation. "
+            text=(f"Appeals must be submitted within {_APPEAL_DAYS} days of publication in My Violations. "
                   "You may only submit one appeal per violation. "
                   "Attach one picture and explain your appeal below."),
             font=_f(11), text_color=SP_MUTED, wraplength=440, justify="left",
@@ -1038,11 +1052,14 @@ class StudentPortal(WorkspaceWindow):
                 def on_ai_done(recommendation, confidence, analysis):
                     analysis_db.update_appeal_ai_analysis(new_id, recommendation, confidence, analysis)
                     updates.put(new_id)
-                analyze_appeal(
+                try:
+                    analyze_appeal(
                     violation_type=viol.get('violation_code') or 'unknown_violation',
                     violation_timestamp=_display_ts(viol.get('timestamp')),
                     student_name=display_name, student_id=sid,
                     reason=reason, on_complete=on_ai_done)
+                except Exception:
+                    pass  # advisory availability never changes the committed submission
                 return new_id
 
             def saved(result):
@@ -1052,8 +1069,9 @@ class StudentPortal(WorkspaceWindow):
                 self._show('appeals')
                 self._toast('Appeal submitted. AI analysis is running…', 'info')
 
-            self._run_action(save, saved,
-                lambda message: err.configure(text=message) if err.winfo_exists() else None)
+            if self._run_action(save, saved,
+                lambda message: err.configure(text=message) if err.winfo_exists() else None):
+                submit_button.configure(state="disabled", text="Submitting…")
 
         # Row 11: Submit / Cancel buttons (was incorrectly sharing row=8 with the description label)
         btns = ctk.CTkFrame(inner, fg_color="transparent")
@@ -1066,6 +1084,35 @@ class StudentPortal(WorkspaceWindow):
         ctk.CTkButton(btns, text="Cancel", width=110, height=42, corner_radius=8,
                       fg_color=SP_SURFACE, hover_color=SP_HOVER_LIGHT, text_color=SP_TEXT,
                       border_width=1, border_color=SP_BORDER, command=modal.destroy).pack(side="right")
+
+    def _load_form_detection(self, violation_id, label):
+        """Independent owner-scoped read; evidence loading never blocks a form submission."""
+        owner, database = self.student_id, CBVMSDatabase(self.db.db_path, timeout=.75)
+        results = queue.Queue(maxsize=1)
+        def read():
+            try:
+                with database.connect() as conn:
+                    row = conn.execute("SELECT snapshot FROM violations WHERE id=? AND student_id=?",
+                                       (violation_id, owner)).fetchone()
+                prepared = prepare_photo(row[0], (260, 120)) if row and row[0] else None
+                results.put((prepared, None))
+            except Exception as exc:
+                results.put((None, str(exc)))
+        def deliver():
+            if not label.winfo_exists() or owner != self.student_id:
+                return
+            try:
+                picture, error = results.get_nowait()
+            except queue.Empty:
+                self._schedule_ui(50, deliver)
+                return
+            if picture:
+                label._ref = ctk.CTkImage(picture, size=picture.size)
+                label.configure(text='', image=label._ref)
+            else:
+                label.configure(text='Original image unavailable. Use View Detection Evidence to retry.')
+        threading.Thread(target=read, daemon=True, name='appeal-detection-preview').start()
+        self._schedule_ui(50, deliver)
 
     def _open_snapshot(self, viol: dict) -> None:
         violation_label = viol.get("violation_label") or violation_display_name(
@@ -1195,7 +1242,7 @@ class StudentPortal(WorkspaceWindow):
             ctk.CTkButton(card, text='View related record', width=140, height=26,
                           command=lambda vid=notif['violation_id']: self._open_related(vid)).grid(row=2, column=1, sticky='w', pady=(0,12))
         violation = self._notification_violations.get(notif.get('violation_id'))
-        if violation is not None and violation_group(violation) == 'Confirmed':
+        if violation is not None and not violation.get('appeal_id'):
             self._make_appeal_button(card, violation).grid(
                 row=3, column=1, columnspan=2, sticky='w', pady=(0, 12))
 
@@ -1223,7 +1270,7 @@ class StudentPortal(WorkspaceWindow):
         scroll = self._scroll_host(
             "My Appeals",
             f"Track the status of your submitted appeals. "
-            f"Appeals must be submitted within {_APPEAL_DAYS} days of confirmation. "
+            f"Appeals must be submitted within {_APPEAL_DAYS} days of publication in My Violations. "
             "AI recommendations are advisory; the administrator makes the final decision.",
         )
 
@@ -1240,7 +1287,10 @@ class StudentPortal(WorkspaceWindow):
         if not self._appeals:
             self._empty_appeals_state(list_frame)
             return
-        for i, appeal in enumerate(self._appeals):
+        if self._focused_appeal_id:
+            ctk.CTkButton(bar, text="All My Appeals", command=lambda: self._show('appeals')).pack(side="right")
+        rows = [a for a in self._appeals if not self._focused_appeal_id or a['id'] == self._focused_appeal_id]
+        for i, appeal in enumerate(rows):
             self._appeal_card(list_frame, i, appeal)
         self._pagination(scroll, 3)
 
@@ -1254,13 +1304,47 @@ class StudentPortal(WorkspaceWindow):
         ctk.CTkLabel(
             wrap,
             text=f"If you believe a violation was recorded in error, go to My Violations "
-                 f"and click 'Submit Appeal' within {_APPEAL_DAYS} days of confirmation.",
+                 f"and click 'Submit Appeal' within {_APPEAL_DAYS} days of publication in My Violations.",
             font=_f(12), text_color=SP_MUTED, wraplength=500, justify="center",
         ).grid(row=2, column=0)
         ctk.CTkButton(wrap, text="Go to My Violations", width=160, height=36, corner_radius=8,
                       fg_color=SP_ACCENT, hover_color=SP_ACCENT_HOVER, text_color=SP_WHITE,
                       font=_f(13), command=lambda: self._show("violations")).grid(row=3, column=0,
                                                                                    pady=(14, 0))
+
+    def _view_appeal(self, appeal_id):
+        # Resolve the exact case's page using student-scoped metadata in the worker.
+        def locate(db, sid):
+            rows = db.get_appeals_for_student(sid)
+            return next((i // PAGE_SIZE * PAGE_SIZE for i, row in enumerate(rows)
+                         if row['id'] == appeal_id), 0)
+        def show(offset):
+            self._show('appeals')
+            self._page_offset = offset
+            self._focused_appeal_id = appeal_id
+            if self._request:
+                self._request.cancelled.set()
+                self._request = None
+            self._reload_workflow_data()
+        self._run_action(locate, show)
+
+    def _open_appeal_evidence(self, appeal_id):
+        modal = ctk.CTkToplevel(self)
+        modal.title("Supporting Image")
+        modal.geometry("700x600")
+        label = ctk.CTkLabel(modal, text="Loading supporting image…")
+        label.pack(fill="both", expand=True, padx=16, pady=16)
+        def load(db, sid):
+            rows = db.get_student_appeal_evidence(appeal_id, sid)
+            if not rows:
+                raise ValueError("Supporting image is unavailable.")
+            return prepare_photo(rows[0]['file_data'], (650, 520))
+        def show(image):
+            if modal.winfo_exists():
+                label._ref = ctk.CTkImage(image, size=image.size)
+                label.configure(text='', image=label._ref)
+        self._run_action(load, show,
+            lambda error: label.configure(text=error) if label.winfo_exists() else None)
 
     def _appeal_card(self, parent, row: int, appeal: dict) -> None:
         status = (appeal.get("status") or "pending").lower()
@@ -1281,7 +1365,7 @@ class StudentPortal(WorkspaceWindow):
 
         vtype = violation_display_name(
             appeal.get("violation_code"), appeal.get("violation_type"))
-        ctk.CTkLabel(card, text=f"Violation: {vtype}", font=_f(14, "bold"),
+        ctk.CTkLabel(card, text=f"Appeal #{appeal['id']} · {vtype}", font=_f(14, "bold"),
                      text_color=SP_TEXT, anchor="w").grid(row=0, column=1, sticky="w",
                                                           pady=(12, 0))
 
@@ -1299,10 +1383,12 @@ class StudentPortal(WorkspaceWindow):
             row=1, column=1, columnspan=2, sticky="w", padx=(0, 16), pady=(2, 0))
 
         outcomes = {
-            "pending": ("Appeal Pending — Strike Remains", SP_WARNING, SP_PILL_WARN_BG),
-            "approved": ("Appeal Approved — Strike Removed", SP_SAFE, SP_PILL_OK_BG),
-            "rejected": ("Appeal Rejected — Strike Remains", SP_DANGER, "#FEE2E2"),
+            "pending": ("Pending Admin Decision — No strike while appeal is pending", SP_WARNING, SP_PILL_WARN_BG),
+            "approved": ("Appeal Approved — No active strike", SP_SAFE, SP_PILL_OK_BG),
+            "rejected": ("Appeal Rejected — One finalized strike", SP_DANGER, "#FEE2E2"),
         }
+        if appeal.get("strike_active") and status == "pending":
+            outcomes["pending"] = ("Pending decision — historical strike requires reconciliation", SP_WARNING, SP_PILL_WARN_BG)
         outcome_text, outcome_color, outcome_bg = outcomes.get(
             status, (f"Appeal {status.title()}", SP_MUTED, SP_BORDER))
         ctk.CTkLabel(card, text=outcome_text, font=_f(12, "bold"),
@@ -1319,6 +1405,9 @@ class StudentPortal(WorkspaceWindow):
         ctk.CTkLabel(reason_frame, text=appeal.get("reason", "—"), font=_f(12),
                      text_color=SP_TEXT, anchor="w", wraplength=680,
                      justify="left").pack(anchor="w", padx=12, pady=(0, 8))
+
+        ctk.CTkButton(reason_frame, text="View Supporting Image",
+            command=lambda aid=appeal["id"]: self._open_appeal_evidence(aid)).pack(anchor="w", padx=12, pady=6)
 
         # AI recommendation section
         ai_rec = (appeal.get("ai_recommendation") or "").strip()
@@ -1363,7 +1452,7 @@ class StudentPortal(WorkspaceWindow):
                                        corner_radius=8)
             notes_frame.grid(row=5, column=1, columnspan=2, sticky="ew",
                              padx=(0, 16), pady=(6, 12))
-            ctk.CTkLabel(notes_frame, text="Admin response:", font=_f(11, "bold"),
+            ctk.CTkLabel(notes_frame, text=f"Admin response · {appeal.get('decided_by') or 'Administrator'} · {_display_ts(appeal.get('decided_at'))}:", font=_f(11, "bold"),
                          text_color=SP_MUTED, anchor="w").pack(anchor="w", padx=12, pady=(8, 2))
             ctk.CTkLabel(notes_frame, text=notes, font=_f(12), text_color=SP_TEXT,
                          anchor="w", wraplength=680, justify="left").pack(anchor="w",

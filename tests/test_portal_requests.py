@@ -75,7 +75,7 @@ class PortalRequestTests(unittest.TestCase):
         aid = self.db.insert_appeal(own, self.SID, 'Please review this picture and explanation.',
                                     evidence=picture_evidence())
         self.assertIsNotNone(aid)
-        self.db.update_appeal_decision(aid, 'approved', 'Verified')
+        self.db.update_appeal_decision(aid, 'approved', 'Verified', decided_by='admin')
         data = page_snapshot(self.db, self.SID, 'settings', appeal_ids=(own,))
         self.assertFalse(data['_appeal_eligibility'][own]['eligible'])
         data = page_snapshot(self.db, self.SID, 'notifications')
@@ -164,12 +164,12 @@ class PortalRequestTests(unittest.TestCase):
         pending = self.db.log_violation(self.SID, 'Test', 'wrong_uniform', detected_at=now)
         page = page_snapshot(self.db, self.SID, 'violations')
         self.assertEqual(page['_violation_counts']['pending'], 1)
-        self.assertFalse(page['_violations'][0]['can_appeal'])
+        self.assertTrue(page['_violations'][0]['can_appeal'])
         self.assertEqual(sum(r['active_count'] for r in page['_strike_summary']), 0)
         self.db.confirm_violation(pending, confirmed_at=now)
         page = page_snapshot(self.db, self.SID, 'violations')
         self.assertTrue(page['_violations'][0]['can_appeal'])
-        self.assertEqual(sum(r['active_count'] for r in page['_strike_summary']), 1)
+        self.assertEqual(sum(r['active_count'] for r in page['_strike_summary']), 0)
         own = self.db.get_notifications_for_student(self.SID)[0]['id']
         other = self.db.insert_notification(self.OTHER, 'Private', 'Private')
         self.assertFalse(self.db.mark_notification_read(other, student_id=self.SID))
@@ -182,7 +182,7 @@ class PortalRequestTests(unittest.TestCase):
             for route in ('dashboard', 'notifications', 'violations', 'appeals'):
                 page_snapshot(self.db, self.SID, route)
         self.assertEqual(len(self.db.get_notifications_for_student(self.SID)), before)
-        self.assertEqual(sum(r['active_count'] for r in self.db.get_strike_summary(self.SID)), 1)
+        self.assertEqual(sum(r['active_count'] for r in self.db.get_strike_summary(self.SID)), 0)
         self.assertEqual(page_snapshot(self.db, self.OTHER, 'violations')['_violations'], [])
 
 

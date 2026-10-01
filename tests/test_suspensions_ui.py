@@ -1,3 +1,5 @@
+from datetime import timedelta
+from core.discipline import utc_now
 """Real Tk widgets and temporary records; camera and model access is unnecessary."""
 import gc
 import sqlite3
@@ -35,6 +37,7 @@ class SuspensionsUITests(unittest.TestCase):
         for sid, name in ((self.SID, "First Student"), (self.OTHER, "Second Student")):
             self.db.insert_student(sid, name, "BSIT", "3A", b"", b"")
         self.vid = self.db.log_violation(self.SID, "First Student", "wrong_uniform", status="confirmed")
+        self.db.process_expired_deadlines(now=utc_now()+timedelta(days=6))
         self.panel = SuspensionsPanel(self.root, database=self.db, username="osa.tester")
         self.addCleanup(self.panel.destroy)
         self.errors = []

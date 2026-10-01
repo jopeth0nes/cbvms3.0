@@ -49,7 +49,7 @@ class CameraViolationIntegrationTests(unittest.TestCase):
         self.assertEqual(report[0]["student_id"], "S-1")
         self.assertEqual(fixture.database.get_violations_for_student("S-1"), [])
 
-    def test_accepted_assessment_persists_pending_review_without_strike_or_student_notice(self):
+    def test_accepted_assessment_persists_pending_review_with_appeal_and_student_notice_without_strike(self):
         fixture = self.fixture()
         result = fixture.confirmed()
         fixture.persist(result)
@@ -58,16 +58,31 @@ class CameraViolationIntegrationTests(unittest.TestCase):
         self.assertEqual(rows[0]["student_id"], "S-1")
         self.assertEqual(rows[0]["status"], "pending_review")
         self.assertEqual(rows[0]["violation_code"], "wrong_uniform")
-        self.assertTrue(rows[0]["review_deadline"])
+        self.assertTrue(rows[0]["appeal_deadline"])
+        self.assertTrue(fixture.database.get_appeal_eligibility(rows[0]["id"], "S-1")["eligible"])
         self.assertIsInstance(rows[0]["snapshot"], bytes)
         self.assertTrue(rows[0]["snapshot"])
         self.assertEqual(fixture.database.get_strike_count("S-1", "wrong_uniform"), 0)
-        self.assertEqual(fixture.database.get_notifications_for_student("S-1"), [])
+        self.assertEqual(len(fixture.database.get_notifications_for_student("S-1")), 1)
         with fixture.database.connect() as connection:
-            self.assertEqual(connection.execute("SELECT COUNT(*) FROM student_notifications").fetchone()[0], 0)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM student_notifications").fetchone()[0], 1)
         fixture.notifier.notify.assert_called_once()
         self.assertEqual(fixture.notifier.notify.call_args.args, ("Student S-1", "Suspected uniform violation"))
         self.assertEqual(fixture.processor.write_count, 1)
+
+    def test_live_assessment_maps_exact_fixture_id_to_immediate_portal_appeal(self):
+        fixture = self.fixture()
+        sid = "2023-00883"
+        fixture.database.insert_student(sid,"Fixture Student","BSIT","3A",b"",b"")
+        fixture.recognizer.recognize_faces.return_value = [detection(sid)]
+        fixture.persist(fixture.confirmed())
+        rows = fixture.database.get_visible_violations_for_student(sid)
+        self.assertEqual(len(rows), 1)
+        self.assertTrue(rows[0]["can_appeal"])
+        self.assertTrue(rows[0]["snapshot"])
+        self.assertEqual(fixture.database.get_visible_violations_for_student("2023-883"), [])
+        self.assertEqual(fixture.database.get_visible_violations_for_student("S-1"), [])
+        self.assertEqual(fixture.database.get_strike_count(sid, "wrong_uniform"), 0)
 
     def test_one_assessment_persists_each_category_with_independent_cooldown(self):
         fixture = self.fixture()

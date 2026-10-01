@@ -985,14 +985,14 @@ class ViolationLogPanel(CBVMSCard):
         )
         workflow_lines = [f"Semester: {term_text}"]
         if is_pending:
-            deadline = data.get("review_deadline")
+            deadline = data.get("appeal_deadline")
             if deadline:
                 workflow_lines.append(
-                    f"Administrative Review: {deadline[:19]} UTC "
+                    f"Appeal Deadline: {deadline[:19]} UTC "
                     f"({remaining_time_text(deadline)})"
                 )
             else:
-                workflow_lines.append("Administrative Review: Legacy record · no automatic deadline")
+                workflow_lines.append("Historical record · no appeal deadline")
         elif status == "unreviewed":
             workflow_lines.append("Legacy historical record · no automatic deadline")
         elif status in (CONFIRMED, AUTO_CONFIRMED, "reviewed"):
@@ -1036,7 +1036,7 @@ class ViolationLogPanel(CBVMSCard):
             ai_text = (ap.get("ai_analysis") or "").strip()
             if ai_rec and ai_rec != "Unavailable":
                 rec_color = COLOR_SAFE if "Valid" in ai_rec else COLOR_DANGER
-                pill = f"🤖  {ai_rec}" + (f"  ·  {ai_conf}" if ai_conf and ai_conf != "—" else "")
+                pill = f"AI advisory: {ai_rec}" + (f"  ·  {ai_conf}" if ai_conf and ai_conf != "—" else "")
                 self._ai_rec_lbl.configure(text=pill, fg_color=rec_color)
                 self._ai_rec_lbl.grid(row=2, column=0, sticky="w", pady=(6, 0))
                 if ai_text:
@@ -1079,7 +1079,7 @@ class ViolationLogPanel(CBVMSCard):
             return
         vid = int(self._selected_violation_row["id"])
         if self.database.confirm_violation(vid, decided_by="admin"):
-            self._set_status("Violation confirmed; strike and student appeal window activated.", "success")
+            self._set_status("Violation classified as confirmed. The existing appeal deadline is unchanged; confirmation awards no strike.", "success")
         else:
             self._set_status("Only pending-review violations can be confirmed.", "warning")
         self.refresh()
@@ -1093,7 +1093,7 @@ class ViolationLogPanel(CBVMSCard):
             decided_by="admin",
             reason="False detection dismissed during administrative review",
         ):
-            self._set_status("Violation dismissed; no strike or appeal window was created.", "success")
+            self._set_status("Violation dismissed; no strike is active and no new appeal is allowed.", "success")
         else:
             self._set_status("Only pending-review violations can be dismissed.", "warning")
         self.refresh()

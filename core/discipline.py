@@ -99,7 +99,7 @@ def remaining_time_text(deadline: datetime | str | None, *, now: datetime | str 
     if end is None or current is None:
         return "Deadline unavailable"
     seconds = (end - current).total_seconds()
-    if seconds <= 0:
+    if seconds < 0:
         return "Expired"
     if seconds >= 86400:
         days = max(1, math.ceil(seconds / 86400))
@@ -206,3 +206,8 @@ def default_academic_term(*, now: datetime | str | None = None) -> dict[str, str
         "semester_name": name,
         "school_year": school_year,
     }
+
+
+def display_local_datetime(value, fallback="—"):
+    parsed = parse_db_datetime(value)
+    return parsed.astimezone().strftime("%b %d, %Y · %H:%M %Z") if parsed else fallback

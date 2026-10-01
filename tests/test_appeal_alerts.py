@@ -26,6 +26,8 @@ class AppealAlertTests(unittest.TestCase):
         self.db.initialize()
         self.db.insert_student("S1", "Student One", "BSIT", "3A", b"", b"")
         self.now = datetime(2099, 8, 1, tzinfo=timezone.utc)
+        clock = patch("database.db_manager.utc_now", return_value=self.now)
+        clock.start(); self.addCleanup(clock.stop)
         self.vid = self.db.log_violation(student_id="S1", student_name="Student One",
             violation_type="Wrong Uniform", violation_code="wrong_uniform", detected_at=self.now)
         self.db.confirm_violation(self.vid, confirmed_at=self.now)
@@ -144,10 +146,9 @@ class AppealAlertTests(unittest.TestCase):
     def test_records_navigation_selects_appeal_even_when_filtered(self):
         root = self.root()
         aid = self.submit()
-        panel = RecordsPanel(root, database=self.db)
-        panel._appeal_filter.set("Approved")
+        route = Mock()
+        panel = RecordsPanel(root, database=self.db, on_open_appeals=route)
         panel.open_alert("appeals", aid)
-        self.assertEqual(panel._tab_var.get(), "appeals")
-        self.assertEqual(panel._current_appeal["id"], aid)
+        route.assert_called_once_with(aid)
         panel.open_alert("violations")
         self.assertEqual(panel._tab_var.get(), "violations")

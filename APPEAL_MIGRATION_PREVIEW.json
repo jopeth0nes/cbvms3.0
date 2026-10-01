@@ -1,0 +1,123 @@
+{
+  "before": {
+    "violations": {
+      "auto_confirmed": 11,
+      "pending_review": 8,
+      "reviewed": 1,
+      "unreviewed": 53
+    },
+    "appeals": {
+      "approved": 1,
+      "pending": 1,
+      "rejected": 1
+    },
+    "active_strikes": 4,
+    "suspensions": 0,
+    "conflicts": [
+      {
+        "violation_id": 65,
+        "student_id": "2023-00883",
+        "violation_status": "auto_confirmed",
+        "appeal_status": "pending",
+        "strike_id": 3
+      }
+    ],
+    "fresh_opportunity_ids": [
+      66,
+      67,
+      68,
+      69,
+      70,
+      71,
+      72,
+      73,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      11,
+      13,
+      14,
+      16,
+      17,
+      18,
+      20,
+      21,
+      22,
+      24,
+      26,
+      27,
+      28,
+      29,
+      30,
+      31,
+      32,
+      34,
+      36,
+      38,
+      39,
+      40,
+      45,
+      47,
+      50,
+      53,
+      54
+    ]
+  },
+  "after": {
+    "violations": {
+      "auto_confirmed": 11,
+      "pending_review": 42,
+      "reviewed": 1,
+      "unreviewed": 19
+    },
+    "appeals": {
+      "approved": 1,
+      "pending": 1,
+      "rejected": 1
+    },
+    "active_strikes": 4,
+    "suspensions": 0,
+    "conflicts": [
+      {
+        "violation_id": 65,
+        "student_id": "2023-00883",
+        "violation_status": "auto_confirmed",
+        "appeal_status": "pending",
+        "strike_id": 3
+      }
+    ],
+    "fresh_opportunity_ids": []
+  },
+  "origins": {
+    "appeals_publication_v1": 42,
+    "legacy_preserved": 30,
+    "reconciliation_required": 1
+  },
+  "repeatable": true,
+  "simulated_reconciliation_ids": [
+    65
+  ],
+  "after_simulated_reconciliation": {
+    "violations": {
+      "auto_confirmed": 11,
+      "pending_review": 42,
+      "reviewed": 1,
+      "unreviewed": 19
+    },
+    "appeals": {
+      "approved": 1,
+      "pending": 1,
+      "rejected": 1
+    },
+    "active_strikes": 3,
+    "suspensions": 0,
+    "conflicts": [],
+    "fresh_opportunity_ids": []
+  },
+  "source_modified": false,
+  "reconciliation": "Deactivate conflicting strikes with an audited reason; recompute threshold eligibility, preserve decisions and explicit office-clearance suspensions. Pending appeals then remain protected until decision. Requires historical reconciliation approval."
+}

@@ -65,6 +65,11 @@ class SuspensionHistoryTests(unittest.TestCase):
         ids = [self.violation(status="confirmed") for _ in range(3)]
         self.violation(status="dismissed")
         self.violation(code="earring", status="confirmed")
+        self.db.process_expired_deadlines(now=utc_now()+timedelta(days=6))
+        # A legacy pending appeal/strike conflict can be resolved by a human decision.
+        with self.db.connect() as conn:
+            conn.execute("INSERT INTO appeals (violation_id,student_id,reason) VALUES (?,?,?)",
+                (ids[0],self.SID,'Historical appeal already submitted'))
         self.assertEqual(self.db.get_strike_count(self.SID, "wrong_uniform"), 3)
         self.assertEqual(self.db.get_strike_count(self.SID, "earring"), 1)
         self.assertTrue(any(row["action_required"] for row in self.db.get_strike_summary(self.SID)))
@@ -77,8 +82,8 @@ class SuspensionHistoryTests(unittest.TestCase):
         for vid in ids:
             self.db.confirm_violation(vid)
         self.assertEqual(len(self.db.get_suspension_history(self.SID)), 1)
-        appeal = self.db.insert_appeal(ids[0], self.SID, "Please review this evidence.", evidence=picture_evidence())
-        self.assertTrue(self.db.update_appeal_decision(appeal, "approved", "Evidence accepted"))
+        appeal = self.db.get_appeal_for_violation(ids[0])["id"]
+        self.assertTrue(self.db.update_appeal_decision(appeal, "approved", "Evidence accepted", decided_by="admin"))
         self.assertEqual(self.db.get_strike_count(self.SID, "wrong_uniform"), 2)
         self.assertEqual(self.db.get_active_suspension(self.SID)["id"], suspension_id)
         rows = {row["id"]: row for row in self.db.get_discipline_history_for_student(self.SID)}
