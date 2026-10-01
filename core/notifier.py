@@ -17,6 +17,7 @@ class Notification:
     timestamp: float = field(default_factory=time.time)
     acknowledged: bool = False
     valid_if: Callable[[], bool] | None = field(default=None, repr=False, compare=False)
+    category: str = "violations"
 
 
 def play_alert() -> None:

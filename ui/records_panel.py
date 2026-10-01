@@ -64,9 +64,10 @@ def _violation_status_label(status: str) -> str:
 class RecordsPanel(ctk.CTkFrame):
     """Admin records management panel."""
 
-    def __init__(self, master, *, database: CBVMSDatabase, **kwargs) -> None:
+    def __init__(self, master, *, database: CBVMSDatabase, username: str = "admin", **kwargs) -> None:
         super().__init__(master, fg_color=COLOR_BG, **kwargs)
         self.database = database
+        self.username = username
         self._image_refs: list = []
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(1, weight=0)
@@ -545,8 +546,10 @@ class RecordsPanel(ctk.CTkFrame):
                                         font=body_small_font(), text_color=COLOR_TEXT_MUTED,
                                         anchor="w")
         self._ap_ev_lbl.grid(row=8, column=0, sticky="w", padx=PADDING)
-        self._ap_ev_img = tk.Label(right, text="", bg=COLOR_SURFACE, bd=0)
+        self._ap_ev_img = tk.Label(right, text="", bg=COLOR_SURFACE, bd=0, cursor="hand2")
         self._ap_ev_img.grid(row=9, column=0, sticky="w", padx=PADDING, pady=(4, 0))
+        self._ap_ev_img.bind("<Button-1>", self._open_appeal_picture)
+        self._selected_appeal_picture = None
 
         # Admin notes + action
         ctk.CTkLabel(right, text="Admin Notes:", font=heading_font(12),
@@ -644,6 +647,7 @@ class RecordsPanel(ctk.CTkFrame):
         # Evidence
         evidence = self.database.get_evidence_for_appeal(aid)
         self._ap_ev_img.configure(image="", text="")
+        self._selected_appeal_picture = None
         if evidence:
             ev = evidence[0]
             self._ap_ev_lbl.configure(
@@ -656,6 +660,8 @@ class RecordsPanel(ctk.CTkFrame):
                     self._image_refs.append(ph)
                     self._ap_ev_img.configure(image=ph)
                     self._ap_ev_img._ref = ph
+                    self._selected_appeal_picture = ev
+                    self._ap_ev_lbl.configure(text=f"{ev['filename']} · click picture to enlarge")
                 except Exception:
                     pass
         else:
@@ -688,12 +694,29 @@ class RecordsPanel(ctk.CTkFrame):
             f"Current status: {(r.get('status') or 'pending').title()}"
         )
 
+    def _open_appeal_picture(self, _event=None) -> None:
+        evidence = self._selected_appeal_picture
+        if not evidence:
+            return
+        try:
+            picture = Image.open(io.BytesIO(evidence["file_data"])).convert("RGB")
+            picture.thumbnail((900, 650), Image.Resampling.LANCZOS)
+            window = ctk.CTkToplevel(self)
+            window.title(f"Appeal Evidence — {evidence['filename']}")
+            window.transient(self.winfo_toplevel())
+            preview = ImageTk.PhotoImage(picture, master=window)
+            label = tk.Label(window, image=preview, bg=COLOR_SURFACE)
+            label._image = preview
+            label.pack(padx=12, pady=12)
+        except Exception:
+            self._ap_ev_lbl.configure(text="Picture could not be opened.")
+
     def _decide_appeal(self, decision: str) -> None:
         if self._current_appeal is None:
             return
         notes = self._ap_notes.get("1.0", "end-1c").strip()
         aid = self._current_appeal["id"]
-        ok = self.database.update_appeal_decision(aid, decision, notes)
+        ok = self.database.update_appeal_decision(aid, decision, notes, decided_by=self.username)
         if ok:
             self._current_appeal["status"] = decision
             self._current_appeal["admin_notes"] = notes
@@ -885,6 +908,18 @@ class RecordsPanel(ctk.CTkFrame):
 
     def on_show(self) -> None:
         self.refresh()
+
+    def open_alert(self, category: str, record_id: int | None = None) -> None:
+        """Navigate from an alert, clearing filters so its appeal can be selected."""
+        if category == "appeals":
+            self._appeal_filter.set("All")
+            self._switch_tab("appeals")
+            if record_id is not None and self._appeal_tree.exists(str(record_id)):
+                self._appeal_tree.selection_set(str(record_id))
+                self._appeal_tree.see(str(record_id))
+                self._on_appeal_select()
+        else:
+            self._switch_tab("violations")
 
     def refresh(self) -> None:
         self.database.process_expired_deadlines()

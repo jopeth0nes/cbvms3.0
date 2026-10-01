@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 
 from core.discipline import utc_now
 from database.db_manager import CBVMSDatabase
+from tests.evidence_fixture import picture_evidence
 from ui.suspensions_panel import strike_explanation, saved_year_level
 
 
@@ -76,7 +77,7 @@ class SuspensionHistoryTests(unittest.TestCase):
         for vid in ids:
             self.db.confirm_violation(vid)
         self.assertEqual(len(self.db.get_suspension_history(self.SID)), 1)
-        appeal = self.db.insert_appeal(ids[0], self.SID, "Please review this evidence.")
+        appeal = self.db.insert_appeal(ids[0], self.SID, "Please review this evidence.", evidence=picture_evidence())
         self.assertTrue(self.db.update_appeal_decision(appeal, "approved", "Evidence accepted"))
         self.assertEqual(self.db.get_strike_count(self.SID, "wrong_uniform"), 2)
         self.assertEqual(self.db.get_active_suspension(self.SID)["id"], suspension_id)

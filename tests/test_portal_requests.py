@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 from core.portal_state import PAGE_SIZE, PortalRequests, page_snapshot
 from database.db_manager import CBVMSDatabase
+from tests.evidence_fixture import picture_evidence
 
 
 class PortalRequestTests(unittest.TestCase):
@@ -59,6 +60,26 @@ class PortalRequestTests(unittest.TestCase):
         finally:
             lock.rollback()
             lock.close()
+
+    def test_notification_appeals_use_owner_scoped_metadata_and_refresh_decisions(self):
+        own = self.db.log_violation(self.SID, 'Own', 'wrong_uniform', snapshot_jpeg=b'private image')
+        other = self.db.log_violation(self.OTHER, 'Other', 'wrong_uniform')
+        self.db.confirm_violation(own)
+        self.db.confirm_violation(other)
+        self.db.insert_notification(self.SID, 'Invalid link', 'Must not expose other student', violation_id=other)
+        data = page_snapshot(self.db, self.SID, 'notifications')
+        self.assertEqual(set(data['_notification_violations']), {own})
+        self.assertNotIn('snapshot', data['_notification_violations'][own])
+        self.assertTrue(data['_appeal_eligibility'][own]['eligible'])
+        # An open dialog still receives current eligibility after page navigation.
+        aid = self.db.insert_appeal(own, self.SID, 'Please review this picture and explanation.',
+                                    evidence=picture_evidence())
+        self.assertIsNotNone(aid)
+        self.db.update_appeal_decision(aid, 'approved', 'Verified')
+        data = page_snapshot(self.db, self.SID, 'settings', appeal_ids=(own,))
+        self.assertFalse(data['_appeal_eligibility'][own]['eligible'])
+        data = page_snapshot(self.db, self.SID, 'notifications')
+        self.assertEqual(data['_notification_violations'][own]['appeal_status'], 'approved')
 
     def test_lock_failure_is_bounded_and_retry_works(self):
         lock = self.db.connect()

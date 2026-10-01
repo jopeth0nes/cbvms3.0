@@ -491,8 +491,9 @@ class CBVMSDashboard(WorkspaceWindow):
         )),
             "alerts": ("_notifications_panel", lambda: NotificationsPanel(
             self._view_host, notifier=self._notifier, on_change=self._update_bell_badge,
+            database=self._database, on_open=self._open_alert_record,
         )),
-            "records": ("_records_panel", lambda: RecordsPanel(self._view_host, database=self._database)),
+            "records": ("_records_panel", lambda: RecordsPanel(self._view_host, database=self._database, username=self.username)),
             "accounts": ("_account_manager_panel", lambda: AccountManagerPanel(
             self._view_host, database=self._database)),
         }
@@ -707,7 +708,7 @@ class CBVMSDashboard(WorkspaceWindow):
         if badge is None:
             return
         try:
-            count = self._notifier.unread_count()
+            count = self._notifier.unread_count() + self._database.admin_appeal_unread_count()
             if count <= 0:
                 badge.place_forget()
                 return
@@ -724,7 +725,11 @@ class CBVMSDashboard(WorkspaceWindow):
 
     def _open_alerts_from_bell(self) -> None:
         self._on_nav_select("alerts")
-        self._mark_all_read()
+
+    def _open_alert_record(self, category: str, record_id: int | None) -> None:
+        self._on_nav_select("records")
+        if self._records_panel is not None:
+            self._records_panel.open_alert(category, record_id)
 
     # ------------------------------------------------------------------
     # Camera preferences

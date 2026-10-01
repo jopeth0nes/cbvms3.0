@@ -6,6 +6,8 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Callable
 
 import customtkinter as ctk
+from core.discipline import parse_db_datetime
+from core.notifier import Notification
 
 from ui.components import (
     COLOR_ACCENT,
@@ -42,22 +44,29 @@ class NotificationsPanel(ctk.CTkFrame):
     """Scrollable list of violation notifications with filters + acknowledge."""
 
     def __init__(self, master, *, notifier: "Notifier", on_change: Callable[[], None] | None = None,
+                 database=None, on_open: Callable[[str, int | None], None] | None = None,
                  **kwargs) -> None:
         super().__init__(master, fg_color=COLOR_BG, **kwargs)
         self._notifier = notifier
+        self._database = database
+        self._on_open = on_open or (lambda category, record_id: None)
+        self._category = "violations"
+        self._category_buttons = {}
+        self._category_badges = {}
         self._on_change = on_change or (lambda: None)
         self._filter = "All"
         self._refresh_job: str | None = None
         self._last_sig: tuple | None = None
 
         self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(2, weight=1)
+        self.grid_rowconfigure(3, weight=1)
 
         self._build_header()
+        self._build_categories()
         self._build_filter()
 
         self._list = ctk.CTkScrollableFrame(self, fg_color="transparent")
-        self._list.grid(row=2, column=0, sticky="nsew", padx=PADDING, pady=(0, PADDING))
+        self._list.grid(row=3, column=0, sticky="nsew", padx=PADDING, pady=(0, PADDING))
         self._list.grid_columnconfigure(0, weight=1)
 
         self._render()
@@ -88,6 +97,38 @@ class NotificationsPanel(ctk.CTkFrame):
             font=body_small_font(), command=self._mark_all_read,
         ).grid(row=0, column=3, sticky="e")
 
+    def _build_categories(self) -> None:
+        group = ctk.CTkFrame(self, fg_color="transparent")
+        group.grid(row=1, column=0, sticky="w", padx=PADDING, pady=(0, 10))
+        for category, label in (("violations", "Violations"), ("appeals", "Appeals")):
+            holder = ctk.CTkFrame(group, fg_color="transparent")
+            holder.pack(side="left", padx=(0, 12))
+            button = ctk.CTkButton(holder, text=label, width=160, height=38,
+                command=lambda c=category: self._select_category(c))
+            button.pack()
+            badge = ctk.CTkLabel(holder, text="", width=22, height=20,
+                corner_radius=999, fg_color=COLOR_DANGER, text_color="#FFFFFF")
+            self._category_buttons[category] = button
+            self._category_badges[category] = badge
+
+    def _select_category(self, category: str) -> None:
+        self._category = category
+        self._last_sig = None
+        self._render()
+
+    def _all_items(self) -> list[Notification]:
+        items = self._notifier.get_log()
+        if self._database is not None:
+            for row in self._database.get_admin_appeal_alerts():
+                submitted = parse_db_datetime(row["submitted_at"])
+                items.append(Notification(
+                    id=row["id"], student_name=row["student_name"] or row["student_id"],
+                    violation=f"New appeal: {row['violation_type'] or 'Violation'} · {row['status'].title()}",
+                    timestamp=submitted.timestamp() if submitted else 0,
+                    acknowledged=bool(row["admin_alert_read"]), category="appeals",
+                ))
+        return sorted(items, key=lambda n: n.timestamp, reverse=True)
+
     def _build_filter(self) -> None:
         self._filter_btn = ctk.CTkSegmentedButton(
             self, values=["All", "Unread", "Today"],
@@ -97,7 +138,7 @@ class NotificationsPanel(ctk.CTkFrame):
             unselected_hover_color=COLOR_BORDER, text_color=COLOR_TEXT,
         )
         self._filter_btn.set("All")
-        self._filter_btn.grid(row=1, column=0, sticky="w", padx=PADDING, pady=(0, 10))
+        self._filter_btn.grid(row=2, column=0, sticky="w", padx=PADDING, pady=(0, 10))
 
     def _on_filter_change(self, value: str) -> None:
         self._filter = value
@@ -109,20 +150,27 @@ class NotificationsPanel(ctk.CTkFrame):
     # ------------------------------------------------------------------
 
     def _mark_all_read(self) -> None:
-        self._notifier.mark_all_read()
+        if self._category == "appeals" and self._database is not None:
+            self._database.mark_admin_appeal_alert_read()
+        else:
+            self._notifier.mark_all_read()
         self._last_sig = None
         self._render()
         self._on_change()
 
     def refresh_external(self) -> None:
-        """Force a re-render (e.g. after the sidebar bell marks all read)."""
+        """Refresh the selected view without acknowledging any notifications."""
         if not self.winfo_exists():
             return
         self._last_sig = None
         self._render()
+        self._on_change()
 
     def _acknowledge(self, notif_id: int) -> None:
-        self._notifier.acknowledge(notif_id)
+        if self._category == "appeals" and self._database is not None:
+            self._database.mark_admin_appeal_alert_read(notif_id)
+        else:
+            self._notifier.acknowledge(notif_id)
         self._last_sig = None
         self._render()
         self._on_change()
@@ -131,8 +179,9 @@ class NotificationsPanel(ctk.CTkFrame):
     # Rendering
     # ------------------------------------------------------------------
 
-    def _visible_items(self) -> list["Notification"]:
-        items = self._notifier.get_log()  # newest-first
+    def _visible_items(self, items=None) -> list["Notification"]:
+        items = [n for n in (self._all_items() if items is None else items)
+                 if n.category == self._category]
         if self._filter == "Unread":
             return [n for n in items if not n.acknowledged]
         if self._filter == "Today":
@@ -141,7 +190,17 @@ class NotificationsPanel(ctk.CTkFrame):
         return items
 
     def _render(self) -> None:
-        unread = self._notifier.unread_count()
+        all_items = self._all_items()
+        unread = sum(not n.acknowledged for n in all_items)
+        for category, button in self._category_buttons.items():
+            button.configure(fg_color=COLOR_ACCENT if category == self._category else COLOR_SURFACE)
+            count = sum(not n.acknowledged for n in all_items if n.category == category)
+            badge = self._category_badges[category]
+            if count:
+                badge.configure(text="99+" if count > 99 else str(count))
+                badge.place(relx=1.0, x=-3, y=2, anchor="ne")
+            else:
+                badge.place_forget()
         self._unread_pill.configure(text=f"{unread} unread")
         if unread == 0:
             self._unread_pill.grid_remove()
@@ -151,7 +210,7 @@ class NotificationsPanel(ctk.CTkFrame):
         for child in self._list.winfo_children():
             child.destroy()
 
-        items = self._visible_items()
+        items = self._visible_items(all_items)
         if not items:
             self._render_empty()
             return
@@ -167,11 +226,11 @@ class NotificationsPanel(ctk.CTkFrame):
             wrap, text="🔔", font=ctk.CTkFont(size=48), text_color=COLOR_TEXT_MUTED,
         ).grid(row=0, column=0)
         ctk.CTkLabel(
-            wrap, text="No violations detected yet", font=heading_font(18),
+            wrap, text=f"No {self._category} notifications in this view", font=heading_font(18),
             text_color=COLOR_TEXT_MUTED,
         ).grid(row=1, column=0, pady=(8, 2))
         ctk.CTkLabel(
-            wrap, text="Violations will appear here as they are detected.",
+            wrap, text="New submissions appear under Appeals; detections appear under Violations.",
             font=body_small_font(), text_color=COLOR_TEXT_MUTED,
         ).grid(row=2, column=0)
 
@@ -211,6 +270,19 @@ class NotificationsPanel(ctk.CTkFrame):
                 font=body_small_font(), command=lambda i=notif.id: self._acknowledge(i),
             ).grid(row=1, column=2, sticky="e", padx=(0, PADDING), pady=(0, 8))
 
+        def open_record(_event=None) -> None:
+            self._acknowledge(notif.id)
+            self._on_open(notif.category, notif.id if notif.category == "appeals" else None)
+
+        ctk.CTkButton(card,
+            text="Open Appeal Management" if notif.category == "appeals" else "Open Violation Reports",
+            height=28, command=open_record,
+        ).grid(row=2, column=1, columnspan=2, sticky="w", pady=(0, 10))
+        card.bind("<Button-1>", open_record)
+        for child in card.winfo_children():
+            if isinstance(child, ctk.CTkLabel):
+                child.bind("<Button-1>", open_record)
+
     # ------------------------------------------------------------------
     # Auto-refresh (flicker-free: rebuild only when the log changes)
     # ------------------------------------------------------------------
@@ -228,13 +300,15 @@ class NotificationsPanel(ctk.CTkFrame):
         try:
             if not self.winfo_exists():
                 return
-            items = self._notifier.get_log()
-            sig = (len(items), self._notifier.unread_count(), self._filter)
+            items = self._all_items()
+            sig = (tuple((n.category, n.id, n.acknowledged, n.violation) for n in items),
+                   self._filter, self._category, datetime.now().date())
             if sig != self._last_sig:
                 self._last_sig = sig
                 self._render()
+                self._on_change()
         except Exception:
-            return
+            pass  # Transient database errors must not permanently stop refresh.
         self._schedule_refresh()
 
     def destroy(self) -> None:  # type: ignore[override]

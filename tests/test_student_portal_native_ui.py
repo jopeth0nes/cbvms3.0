@@ -17,6 +17,7 @@ from PIL import Image
 from database.db_manager import CBVMSDatabase
 from core.portal_state import PAGE_SIZE
 from ui.student_portal import StudentPortal, _NAV_ITEMS
+from tests.evidence_fixture import picture_evidence
 
 
 class PortalNativeTests(unittest.TestCase):
@@ -118,6 +119,10 @@ class PortalNativeTests(unittest.TestCase):
         modal = next(w for w in app.winfo_children() if isinstance(w, ctk.CTkToplevel))
         box = next(w for w in self.widgets(modal) if isinstance(w, ctk.CTkTextbox))
         box.insert('1.0', 'Please review the evidence because this detection was incorrect.')
+        picture = Path(self.tmp.name) / 'proof.png'
+        picture.write_bytes(picture_evidence()[2])
+        with patch('ui.student_portal.filedialog.askopenfilename', return_value=str(picture)):
+            self.button('Browse', modal).invoke()
         with patch('ui.student_portal.analyze_appeal'):
             self.button('Submit Appeal', modal).invoke()
             self.until(lambda: app._active == 'appeals' and app._action_request is None)

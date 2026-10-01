@@ -30,6 +30,7 @@ from core.discipline import (
 from database.models import ALL_TABLES
 from database.student_management import StudentManagement, migrate_student_management
 from core.student_status import validate_contacts
+from core.appeal_evidence import validate_evidence
 
 DEFAULT_ADMIN_USERNAME = "admin"
 DEFAULT_ADMIN_PASSWORD = "admin123"
@@ -124,7 +125,8 @@ CREATE TABLE IF NOT EXISTS appeals (
     ai_analysis TEXT DEFAULT '',
     ai_analyzed_at TEXT DEFAULT '',
     decided_at TEXT,
-    decided_by TEXT DEFAULT ''
+    decided_by TEXT DEFAULT '',
+    admin_alert_read INTEGER NOT NULL DEFAULT 0
 );
 """
 
@@ -149,6 +151,13 @@ WORKFLOW_INDEXES = (
 
 def hash_password(password: str) -> str:
     return hashlib.sha256(password.encode("utf-8")).hexdigest()
+
+
+def _inserted_row_id(cursor: sqlite3.Cursor) -> int:
+    row_id = cursor.lastrowid
+    if row_id is None:
+        raise RuntimeError("SQLite did not return the inserted row ID")
+    return row_id
 
 
 class _ClosingConnection(sqlite3.Connection):
@@ -199,6 +208,8 @@ class CBVMSDatabase(StudentManagement):
 
             # Idempotent migrations for existing cbvms.db installations.
             appeal_cols = {r[1] for r in conn.execute("PRAGMA table_info(appeals)").fetchall()}
+            if "admin_alert_read" not in appeal_cols:
+                conn.execute("ALTER TABLE appeals ADD COLUMN admin_alert_read INTEGER NOT NULL DEFAULT 0")
             for col, default in (
                 ("ai_recommendation", "''"),
                 ("ai_confidence", "''"),
@@ -346,7 +357,7 @@ class CBVMSDatabase(StudentManagement):
                (semester_code, semester_name, school_year, is_current)
                VALUES ('legacy', 'Legacy / Unassigned', 'Unassigned', 0)"""
         )
-        return int(cursor.lastrowid)
+        return _inserted_row_id(cursor)
 
     @staticmethod
     def _ensure_current_academic_term_conn(conn: sqlite3.Connection) -> int:
@@ -373,7 +384,7 @@ class CBVMSDatabase(StudentManagement):
                VALUES (?, ?, ?, 1)""",
             (term["semester_code"], term["semester_name"], term["school_year"]),
         )
-        return int(cursor.lastrowid)
+        return _inserted_row_id(cursor)
 
     def _seed_default_admin(self) -> None:
         with self.connect() as conn:
@@ -438,7 +449,7 @@ class CBVMSDatabase(StudentManagement):
                        VALUES (?, ?, ?, 1)""",
                     (code, name, year),
                 )
-                term_id = int(cursor.lastrowid)
+                term_id = _inserted_row_id(cursor)
             else:
                 term_id = int(row["id"])
                 conn.execute(
@@ -531,7 +542,7 @@ class CBVMSDatabase(StudentManagement):
                     photo,
                 ),
             )
-            pk = int(cursor.lastrowid)
+            pk = _inserted_row_id(cursor)
             assignments = ", ".join(f"{key}=?" for key in contact_values)
             conn.execute(f"UPDATE students SET {assignments}, registration_pending=? WHERE id=?",
                          (*contact_values.values(), int(registration_pending), pk))
@@ -648,7 +659,7 @@ class CBVMSDatabase(StudentManagement):
                     semester_id,
                 ),
             )
-            violation_id = int(cursor.lastrowid)
+            violation_id = _inserted_row_id(cursor)
             if valid_if is not None and not valid_if():
                 conn.rollback()
                 return None
@@ -799,7 +810,7 @@ class CBVMSDatabase(StudentManagement):
             (student_id, title, message, violation_id, created_at, event_key),
         )
         if cursor.rowcount:
-            return int(cursor.lastrowid)
+            return _inserted_row_id(cursor)
         row = conn.execute(
             "SELECT id FROM student_notifications WHERE event_key = ?", (event_key,)
         ).fetchone()
@@ -1608,7 +1619,8 @@ class CBVMSDatabase(StudentManagement):
                         ((student_id or "").strip(), (title or "").strip(),
                          (message or "").strip(), violation_id, created_text),
                     )
-                    notification_id = int(cursor.lastrowid)
+                    notification_id = _inserted_row_id(cursor)
+                    return notification_id
                 conn.commit()
                 return notification_id
         except Exception as exc:
@@ -1716,20 +1728,30 @@ class CBVMSDatabase(StudentManagement):
         violation_id: int,
         student_id: str,
         reason: str,
+        *,
+        evidence: tuple[str, str, bytes] | None = None,
     ) -> int | None:
         """Submit an appeal using the backend clock after full eligibility validation."""
 
         sid = (student_id or "").strip()
         safe_reason = (reason or "").strip()
+        if not isinstance(evidence, (tuple, list)) or len(evidence) != 3:
+            return None
+        try:
+            validate_evidence(*evidence)
+        except ValueError:
+            return None
         # The student-facing API intentionally has no caller-provided timestamp: a
         # forged/backdated value must never bypass the persisted appeal deadline.
-        submitted_dt = utc_now()
-        if not sid or not safe_reason:
+        if not sid or not 20 <= len(safe_reason) <= 1000:
             return None
-        submitted_text = format_db_datetime(submitted_dt)
         try:
             with self.connect() as conn:
                 conn.execute("BEGIN IMMEDIATE")
+                # A blocked writer may cross the deadline while waiting for the lock.
+                # Check the authoritative clock only after acquiring that lock.
+                submitted_dt = utc_now()
+                submitted_text = format_db_datetime(submitted_dt)
                 row = conn.execute(
                     """SELECT v.*, a.id AS existing_appeal_id,
                               st.is_active AS strike_active
@@ -1761,12 +1783,50 @@ class CBVMSDatabase(StudentManagement):
                     """,
                     (violation_id, sid, safe_reason, submitted_text),
                 )
+                appeal_id = _inserted_row_id(cursor)
+                if evidence is not None:
+                    filename, file_type, file_data = evidence
+                    if not filename or not file_data:
+                        conn.rollback()
+                        return None
+                    conn.execute(
+                        """INSERT INTO evidence_files
+                           (appeal_id, student_id, filename, file_type, file_data)
+                           VALUES (?, ?, ?, ?, ?)""",
+                        (appeal_id, sid, filename, file_type, file_data),
+                    )
                 conn.commit()
-                return int(cursor.lastrowid)
-        except sqlite3.IntegrityError:
+                return appeal_id
+        except sqlite3.Error:
             return None
 
     submit_appeal = insert_appeal
+
+    def get_admin_appeal_alerts(self) -> list[dict]:
+        """Persisted submission alerts, independent of the appeal decision status."""
+        with self.connect() as conn:
+            rows = conn.execute(
+                """SELECT a.id, a.violation_id, a.student_id, a.submitted_at,
+                          a.admin_alert_read, a.status, s.name AS student_name,
+                          v.violation_type
+                   FROM appeals a LEFT JOIN students s ON s.student_id = a.student_id
+                   LEFT JOIN violations v ON v.id = a.violation_id
+                   ORDER BY a.submitted_at DESC, a.id DESC"""
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def admin_appeal_unread_count(self) -> int:
+        with self.connect() as conn:
+            return int(conn.execute(
+                "SELECT COUNT(*) FROM appeals WHERE admin_alert_read = 0"
+            ).fetchone()[0])
+
+    def mark_admin_appeal_alert_read(self, appeal_id: int | None = None) -> None:
+        with self.connect() as conn:
+            if appeal_id is None:
+                conn.execute("UPDATE appeals SET admin_alert_read = 1 WHERE admin_alert_read = 0")
+            else:
+                conn.execute("UPDATE appeals SET admin_alert_read = 1 WHERE id = ?", (appeal_id,))
 
     def update_appeal_ai_analysis(
         self,
@@ -1806,7 +1866,13 @@ class CBVMSDatabase(StudentManagement):
     def insert_evidence_file(self, appeal_id: int, student_id: str,
                               filename: str, file_type: str, file_data: bytes) -> int | None:
         try:
+            validate_evidence(filename, file_type, file_data)
             with self.connect() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                owner = conn.execute("SELECT student_id, status FROM appeals WHERE id=?",
+                                     (appeal_id,)).fetchone()
+                if owner is None or owner["student_id"] != (student_id or "").strip() or owner["status"] != "pending":
+                    return None
                 cursor = conn.execute(
                     """INSERT INTO evidence_files
                        (appeal_id, student_id, filename, file_type, file_data)
@@ -1815,7 +1881,7 @@ class CBVMSDatabase(StudentManagement):
                      (filename or "").strip(), (file_type or "image").strip(), file_data),
                 )
                 conn.commit()
-                return int(cursor.lastrowid)
+                return _inserted_row_id(cursor)
         except Exception as exc:
             print(f"[DB] insert_evidence_file error: {exc}")
             return None

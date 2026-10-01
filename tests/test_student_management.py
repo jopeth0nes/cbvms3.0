@@ -116,7 +116,9 @@ class StudentManagementTests(unittest.TestCase):
         vid = self.db.log_violation("S1", "Student One", "wrong_uniform", detected_at=self.now)
         self.assertTrue(self.db.confirm_violation(vid, confirmed_at=self.now))
         with patch("database.db_manager.utc_now", return_value=self.now):
-            aid = self.db.insert_appeal(vid, "S1", "Please review the recorded evidence.")
+            from tests.evidence_fixture import picture_evidence
+            aid = self.db.insert_appeal(vid, "S1", "Please review the recorded evidence.",
+                                      evidence=picture_evidence())
         self.change_status("Graduate")
         self.assertEqual(self.db.get_appeal_for_violation(vid)["status"], "pending")
         self.assertTrue(self.db.update_appeal_decision(aid, "approved", "Evidence reviewed",

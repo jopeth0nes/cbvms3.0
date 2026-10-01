@@ -91,7 +91,7 @@ def prepare_photo(blob, size):
         return image.copy()
 
 
-def page_snapshot(database, student_id, page, *, offset=0, group='All', violation_id=None):
+def page_snapshot(database, student_id, page, *, offset=0, group='All', violation_id=None, appeal_ids=()):
     """Load only a page's metadata; evidence bytes are fetched on explicit request."""
     started = time.monotonic()
     database.process_expired_deadlines(student_id=student_id)
@@ -129,9 +129,25 @@ def page_snapshot(database, student_id, page, *, offset=0, group='All', violatio
     if page == 'notifications':
         rows = database.get_notifications_for_student(student_id, limit=PAGE_SIZE+1, offset=offset)
         data['_has_more'], data['_notifications'] = len(rows) > PAGE_SIZE, rows[:PAGE_SIZE]
+        related = {}
+        for vid in {n['violation_id'] for n in rows[:PAGE_SIZE] if n.get('violation_id')}:
+            records = database.get_visible_violations_for_student(student_id,
+                process_deadlines=False, include_snapshot=False, violation_id=vid, limit=1)
+            if records:
+                record = dict(records[0])
+                record.pop('appeal_remaining_seconds', None)
+                related[vid] = record
+        data['_notification_violations'] = related
     if page == 'appeals':
         rows = database.get_appeals_for_student(student_id, limit=PAGE_SIZE+1, offset=offset)
         data['_has_more'], data['_appeals'] = len(rows) > PAGE_SIZE, rows[:PAGE_SIZE]
+    records = data.get('_violations', []) + list(data.get('_notification_violations', {}).values())
+    eligibility = {r['id']: {'eligible': bool(r.get('can_appeal')),
+        'reason': r.get('appeal_eligibility_reason'), 'deadline': r.get('appeal_deadline')}
+        for r in records}
+    for vid in set(appeal_ids) - eligibility.keys():
+        eligibility[vid] = database.get_appeal_eligibility(vid, student_id)
+    data['_appeal_eligibility'] = eligibility
     fetched = time.monotonic()
     if page == 'profile':
         blob = data['_student'].pop('portal_photo', None)
