@@ -29,6 +29,10 @@ def migrate_student_management(conn):
         conn.execute("ALTER TABLE premises_entries ADD COLUMN last_seen TEXT")
         conn.execute("UPDATE premises_entries SET last_seen=entered_at WHERE last_seen IS NULL")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_suspensions_student ON student_suspensions(student_id, starts_at)")
+    conn.execute('''CREATE TABLE IF NOT EXISTS automatic_suspension_awards (
+        student_id TEXT NOT NULL, semester_id INTEGER NOT NULL,
+        threshold INTEGER NOT NULL, suspension_id INTEGER NOT NULL,
+        PRIMARY KEY (student_id, semester_id, threshold))''')
     conn.execute("CREATE INDEX IF NOT EXISTS idx_entries_student ON premises_entries(student_id, entered_at)")
 
 
@@ -92,6 +96,10 @@ class StudentManagement:
                 (student_id, reason, starts_at, ends_at, imposed_by, imposed_at, violation_id)
                 VALUES (?, ?, ?, ?, ?, ?, ?)""", (student_id, reason.strip(), start_text,
                 end_text, imposed_by.strip(), format_db_datetime(utc_now()), violation_id))
+            self._queue_discipline_email_conn(conn, student_id, "CBVMS - Suspension Notice",
+                f"OSA has assigned a suspension.\nReason: {reason.strip()}\n"
+                f"Starts (UTC): {start_text}\nEnds (UTC): {end_text or 'Until lifted by OSA'}\n"
+                "Contact OSA for further instructions.")
             return cur.lastrowid
 
     def lift_suspension(self, suspension_id, *, lifted_by, reason):

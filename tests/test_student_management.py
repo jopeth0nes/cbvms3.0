@@ -84,6 +84,47 @@ class StudentManagementTests(unittest.TestCase):
             changed_by="osa", reason="Checked school enrollment", verify_registration=True)
         self.assertTrue(self.db.record_attendance("S2"))
 
+    def test_new_registration_preserves_existing_account_and_history(self):
+        self.assertTrue(self.db.insert_student_account('S1', 'old-user', 'old-password'))
+        vid = self.db.log_violation('S1', 'Student One', 'wrong_uniform')
+        self.db.process_expired_deadlines(now=self.now)
+        self.db.update_student_profile_photo('S1', b'old-avatar')
+        tables = ('students', 'student_accounts', 'violations', 'strikes',
+                  'student_notifications', 'student_suspensions')
+        with self.db.connect() as conn:
+            before = {table: [tuple(r) for r in conn.execute(f'SELECT * FROM {table}')]
+                      for table in tables}
+        self.db.insert_student('S2', 'New Student', 'BSIT', '1A', b'new-face', b'new-photo',
+            registration_pending=True, account_username='new-user', account_password='new-password')
+        self.db.initialize()
+        with self.db.connect() as conn:
+            for table in tables:
+                after = [tuple(r) for r in conn.execute(f'SELECT * FROM {table}')]
+                for row in before[table]:
+                    self.assertIn(row, after, table)
+            self.assertIsNotNone(conn.execute('SELECT id FROM violations WHERE id=?', (vid,)).fetchone())
+        self.assertIsNotNone(self.db.verify_student_account('old-user', 'old-password'))
+        self.assertIsNotNone(self.db.verify_student_account('new-user', 'new-password'))
+
+    def test_registration_username_conflict_rolls_back_new_student(self):
+        self.db.insert_student_account('S1', 'old-user', 'old-password')
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.db.insert_student('S2', 'New Student', 'BSIT', '1A', b'', b'',
+                registration_pending=True, account_username='old-user', account_password='new-password')
+        self.assertFalse(self.db.student_id_exists('S2'))
+        self.assertIsNotNone(self.db.verify_student_account('old-user', 'old-password'))
+
+    def test_registration_does_not_replace_orphaned_account(self):
+        self.db.insert_student_account('S2', 'existing-user', 'old-password')
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.db.insert_student('S2', 'New Student', 'BSIT', '1A', b'', b'',
+                account_password='new-password')
+        self.assertFalse(self.db.student_id_exists('S2'))
+        with self.db.connect() as conn:
+            self.assertEqual(conn.execute(
+                "SELECT username FROM student_accounts WHERE student_id='S2'"
+            ).fetchone()[0], 'existing-user')
+
     def test_suspension_exact_start_and_end_and_history(self):
         end = self.now + timedelta(days=1)
         self.suspend(end)

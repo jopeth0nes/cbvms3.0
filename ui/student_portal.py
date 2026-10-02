@@ -40,13 +40,13 @@ from ui.portal_scroll import PortalScrollFrame
 from ui.window_lifecycle import WorkspaceWindow
 
 # --- Light-theme palette (all colors live here; nothing hardcoded below) ---
-SP_BG = "#F6F4EE"          # page background
+SP_BG = ("#F6F4EE", "#101D29")
 SP_SIDEBAR = "#101D29"     # dark navy sidebar
-SP_SURFACE = "#FFFFFF"     # card/panel background
+SP_SURFACE = ("#FFFFFF", "#1B303D")
 SP_ACCENT = "#167568"      # blue accent
-SP_TEXT = "#192F3B"        # primary text
-SP_MUTED = "#5E7078"       # secondary/muted text
-SP_BORDER = "#DCDDD5"      # card borders
+SP_TEXT = ("#192F3B", "#EDF5F7")
+SP_MUTED = ("#5E7078", "#B2C4CA")
+SP_BORDER = ("#DCDDD5", "#38515D")
 SP_SAFE = "#059669"        # green (compliant)
 SP_DANGER = "#DC2626"      # red (violation)
 SP_WARNING = "#D97706"     # orange (unreviewed)
@@ -56,10 +56,10 @@ SP_WHITE = "#FFFFFF"
 SP_SIDEBAR_ACTIVE = "#284650"   # active/hover nav highlight (lighter navy)
 SP_SIDEBAR_HOVER = "#203543"
 SP_SIDEBAR_MUTED = "#B2C4CA"
-SP_PILL_WARN_BG = "#FEF3C7"     # unreviewed pill bg
-SP_PILL_OK_BG = "#D1FAE5"       # reviewed pill bg
-SP_PLACEHOLDER_BG = "#EAECE5"
-SP_HOVER_LIGHT = "#E7F1ED"
+SP_PILL_WARN_BG = ("#FEF3C7", "#49391E")
+SP_PILL_OK_BG = ("#D1FAE5", "#163E35")
+SP_PLACEHOLDER_BG = ("#EAECE5", "#263D49")
+SP_HOVER_LIGHT = ("#E7F1ED", "#284650")
 SP_APPEAL = "#32CD32"
 SP_APPEAL_HOVER = "#28A428"
 SP_DISABLED = "#D1D5DB"
@@ -122,6 +122,9 @@ class StudentPortal(WorkspaceWindow):
         self._last_appeal_refresh = 0.
 
         self.db = database if database is not None else CBVMSDatabase()
+        self._prefs.update(self.db.get_portal_preferences(self.student_id))
+        self._compact = self._prefs.get("compact_sidebar", False)
+        ctk.set_appearance_mode("dark" if self._prefs.get("dark_mode", False) else "light")
         self._refresh = PortalRequests(self.db, self.student_id)
         self._closed = False
         self._page_generation = 0
@@ -389,7 +392,8 @@ class StudentPortal(WorkspaceWindow):
     # ------------------------------------------------------------------
 
     def _build_sidebar(self) -> None:
-        self._sidebar = ctk.CTkFrame(self, width=_SIDEBAR_FULL, fg_color=SP_SIDEBAR, corner_radius=0)
+        self._sidebar = ctk.CTkFrame(self, width=_SIDEBAR_COMPACT if self._compact else _SIDEBAR_FULL,
+                                    fg_color=SP_SIDEBAR, corner_radius=0)
         self._sidebar.grid(row=0, column=0, rowspan=2, sticky="nsw")
         self._sidebar.grid_propagate(False)
         self._sidebar.grid_rowconfigure(2, weight=1)
@@ -408,6 +412,8 @@ class StudentPortal(WorkspaceWindow):
             font=_f(10), text_color=SP_SIDEBAR_MUTED, justify="left", wraplength=230,
         )
         self._subtitle.pack(anchor="w", pady=(6, 0))
+        if self._compact:
+            self._subtitle.pack_forget()
 
         # User
         user = ctk.CTkFrame(self._sidebar, fg_color="transparent")
@@ -1494,11 +1500,12 @@ class StudentPortal(WorkspaceWindow):
                                  width=200, height=200)
         photo_box.pack()
         photo_box.grid_propagate(False)
-        photo = ImageTk.PhotoImage(self._profile_image, master=self) if self._profile_image is not None else None
+        photo = ctk.CTkImage(light_image=self._profile_image, dark_image=self._profile_image,
+                            size=self._profile_image.size) if self._profile_image is not None else None
         if photo is not None:
             self._image_refs.append(photo)
         if photo is not None:
-            lbl = tk.Label(photo_box, image=photo, bg=SP_PLACEHOLDER_BG, bd=0)
+            lbl = ctk.CTkLabel(photo_box, image=photo, text="", fg_color=SP_PLACEHOLDER_BG)
             lbl._img_ref = photo
             lbl.place(relx=0.5, rely=0.5, anchor="center")
         else:
@@ -1730,7 +1737,8 @@ class StudentPortal(WorkspaceWindow):
         ctk.CTkLabel(appearance, text="Appearance", font=_f(17, "bold"),
                      text_color=SP_TEXT).grid(row=0, column=0, sticky="w", padx=20, pady=(18, 8))
         self._setting_toggle(appearance, 1, "Dark mode",
-                             "Use a darker color scheme across the portal", self._toggle_dark, False)
+                             "Use a darker color scheme across the portal", self._toggle_dark,
+                             self._prefs.get("dark_mode", False))
         self._setting_toggle(appearance, 2, "Compact sidebar",
                              "Reduce sidebar spacing for more workspace", self._toggle_compact, self._compact)
 
@@ -1758,10 +1766,13 @@ class StudentPortal(WorkspaceWindow):
         chk.grid(row=0, column=1, sticky="e", padx=14)
 
     def _toggle_dark(self, on: bool) -> None:
+        self._prefs["dark_mode"] = bool(on)
+        self.db.set_portal_preferences(self.student_id, {"dark_mode": bool(on)})
         ctk.set_appearance_mode("dark" if on else "light")
 
     def _toggle_compact(self, on: bool) -> None:
         self._compact = on
+        self.db.set_portal_preferences(self.student_id, {"compact_sidebar": bool(on)})
         self._sidebar.configure(width=_SIDEBAR_COMPACT if on else _SIDEBAR_FULL)
         if on:
             self._subtitle.pack_forget()
@@ -1770,6 +1781,7 @@ class StudentPortal(WorkspaceWindow):
 
     def _toggle_email(self, on: bool) -> None:
         self._prefs["email_notifications"] = on
+        self.db.set_portal_preferences(self.student_id, {"email_notifications": bool(on)})
 
     # ------------------------------------------------------------------
     # System Report panel

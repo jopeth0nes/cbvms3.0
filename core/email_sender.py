@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import smtplib
 import ssl
+import logging
+import threading
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
@@ -18,6 +20,36 @@ _DEFAULTS: dict = {
     "sender_password": "",
     "anthropic_api_key": "",
 }
+
+
+def send_discipline_notice(to_email, student_name, student_id, subject, message):
+    """Send a discipline notice using the configured SMTP account."""
+    try:
+        cfg = load_smtp_config()
+        sender = cfg.get("sender_email", "").strip()
+        password = cfg.get("sender_password", "").strip()
+        if not sender or not password:
+            return False, "SMTP not configured. Set sender email and password in Settings > Email."
+        msg = MIMEText(f"Hello {student_name},\n\nStudent ID: {student_id}\n\n{message}\n", "plain", "utf-8")
+        msg["Subject"], msg["From"], msg["To"] = subject, sender, to_email
+        with smtplib.SMTP(cfg.get("host") or "smtp.gmail.com", int(cfg.get("port") or 587), timeout=15) as server:
+            server.ehlo()
+            server.starttls(context=ssl.create_default_context())
+            server.ehlo()
+            server.login(sender, password)
+            server.sendmail(sender, to_email, msg.as_string())
+        return True, ""
+    except Exception as exc:
+        return False, str(exc)
+
+
+def dispatch_discipline_notice(to_email, student_name, student_id, subject, message):
+    """Keep SMTP off the UI thread; a failed email never rolls back discipline."""
+    def send():
+        success, error = send_discipline_notice(to_email, student_name, student_id, subject, message)
+        if not success:
+            logging.getLogger(__name__).warning("Discipline email failed for student %s: %s", student_id, error)
+    threading.Thread(target=send, name="discipline-email", daemon=True).start()
 
 
 def load_smtp_config() -> dict:

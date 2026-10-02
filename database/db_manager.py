@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable
 
@@ -166,10 +166,33 @@ def _inserted_row_id(cursor: sqlite3.Cursor) -> int:
 class _ClosingConnection(sqlite3.Connection):
     """Commit/rollback a transaction and release its Windows file handle."""
 
+    def after_commit(self, callback):
+        if not hasattr(self, "_callbacks"):
+            self._callbacks = []
+        self._callbacks.append(callback)
+
+    def _dispatch(self):
+        callbacks = getattr(self, "_callbacks", [])
+        self._callbacks = []
+        for callback in callbacks:
+            callback()
+
+    def commit(self):
+        super().commit()
+        self._dispatch()
+
+    def rollback(self):
+        super().rollback()
+        self._callbacks = []
+
     def __exit__(self, *args):
         try:
-            return super().__exit__(*args)
+            result = super().__exit__(*args)
+            if args[0] is None:
+                self._dispatch()
+            return result
         finally:
+            self._callbacks = []
             self.close()
 
 
@@ -190,6 +213,30 @@ class CBVMSDatabase(StudentManagement):
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute(f"PRAGMA busy_timeout = {int(self.timeout * 1000)}")
         return conn
+
+    def get_portal_preferences(self, student_id: str) -> dict:
+        with self.connect() as conn:
+            conn.execute("""CREATE TABLE IF NOT EXISTS portal_preferences (
+                student_id TEXT PRIMARY KEY, preferences TEXT NOT NULL)""")
+            row = conn.execute("SELECT preferences FROM portal_preferences WHERE student_id=?",
+                               (student_id,)).fetchone()
+        return json.loads(row[0]) if row else {}
+
+    def set_portal_preferences(self, student_id: str, changes: dict) -> dict:
+        allowed = {"dark_mode", "compact_sidebar", "email_notifications"}
+        if any(k not in allowed or not isinstance(v, bool) for k, v in changes.items()):
+            raise ValueError("Invalid portal preferences")
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute("""CREATE TABLE IF NOT EXISTS portal_preferences (
+                student_id TEXT PRIMARY KEY, preferences TEXT NOT NULL)""")
+            row = conn.execute("SELECT preferences FROM portal_preferences WHERE student_id=?",
+                               (student_id,)).fetchone()
+            prefs = json.loads(row[0]) if row else {}
+            prefs.update(changes)
+            conn.execute("INSERT INTO portal_preferences VALUES (?,?) ON CONFLICT(student_id) "
+                         "DO UPDATE SET preferences=excluded.preferences", (student_id, json.dumps(prefs)))
+        return prefs
 
     def initialize(self, *, process_deadlines: bool = True) -> None:
         with self.connect() as conn:
@@ -498,6 +545,7 @@ class CBVMSDatabase(StudentManagement):
         email: str = "",
         *, contacts: dict | None = None, registration_pending: bool = False,
         account_password: str | None = None,
+        account_username: str | None = None,
     ) -> int:
         contact_values = validate_contacts({**(contacts or {}), "email": email})
         with self.connect() as conn:
@@ -523,8 +571,8 @@ class CBVMSDatabase(StudentManagement):
                          (*contact_values.values(), int(registration_pending), pk))
             if account_password is not None:
                 conn.execute("""INSERT INTO student_accounts(student_id,username,password_hash)
-                    VALUES (?,?,?) ON CONFLICT(student_id) DO UPDATE SET password_hash=excluded.password_hash""",
-                    (student_id.strip(),student_id.strip(),hash_password(account_password)))
+                    VALUES (?,?,?)""",
+                    (student_id.strip(), (account_username or student_id).strip(), hash_password(account_password)))
             conn.commit()
             return pk
 
@@ -841,6 +889,12 @@ class CBVMSDatabase(StudentManagement):
                     "SELECT * FROM strike_events WHERE id = ?", (cursor.lastrowid,)
                 ).fetchone()
                 created = True
+                if violation_code != "wrong_uniform":
+                    self._queue_discipline_email_conn(conn, student_id,
+                        "CBVMS - Third Strike Reached",
+                        f"You have reached three finalized strikes for {violation_display_name(violation_code)} "
+                        "in the same semester. Contact OSA for suspension review. "
+                        "A suspension has not yet been assigned.")
             elif not int(event["is_active"]):
                 conn.execute(
                     """UPDATE strike_events
@@ -863,6 +917,79 @@ class CBVMSDatabase(StudentManagement):
                 "SELECT * FROM strike_events WHERE id = ?", (event["id"],)
             ).fetchone()
         return event, created
+
+    def _queue_discipline_email_conn(self, conn, student_id, subject, message):
+        student = conn.execute("SELECT name, email FROM students WHERE student_id=?",
+                               (student_id,)).fetchone()
+        if student is None or not (student["email"] or "").strip():
+            from core.diagnostics import event
+            event("discipline_email_skipped", student_id=student_id, reason="missing_email")
+            return
+        from core.email_sender import dispatch_discipline_notice
+        recipient, name = student["email"].strip(), student["name"]
+        conn.after_commit(lambda: dispatch_discipline_notice(recipient, name, student_id, subject, message))
+
+    def _automatic_uniform_suspension_conn(self, conn, violation, changed_at):
+        """Award each uniform milestone once per semester in the strike transaction."""
+        if violation["violation_code"] != "wrong_uniform":
+            return
+        sid, term = violation["student_id"], violation["semester_id"]
+        active_count = self._active_strike_count_conn(conn, sid, "wrong_uniform", term)
+        count = next((threshold for threshold in (7, 5, 3) if active_count >= threshold), 0)
+        days = {3: 2, 5: 7, 7: 14}.get(count)
+        if days is None or conn.execute(
+            "SELECT 1 FROM automatic_suspension_awards WHERE student_id=? AND semester_id=? AND threshold=?",
+            (sid, term, count),
+        ).fetchone():
+            return
+        start = parse_db_datetime(changed_at)
+        end_text = format_db_datetime(start + timedelta(days=days))
+        parent_action = " Staff must call the student's parents." if count == 7 else ""
+        reason = f"Automatic suspension: {count} finalized no-uniform strikes this semester.{parent_action}"
+        # Escalation replaces a shorter active suspension; retain its audit history.
+        active = conn.execute("""SELECT * FROM student_suspensions WHERE student_id=?
+            AND lifted_at IS NULL AND starts_at<=? AND (ends_at IS NULL OR ends_at>?)""",
+            (sid, changed_at, changed_at)).fetchall()
+        for previous in active:
+            if previous["ends_at"] is None:
+                end_text = None
+            elif end_text is not None:
+                end_text = max(end_text, previous["ends_at"])
+            conn.execute("""UPDATE student_suspensions SET lifted_at=?, lifted_by='system',
+                lift_reason='Replaced by automatic strike escalation' WHERE id=?""",
+                (changed_at, previous["id"]))
+        cursor = conn.execute("""INSERT INTO student_suspensions
+            (student_id, reason, starts_at, ends_at, imposed_by, imposed_at, violation_id)
+            VALUES (?, ?, ?, ?, 'system', ?, ?)""",
+            (sid, reason, changed_at, end_text, changed_at, violation["id"]))
+        conn.execute("INSERT INTO automatic_suspension_awards VALUES (?, ?, ?, ?)",
+            (sid, term, count, cursor.lastrowid))
+        message = (f"You have reached {count} finalized no-uniform strikes this semester. "
+            f"You are automatically suspended for {days} days.\n"
+            f"Starts (UTC): {changed_at}\nEnds (UTC): {end_text or 'Until cleared by OSA'}\n"
+            + ("Your parents must be contacted by the school.\n" if count == 7 else "")
+            + "Contact OSA for further instructions.")
+        self._queue_discipline_email_conn(conn, sid, "CBVMS - Suspension Notice", message)
+        self._insert_event_notification_conn(conn, student_id=sid,
+            title="Suspension Notice", message=message,
+            event_key=f"uniform_suspension:{term}:{sid}:{count}",
+            created_at=changed_at, violation_id=violation["id"])
+
+    def reconcile_automatic_uniform_suspensions(self, *, now=None, student_id=None):
+        """Catch up pre-policy current-semester strikes without repeating awards."""
+        stamp = format_db_datetime(parse_db_datetime(now) if now is not None else utc_now())
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            scope = " AND st.student_id=?" if student_id is not None else ""
+            params = (student_id,) if student_id is not None else ()
+            rows = conn.execute("""SELECT st.student_id, st.semester_id, MAX(st.violation_id) violation_id
+                FROM strikes st JOIN academic_terms t ON t.id=st.semester_id
+                WHERE st.is_active=1 AND st.violation_code='wrong_uniform' AND t.is_current=1"""
+                + scope + " GROUP BY st.student_id, st.semester_id HAVING COUNT(*)>=3", params).fetchall()
+            for row in rows:
+                violation = conn.execute("SELECT * FROM violations WHERE id=?", (row["violation_id"],)).fetchone()
+                if violation is not None:
+                    self._automatic_uniform_suspension_conn(conn, violation, stamp)
 
     def _publish_violation_conn(self, conn, violation_id, now, origin):
         opened = format_db_datetime(now)
@@ -903,9 +1030,11 @@ class CBVMSDatabase(StudentManagement):
             violation_id=violation["id"])
         event, created = self._sync_third_strike_event_conn(conn, student_id=sid,
             violation_code=code, semester_id=term, changed_at=changed_at)
+        self._automatic_uniform_suspension_conn(conn, violation, changed_at)
         if created:
             self._insert_event_notification_conn(conn, student_id=sid,
-                title="Third Strike Reached", message="Three finalized strikes require office review. Contact the office.",
+                title="Third Strike Reached", message=("Automatic no-uniform suspension assigned. See Suspension History."
+                    if code == "wrong_uniform" else "Three finalized strikes require office review. Contact the office."),
                 event_key=f"strike_event:{event['id']}:reached", created_at=changed_at,
                 violation_id=violation["id"])
 
@@ -996,6 +1125,7 @@ class CBVMSDatabase(StudentManagement):
 
     def process_expired_deadlines(self, *, now=None, student_id=None):
         """Finalize unused publication windows, including after restart, exactly once."""
+        self.reconcile_automatic_uniform_suspensions(now=now, student_id=student_id)
         scope = " AND student_id=?" if student_id is not None else ""
         scope_args = (student_id,) if student_id is not None else ()
         due = """appeal_opened_at IS NOT NULL

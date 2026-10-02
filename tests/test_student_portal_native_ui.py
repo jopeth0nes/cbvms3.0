@@ -24,6 +24,24 @@ class PortalNativeTests(unittest.TestCase):
     SID, OTHER = '2023-00883', '0000-00002'
     metrics = []
 
+    def test_dark_mode_updates_canvas_and_survives_navigation(self):
+        from ui.student_portal import SP_BG
+        from ui.portal_scroll import PortalScrollFrame
+        self.app._toggle_dark(True)
+        self.app._show('settings')
+        self.wait_page()
+        self.assertEqual(ctk.get_appearance_mode(), 'Dark')
+        def descendants(widget):
+            yield widget
+            for child in widget.winfo_children():
+                yield from descendants(child)
+        hosts = [w for w in descendants(self.app) if isinstance(w, PortalScrollFrame)]
+        self.assertTrue(hosts)
+        self.assertEqual(hosts[0]._parent_canvas.cget('bg'), SP_BG[1])
+        self.assertTrue(self.db.get_portal_preferences(self.SID)['dark_mode'])
+        self.app._toggle_dark(False)
+        self.assertEqual(hosts[0]._parent_canvas.cget('bg'), SP_BG[0])
+
     def setUp(self):
         gc.collect()  # Destroy old-root fonts on Tk's thread before starting workers.
         self.tmp = tempfile.TemporaryDirectory()

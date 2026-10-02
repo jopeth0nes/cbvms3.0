@@ -62,11 +62,11 @@ class SuspensionsUITests(unittest.TestCase):
         self.assertIn("1/3", self.panel._strike_summary.cget("text"))
         self.assertEqual(len(self.panel._violation_tree.get_children()), 1)
         self.assertIn("Counts this semester", self.panel._violation_tree.item(str(self.vid), "values"))
-        self.panel._reason.insert(0, "First student's draft")
+        self.panel._lift_reason.insert(0, "First student's draft")
         self.panel.select_student(self.OTHER)
         self.assertEqual(self.panel._violation_tree.get_children(), ())
-        self.assertEqual(self.panel._reason.get(), "")
-        self.assertEqual(self.panel._assign_btn.cget("state"), "disabled")
+        self.assertEqual(self.panel._lift_reason.get(), "")
+        self.assertEqual(self.panel._lift_reason.cget("state"), "disabled")
         self.wait_loaded()
         self.assertIn(self.OTHER, self.panel._identity.cget("text"))
         self.assertIn("0/3", self.panel._strike_summary.cget("text"))
@@ -86,7 +86,7 @@ class SuspensionsUITests(unittest.TestCase):
             self.wait_loaded()
         self.assertEqual(self.panel._violation_tree.get_children(), ())
         self.assertEqual(self.panel._suspension_status.cget("text"), "")
-        self.assertEqual(self.panel._assign_btn.cget("state"), "disabled")
+        self.assertEqual(self.panel._lift_reason.cget("state"), "disabled")
         self.assertIn("test read failure", self.panel._message.cget("text"))
         self.panel.refresh()
         self.wait_loaded()
@@ -106,36 +106,18 @@ class SuspensionsUITests(unittest.TestCase):
         self.assertIn("Second Student", self.panel._identity.cget("text"))
         self.assertEqual(self.panel._violation_tree.get_children(), ())
 
-    def test_assign_lift_validation_and_duplicate_protection(self):
+    def test_automatic_policy_replaces_manage_tab(self):
         self.select(self.SID)
-        self.panel._assign_btn.invoke()
-        self.assertEqual(self.db.get_suspension_history(self.SID), [])
-        self.assertIn("reason", self.panel._message.cget("text").lower())
-        self.panel._reason.insert(0, "OSA reviewed the evidence")
-        self.panel._related_violation.insert(0, str(self.vid))
-        self.panel._assign_btn.invoke()
-        self.panel._assign()  # rapid repeated action while reload is pending
+        self.assertNotIn('Manage Suspension', self.panel._tabs._tab_dict)
+        self.assertIn('3 strikes = 2 days', self.panel._explanation.cget('text'))
+        for _ in range(6):
+            self.db.log_violation(self.SID, 'First Student', 'wrong_uniform', status='confirmed')
+        self.db.process_expired_deadlines(now=utc_now()+timedelta(days=6))
+        self.panel.refresh()
         self.wait_loaded()
-        history = self.db.get_suspension_history(self.SID)
-        self.assertEqual(len(history), 1)
-        self.assertEqual(history[0]["violation_id"], self.vid)
-        self.assertEqual(history[0]["imposed_by"], "osa.tester")
-        self.assertIn("Suspended", self.panel._suspension_status.cget("text"))
-        self.panel._reason.insert(0, "Accidental duplicate")
-        self.panel._assign_btn.invoke()
-        self.assertIn("overlapping", self.panel._message.cget("text"))
-        self.assertEqual(len(self.db.get_suspension_history(self.SID)), 1)
-        self.panel._history_tree.selection_set(str(history[0]["id"]))
-        self.panel._on_suspension_select()
-        self.panel._lift_reason.insert(0, "OSA clearance")
-        self.panel._lift_btn.invoke()
-        self.wait_loaded()
-        self.assertIsNone(self.db.get_active_suspension(self.SID))
-        self.assertEqual(self.db.get_suspension_history(self.SID)[0]["lift_reason"], "OSA clearance")
-        self.assertEqual(self.db.get_strike_count(self.SID, "wrong_uniform"), 1)
-        self.select(self.OTHER)
-        self.assertEqual(self.panel._history_tree.get_children(), ())
-        self.assertEqual(self.panel._history_detail.cget("text"), "")
+        self.assertEqual(len(self.panel._history_tree.get_children()), 3)
+        self.assertIn('PARENT CALL REQUIRED', self.panel._explanation.cget('text'))
+
 
     def test_student_record_shortcut_carries_string_id_and_details_are_separate(self):
         callback = MagicMock(side_effect=self.panel.on_show)
@@ -205,7 +187,7 @@ class SuspensionsUITests(unittest.TestCase):
                                  self.root.winfo_rootx() + self.root.winfo_width())
             self.assertLessEqual(controls[0].winfo_rooty() + controls[0].winfo_height(),
                                  self.panel._student_tree.winfo_rooty())
-            for tab in ("Violation History", "Suspension History", "Manage Suspension"):
+            for tab in ("Violation History", "Suspension History"):
                 self.panel._tabs.set(tab)
                 settle()
                 self.assertLessEqual(self.panel._message.winfo_rooty() + self.panel._message.winfo_height(),
@@ -216,11 +198,6 @@ class SuspensionsUITests(unittest.TestCase):
                     self.assertTrue(footer.winfo_ismapped())
                     self.assertLessEqual(footer.winfo_rooty() + footer.winfo_height(),
                                          self.panel._tabs.winfo_rooty() + self.panel._tabs.winfo_height())
-            form = self.panel._start.master
-            form._parent_canvas.yview_moveto(1)
-            settle()
-            self.assertLessEqual(self.panel._assign_btn.winfo_rooty() + self.panel._assign_btn.winfo_height(),
-                                 form._parent_canvas.winfo_rooty() + form._parent_canvas.winfo_height())
         self.assertEqual(self.errors, [])
 
     def seed_filter_students(self):
@@ -311,7 +288,7 @@ class SuspensionsUITests(unittest.TestCase):
         self.assertEqual(self.panel.student_id, self.SID)
         self.assertEqual(self.panel._student_tree.selection(), (self.SID,))
         self.assertIn("Engineering", self.panel._course_filter.cget("values"))
-        self.assertEqual(self.panel._assign_btn.cget("state"), "normal")
+        self.assertEqual(self.panel._lift_reason.cget("state"), "normal")
         # A saved year change on Refresh also excludes and clears the selection.
         with self.db.connect() as conn:
             conn.execute("UPDATE students SET year_and_section='4A' WHERE student_id=?", (self.SID,))
@@ -320,16 +297,15 @@ class SuspensionsUITests(unittest.TestCase):
         self.assertIsNone(self.panel.student_id)
         self.assertEqual(self.shown_students(), {"0003-00100"})
         self.assertEqual(self.panel._identity.cget("text"), SELECT_STUDENT)
-        self.assertEqual(self.panel._assign_btn.cget("state"), "disabled")
+        self.assertEqual(self.panel._lift_reason.cget("state"), "disabled")
 
     def test_filter_exclusion_clears_history_and_form_without_database_writes(self):
         self.select(self.SID)
-        self.panel._reason.insert(0, "Draft for the first student")
-        self.panel._related_violation.insert(0, str(self.vid))
+        self.panel._lift_reason.insert(0, "Draft for the first student")
         self.panel._year_var.set("3rd Year")
         self.panel._course_var.set("BSIT")
         self.assertEqual(self.panel.student_id, self.SID)
-        self.assertEqual(self.panel._reason.get(), "Draft for the first student")
+        self.assertEqual(self.panel._lift_reason.get(), "Draft for the first student")
         with self.db.connect() as conn:
             before = list(conn.iterdump())
         with patch.object(self.panel, "refresh") as refresh:
@@ -342,11 +318,9 @@ class SuspensionsUITests(unittest.TestCase):
         self.assertEqual(self.panel._identity.cget("text"), SELECT_STUDENT)
         self.assertEqual(self.panel._violation_tree.get_children(), ())
         self.assertEqual(self.panel._history_tree.get_children(), ())
-        self.assertEqual(self.panel._reason.get(), "")
-        self.assertEqual(self.panel._related_violation.get(), "")
-        self.assertEqual(self.panel._assign_btn.cget("state"), "disabled")
+        self.assertEqual(self.panel._lift_reason.get(), "")
+        self.assertEqual(self.panel._lift_reason.cget("state"), "disabled")
         self.assertEqual(self.panel._lift_btn.cget("state"), "disabled")
-        self.panel._assign()
         with self.db.connect() as conn:
             self.assertEqual(list(conn.iterdump()), before)
 
@@ -363,7 +337,7 @@ class SuspensionsUITests(unittest.TestCase):
         self.assertIsNone(self.panel.student_id)
         self.assertEqual(self.panel._identity.cget("text"), SELECT_STUDENT)
         self.assertEqual(self.panel._violation_tree.get_children(), ())
-        self.assertEqual(self.panel._assign_btn.cget("state"), "disabled")
+        self.assertEqual(self.panel._lift_reason.cget("state"), "disabled")
 
 
 if __name__ == "__main__":

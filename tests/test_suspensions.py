@@ -62,16 +62,16 @@ class SuspensionHistoryTests(unittest.TestCase):
         self.assertEqual(len(self.db.get_discipline_history_for_student(self.OTHER)), 1)
 
     def test_threshold_assignment_appeal_and_semester_remain_separate(self):
-        ids = [self.violation(status="confirmed") for _ in range(3)]
+        ids = [self.violation(status="confirmed", code="earring") for _ in range(3)]
         self.violation(status="dismissed")
-        self.violation(code="earring", status="confirmed")
+        self.violation(code="wrong_uniform", status="confirmed")
         self.db.process_expired_deadlines(now=utc_now()+timedelta(days=6))
         # A legacy pending appeal/strike conflict can be resolved by a human decision.
         with self.db.connect() as conn:
             conn.execute("INSERT INTO appeals (violation_id,student_id,reason) VALUES (?,?,?)",
                 (ids[0],self.SID,'Historical appeal already submitted'))
-        self.assertEqual(self.db.get_strike_count(self.SID, "wrong_uniform"), 3)
-        self.assertEqual(self.db.get_strike_count(self.SID, "earring"), 1)
+        self.assertEqual(self.db.get_strike_count(self.SID, "earring"), 3)
+        self.assertEqual(self.db.get_strike_count(self.SID, "wrong_uniform"), 1)
         self.assertTrue(any(row["action_required"] for row in self.db.get_strike_summary(self.SID)))
         self.assertEqual(self.db.get_suspension_history(self.SID), [])
         args = dict(reason="OSA reviewed the cases", starts_at=utc_now()-timedelta(minutes=1),
@@ -84,7 +84,7 @@ class SuspensionHistoryTests(unittest.TestCase):
         self.assertEqual(len(self.db.get_suspension_history(self.SID)), 1)
         appeal = self.db.get_appeal_for_violation(ids[0])["id"]
         self.assertTrue(self.db.update_appeal_decision(appeal, "approved", "Evidence accepted", decided_by="admin"))
-        self.assertEqual(self.db.get_strike_count(self.SID, "wrong_uniform"), 2)
+        self.assertEqual(self.db.get_strike_count(self.SID, "earring"), 2)
         self.assertEqual(self.db.get_active_suspension(self.SID)["id"], suspension_id)
         rows = {row["id"]: row for row in self.db.get_discipline_history_for_student(self.SID)}
         self.assertEqual(rows[ids[0]]["appeal_status"], "approved")

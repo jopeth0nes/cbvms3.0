@@ -144,7 +144,7 @@ def normalize_violation_code(value: str | None) -> str:
 
     if "unknown person" in words or "unidentified person" in words:
         return "unknown_person"
-    if "wrong uniform" in words or "improper uniform" in words:
+    if any(label in words for label in ("wrong uniform", "improper uniform", "no uniform", "without uniform")):
         return "wrong_uniform"
     if "earring" in words:
         return "earring"

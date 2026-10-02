@@ -1,7 +1,6 @@
 """Administrator suspension workspace using the existing discipline ledger."""
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
 import queue
 import re
 import sqlite3
@@ -18,7 +17,6 @@ from ui.components import (
     COLOR_SURFACE, COLOR_TEXT, COLOR_TEXT_MUTED, COLOR_WARNING, CORNER_RADIUS,
     PADDING, body_small_font, heading_font,
 )
-from ui.student_management import _field
 
 
 ALL_YEARS = "All Year Levels"
@@ -158,11 +156,8 @@ class SuspensionsPanel(ctk.CTkFrame):
         self._search_var = tk.StringVar()
         self._year_var = tk.StringVar(value=ALL_YEARS)
         self._course_var = tk.StringVar(value=ALL_COURSES)
-        self._search = ctk.CTkEntry(search_tools, textvariable=self._search_var,
-                                    placeholder_text="Search student name or student ID", height=34)
-        self._search.grid(row=0, column=0, sticky="ew", pady=(0, 8))
         toolbar = ctk.CTkFrame(search_tools, fg_color="transparent")
-        toolbar.grid(row=1, column=0, sticky="ew")
+        toolbar.grid(row=0, column=0, sticky="ew")
         toolbar.grid_columnconfigure((1, 3), weight=1)
         for column, text in ((0, "Year Level:"), (2, "Course:")):
             ctk.CTkLabel(toolbar, text=text, font=body_small_font(), text_color=COLOR_TEXT_MUTED).grid(
@@ -201,8 +196,8 @@ class SuspensionsPanel(ctk.CTkFrame):
 
         self._tabs = ctk.CTkTabview(self, fg_color=COLOR_SURFACE, corner_radius=CORNER_RADIUS)
         self._tabs.grid(row=4, column=0, sticky="nsew")
-        violations, history, manage = (self._tabs.add(name) for name in
-                                      ("Violation History", "Suspension History", "Manage Suspension"))
+        violations, history = (self._tabs.add(name) for name in
+                               ("Violation History", "Suspension History"))
         self._violation_empty = self._label(violations, text_color=COLOR_TEXT_MUTED)
         # Reserve the detail/action footers before the expanding tables, so the
         # filter toolbar cannot push those controls below a short window's edge.
@@ -232,24 +227,6 @@ class SuspensionsPanel(ctk.CTkFrame):
         self._lift_btn.pack(anchor="e", pady=5)
         self._history_tree.bind("<<TreeviewSelect>>", self._on_suspension_select)
 
-        form = ctk.CTkScrollableFrame(manage, fg_color=COLOR_SURFACE)
-        form.pack(fill="both", expand=True)
-        self._label(form, "OSA assigns suspensions after review. Three strikes require action; "
-                    "they do not automatically assign a suspension.", text_color=COLOR_TEXT_MUTED)
-        self._label(form, "Dates use this computer's local time (YYYY-MM-DD HH:MM). "
-                    "A one-day suspension lasts 24 hours. Academic status is unchanged.",
-                    text_color=COLOR_TEXT_MUTED)
-        self._start = _field(form, "Starts")
-        self._end = _field(form, "Ends")
-        self._indefinite = tk.BooleanVar(value=False)
-        self._indefinite_check = ctk.CTkCheckBox(form, text="Indefinite — OSA must lift it",
-            variable=self._indefinite, command=self._set_action_state)
-        self._indefinite_check.pack(anchor="w", pady=10)
-        self._reason = _field(form, "Suspension reason (required)")
-        self._related_violation = _field(form, "Related violation ID (optional)")
-        self._assign_btn = ctk.CTkButton(form, text="Assign Suspension", fg_color=COLOR_ACCENT,
-                                         command=self._assign)
-        self._assign_btn.pack(fill="x", pady=12)
         self._message = ctk.CTkLabel(self, text="", anchor="w", justify="left", width=1,
                                      font=body_small_font(), text_color=COLOR_TEXT_MUTED)
         self._message.grid(row=5, column=0, sticky="ew", pady=(5, 0))
@@ -257,11 +234,7 @@ class SuspensionsPanel(ctk.CTkFrame):
 
     def _set_action_state(self):
         state = "normal" if self._ready and not self._loading and self.username.strip() else "disabled"
-        for widget in (self._start, self._end, self._reason, self._related_violation,
-                       self._indefinite_check, self._assign_btn, self._lift_reason):
-            widget.configure(state=state)
-        if self._indefinite.get():
-            self._end.configure(state="disabled")
+        self._lift_reason.configure(state=state)
         selected = self._history_tree.selection()
         row = self._suspensions.get(selected[0]) if selected else None
         self._lift_btn.configure(state=state if row and suspension_state(row) in
@@ -283,13 +256,8 @@ class SuspensionsPanel(ctk.CTkFrame):
         self._set_action_state()
 
     def _reset_form(self):
-        self._indefinite.set(False)
-        for entry, value in ((self._start, datetime.now().strftime("%Y-%m-%d %H:%M")),
-                             (self._end, (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d %H:%M")),
-                             (self._reason, ""), (self._related_violation, ""), (self._lift_reason, "")):
-            entry.configure(state="normal")
-            entry.delete(0, "end")
-            entry.insert(0, value)
+        self._lift_reason.configure(state="normal")
+        self._lift_reason.delete(0, "end")
         self._set_action_state()
 
     def select_student(self, student_id):
@@ -428,8 +396,9 @@ class SuspensionsPanel(ctk.CTkFrame):
                                          text_color=COLOR_DANGER if data["active"] else COLOR_TEXT)
         required = any(s["action_required"] for s in data["strikes"])
         scheduled = any(suspension_state(row) == "Scheduled" for row in data["suspensions"])
-        explanation = ("Third Strike Reached — Action Required. OSA must review and explicitly assign any suspension."
-                       if required else "No category has reached three active strikes this semester.")
+        explanation = "No-uniform policy: 3 strikes = 2 days; 5 = 7 days; 7 = 14 days and staff must call parents."
+        if any(s["violation_code"] == "wrong_uniform" and s["active_count"] >= 7 for s in data["strikes"]):
+            explanation += " PARENT CALL REQUIRED: Contact this student's parents."
         if scheduled:
             explanation += " A suspension is scheduled; see Suspension History."
         if not data["suspensions"]:
@@ -451,7 +420,7 @@ class SuspensionsPanel(ctk.CTkFrame):
             self._history_tree.insert("", "end", iid=key, values=(row["id"], suspension_state(row),
                 row["starts_at"], row["ends_at"] or "Indefinite", row["reason"], row["violation_id"] or "—"))
         self._history_empty.configure(text=f"{len(self._suspensions)} assigned suspensions · Select a row for details."
-            if self._suspensions else "No suspension history. Violations appear in Violation History; OSA assigns suspensions separately.")
+            if self._suspensions else "No suspension history. Finalized no-uniform strikes automatically trigger suspensions at 3, 5 and 7 strikes.")
         self._set_action_state()
         self._message.configure(text="Records loaded. Use Refresh to check for changes.", text_color=COLOR_TEXT_MUTED)
 
@@ -475,23 +444,6 @@ class SuspensionsPanel(ctk.CTkFrame):
                 text += f"\nLifted {row['lifted_at']} UTC by {row['lifted_by']}: {row['lift_reason']}"
         self._history_detail.configure(text=text)
         self._set_action_state()
-
-    def _assign(self):
-        if not self._ready or self._loading or not self.username.strip():
-            return
-        try:
-            start = datetime.strptime(self._start.get().strip(), "%Y-%m-%d %H:%M").astimezone(timezone.utc)
-            end = None if self._indefinite.get() else datetime.strptime(
-                self._end.get().strip(), "%Y-%m-%d %H:%M").astimezone(timezone.utc)
-            related = self._related_violation.get().strip()
-            self.database.impose_suspension(self.student_id, reason=self._reason.get(), starts_at=start,
-                ends_at=end, imposed_by=self.username, violation_id=int(related) if related else None)
-        except (ValueError, sqlite3.Error) as exc:
-            self._message.configure(text=str(exc), text_color=COLOR_DANGER)
-            return
-        self._tabs.set("Suspension History")
-        self._reset_form()
-        self.refresh()
 
     def _lift_selected(self):
         selection = self._history_tree.selection()

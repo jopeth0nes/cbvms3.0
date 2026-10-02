@@ -493,7 +493,7 @@ class CBVMSDashboard(WorkspaceWindow):
             on_open_suspensions=self._open_student_suspensions,
         )),
             "suspensions": ("_suspensions_panel", lambda: SuspensionsPanel(
-            self._view_host, database=self._database, username=self.username, on_open_appeals=lambda aid=None: self._open_alert_record("appeals", aid))),
+            self._view_host, database=self._database, username=self.username)),
             "violations": ("_violation_panel", lambda: ViolationLogPanel(self._view_host, database=self._database)),
             "training": ("_training_panel", lambda: TrainingPanel(
             self._view_host,
@@ -686,6 +686,10 @@ class CBVMSDashboard(WorkspaceWindow):
             "alerts":     "Notifications",
         }
         self._center_title.configure(text=titles.get(key, "CBVMS"))
+        if key == "suspensions":
+            self._center_title.pack_forget()
+        else:
+            self._center_title.pack(side="left")
 
         def _switch_views() -> None:
             for view in self._views.values():

@@ -483,8 +483,8 @@ class StudentRegistrationWindow(ctk.CTkToplevel):
                 year_and_section=year, gender=gender,
                 encoding=blob, photo=photo_bytes, email=contacts["email"],
                 contacts=contacts, registration_pending=True,
+                account_username=username, account_password=password,
             )
-            self.database.insert_student_account(sid, username, password)
             if self._recognizer and blob:
                 self._recognizer.load_known_faces()
         except Exception as exc:
