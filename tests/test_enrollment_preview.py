@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 
 from core.camera import CameraSample
-from core.face_capture import FaceCapture, POSITION_MESSAGE
+from core.face_capture import FaceCapture, POSITION_MESSAGE, STALE_MESSAGE, CAPTURE_TIMEOUT, CaptureValidation
 from tests import test_face_capture as capture_tests
 from ui.enrollment import EnrollmentPanel
 
@@ -52,6 +52,32 @@ class EnrollmentPreviewTests(unittest.TestCase):
         with patch("ui.enrollment.time.monotonic", return_value=now), \
                 patch("ui.enrollment.threading.Thread"):
             panel._wizard_tick(state)
+
+    def test_valid_detections_reach_ready_without_optical_flow_points(self):
+        panel, state = fake_panel()
+        state['worker_busy'] = True
+        with patch('core.face_capture.cv2.goodFeaturesToTrack', return_value=None):
+            for seq in range(1, 4):
+                current = camera_sample(seq, at=10 + seq*.3)
+                state['results'].put((state['session'], current, [detection()], None))
+                self.tick(panel, state, current)
+        self.assertTrue(state['session'].ready)
+        self.assertEqual(state['cap_btn'].configure.call_args.kwargs['state'], 'normal')
+
+    def test_flow_initialization_failure_does_not_cancel_fresh_capture(self):
+        panel, state = fake_panel()
+        session = state['session']
+        session.observe(camera_sample(1,at=10),[detection()],0,10.01)
+        session.observe(camera_sample(2,at=10.3),[detection()],0,10.31)
+        self.assertTrue(session.request(10.32))
+        state['requested_at'] = 10.32
+        fresh = camera_sample(3,at=10.4)
+        state['results'].put((session,fresh,[detection()],None))
+        panel._show_frozen = MagicMock()
+        with patch('core.face_capture.cv2.goodFeaturesToTrack',return_value=None):
+            self.tick(panel,state,fresh)
+        self.assertIsNotNone(session.frozen)
+        self.assertEqual(session.frozen.frame_id,fresh.frame_id)
 
     def test_busy_validation_does_not_gate_unique_frame_preview(self):
         panel, state = fake_panel()
@@ -167,7 +193,7 @@ class EnrollmentPreviewTests(unittest.TestCase):
                 state["canvas"].delete.assert_called_with("all")
                 self.assertFalse(session.pending)
                 self.assertFalse(session.ready)
-                self.assertEqual(session.message, POSITION_MESSAGE)
+                self.assertEqual(session.message, STALE_MESSAGE)
 
     def test_movement_loss_cancels_pending_capture_even_while_worker_busy(self):
         panel, state = fake_panel()
@@ -339,8 +365,8 @@ class EnrollmentWorkerTests(unittest.TestCase):
         panel, state = fake_panel()
         with patch("ui.enrollment.threading.Thread") as worker:
             worker.return_value.start.side_effect = RuntimeError("cannot create worker")
-            with self.assertRaisesRegex(RuntimeError, "cannot create worker"):
-                panel._start_wizard_validation(state, state["session"], camera_sample())
+            panel._start_wizard_validation(state, state["session"], camera_sample())
+            self.assertIn("cannot create worker",state["session"].message)
         self.assertFalse(state["worker_busy"])
         self.assertFalse(panel._capture_inference_lock.locked())
 
@@ -380,7 +406,9 @@ class EnrollmentWorkerTests(unittest.TestCase):
         panel._start_wizard_validation(state, state["session"], sample)
         owner, captured, faces, error = state["results"].get(timeout=2)
         self.assertIs(owner, state["session"])
-        self.assertIs(captured, sample)
+        self.assertEqual(captured.frame_id,sample.frame_id)
+        np.testing.assert_array_equal(captured.frame,sample.frame)
+        self.assertFalse(captured.frame.flags.writeable)
         self.assertEqual(faces, [])
         self.assertIn("model failed", error)
         self.assertTrue(panel._capture_inference_lock.acquire(timeout=2))

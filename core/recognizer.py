@@ -237,8 +237,11 @@ class FaceRecognizer:
     def enrollment_faces(self, frame_bgr: np.ndarray):
         """Return boxes and their embeddings from ONE raw enrollment frame."""
         if not self._ensure_models():
-            return []
-        return self._detect(frame_bgr)
+            raise RuntimeError(self.last_error or "Face model could not be loaded")
+        faces = self._detect(frame_bgr)
+        if self.last_error:
+            raise RuntimeError(self.last_error)
+        return faces
 
     @staticmethod
     def _min_distance_to_student(probe: np.ndarray, student_embs: np.ndarray) -> float:

@@ -497,6 +497,7 @@ class CBVMSDatabase(StudentManagement):
         gender: str = "Unknown",
         email: str = "",
         *, contacts: dict | None = None, registration_pending: bool = False,
+        account_password: str | None = None,
     ) -> int:
         contact_values = validate_contacts({**(contacts or {}), "email": email})
         with self.connect() as conn:
@@ -520,6 +521,10 @@ class CBVMSDatabase(StudentManagement):
             assignments = ", ".join(f"{key}=?" for key in contact_values)
             conn.execute(f"UPDATE students SET {assignments}, registration_pending=? WHERE id=?",
                          (*contact_values.values(), int(registration_pending), pk))
+            if account_password is not None:
+                conn.execute("""INSERT INTO student_accounts(student_id,username,password_hash)
+                    VALUES (?,?,?) ON CONFLICT(student_id) DO UPDATE SET password_hash=excluded.password_hash""",
+                    (student_id.strip(),student_id.strip(),hash_password(account_password)))
             conn.commit()
             return pk
 
@@ -532,11 +537,11 @@ class CBVMSDatabase(StudentManagement):
             )
             return cursor.rowcount > 0
 
-    def update_student_encoding(self, student_pk: int, encoding: bytes, photo: bytes) -> bool:
+    def update_student_encoding(self, student_pk: int, encoding: bytes, photo: bytes, *, expected_student_id: str | None = None) -> bool:
         with self.connect() as conn:
             cursor = conn.execute(
-                "UPDATE students SET encoding = ?, photo = ? WHERE id = ?",
-                (encoding, photo, student_pk),
+                "UPDATE students SET encoding = ?, photo = ? WHERE id = ? AND (? IS NULL OR student_id=?)",
+                (encoding, photo, student_pk, expected_student_id, expected_student_id),
             )
             conn.commit()
             return cursor.rowcount > 0

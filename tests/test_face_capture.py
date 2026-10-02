@@ -148,6 +148,14 @@ class SaveFlowTests(unittest.TestCase):
                        '_start_wizard_validation'):
             original = getattr(EnrollmentPanel, method)
             setattr(panel, method, original if method in ('_ordered_captures', '_init_wizard_preview', '_wizard_feedback') else original.__get__(panel))
+        def save_immediately(state,operation,completed):
+            state['capturing'] = True
+            result = operation()
+            state['capturing'] = False
+            state['saved'] = True
+            completed(result)
+        panel._save_capture_async = save_immediately
+        panel._clear_form = MagicMock()
         state = dict(alive=True, modal=MagicMock(), target_pk=pk, target_student_id=sid,
                      student_key=('update', pk, sid), reviewing=True, capturing=False,
                      step=3, cap_btn=MagicMock(), skip_btn=MagicMock(), det_status=MagicMock(),

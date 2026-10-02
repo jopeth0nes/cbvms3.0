@@ -7,6 +7,7 @@ from ui.student_management import open_student_details, open_premises_log
 
 import os
 import queue
+import uuid
 from collections import deque
 import time
 import re
@@ -21,7 +22,8 @@ import numpy as np
 from PIL import Image, ImageTk
 
 from core.face_capture import (CaptureSession, FacePreviewTracker, capture_payload, guide_geometry,
-                               POSITION_MESSAGE, MAX_FRAME_AGE)
+                               POSITION_MESSAGE, MAX_FRAME_AGE, CAPTURE_TIMEOUT, STALE_MESSAGE, CaptureValidation)
+from core.diagnostics import event
 from core.registration_camera import PreviewMetrics
 
 from ui.components import (
@@ -597,6 +599,9 @@ class EnrollmentPanel(ctk.CTkFrame):
             if state.get("capturing"):
                 return
             state["alive"] = False
+            if state.get("session"):
+                state["session"].invalidate("Capture cancelled.")
+            state["worker_busy"] = False
             for job_key in ("job_tick", "job_detect"):
                 if state.get(job_key) is not None:
                     try:
@@ -832,6 +837,9 @@ class EnrollmentPanel(ctk.CTkFrame):
         if state.get("capturing"):
             return
         state["alive"] = False
+        if state.get("session"):
+            state["session"].invalidate("Capture cancelled.")
+        state["worker_busy"] = False
         for job_key in ("job_tick", "job_detect"):
             if state.get(job_key) is not None:
                 try:
@@ -879,13 +887,19 @@ class EnrollmentPanel(ctk.CTkFrame):
         state["mirror"] = MirrorController()
         state["student_key"] = self._capture_student_key(state)
         state["session"] = CaptureSession(state["student_key"])
-        state["results"] = queue.Queue()
+        state["results"] = queue.Queue(maxsize=1)
         state["worker_busy"] = False
         state["reviewing"] = False
         state["capturing"] = False
         state["on_finish"] = on_finish
         state["finish_text"] = finish_text
         self._init_wizard_preview(state)
+        def disposed(event):
+            if event.widget is card:
+                state['alive'] = False
+                state['worker_busy'] = state['capturing'] = False
+                state['session'].invalidate('Capture closed.')
+        card.bind('<Destroy>',disposed,add='+')
         pad = 16 if big else 12
         csz = 38 if big else 30
 
@@ -913,6 +927,9 @@ class EnrollmentPanel(ctk.CTkFrame):
         else:
             identity = f"{self._entries['name'].get().strip()} · {self._entries['student_id'].get().strip()}"
         state["identity"] = identity
+        ctk.CTkLabel(ind, text="Turn toward your own left/right; mirroring only changes the preview.\n"
+            "Head angle is guided, not measured. Confirm each pose in review.",
+            font=body_font(11), wraplength=pw-20).pack(pady=4)
         state["circles"] = circles
         state["step_caption"] = step_caption
 
@@ -971,6 +988,16 @@ class EnrollmentPanel(ctk.CTkFrame):
             pills[key] = p
         state["pills"] = pills
 
+        reviews = state['review_controls'] = ctk.CTkFrame(card,fg_color='transparent')
+        def review(delta):
+            captures = self._ordered_captures(state)
+            if state['reviewing'] and captures:
+                state['review_index'] = (state.get('review_index',0)+delta) % len(captures)
+                self._show_frozen(state,captures[state['review_index']])
+                angles = [key for key,_ in _ANGLES if state['angle_frames'].get(key)]
+                state['step_caption'].configure(text=f"Review {angles[state['review_index']]} — {state['identity']}")
+        ctk.CTkButton(reviews,text='← Previous capture',command=lambda:review(-1)).pack(side='left')
+        ctk.CTkButton(reviews,text='Next capture →',command=lambda:review(1)).pack(side='right')
         self._wizard_refresh(state, finish_text)
         self._wizard_tick(state)
 
@@ -1033,42 +1060,72 @@ class EnrollmentPanel(ctk.CTkFrame):
         state.update(preview_tracker=FacePreviewTracker(), preview_session=None,
                      last_rendered=None, next_validation=0.0, preview_feedback=None,
                      preview_metrics=PreviewMetrics(), source_times=deque(maxlen=300),
-                     last_source_sample=None, next_diagnostics=time.monotonic()+5)
+                     last_source_sample=None, next_diagnostics=time.monotonic()+5,
+                     wizard_id=uuid.uuid4().hex, next_capture_diagnostic=0., inflight=None)
 
     def _start_wizard_validation(self, state, session, sample):
-        # The panel-level lock also covers workers from a closed/backed-out wizard.
-        # Never queue a second worker while an obsolete native inference finishes.
+        # No executor backlog: acquire once, then copy the exact most recent sample.
+        # A cancelled native inference owns its lock until it actually returns.
         if not self._capture_inference_lock.acquire(blocking=False):
             return
-        state["worker_busy"] = True
-        state["validation_started_at"] = time.monotonic()
-        state["next_validation"] = state["validation_started_at"] + VALIDATION_INTERVAL
-        results = state["results"]
-        recognizer = self.recognizer
+        state['worker_busy'] = True
+        started = time.monotonic()
+        state['validation_started_at'] = started
+        state['next_validation'] = started + VALIDATION_INTERVAL
+        token = state['inflight'] = object()
+        request_id = session.request_id
+        results, recognizer = state['results'], self.recognizer
+        # CameraSample's consumer owns a copy, but also protect custom sample providers.
+        from dataclasses import replace
+        try:
+            frame = sample.frame.copy()
+            frame.setflags(write=False)
+            frozen_sample = replace(sample, frame=frame)
+        except Exception as exc:
+            state['worker_busy'] = False
+            state['inflight'] = None
+            self._capture_inference_lock.release()
+            session.invalidate(f'Camera sample unavailable: {exc}. Try again.')
+            return
 
         def detect():
             faces, error = [], None
             try:
-                if state.get("alive") and state["session"] is session:
-                    faces = recognizer.enrollment_faces(sample.frame)
+                if state.get('alive') and state['session'] is session and session.request_id == request_id:
+                    if recognizer is None:
+                        raise RuntimeError('Face recognition is not available')
+                    faces = recognizer.enrollment_faces(frozen_sample.frame)
             except Exception as exc:
                 error = str(exc)
             finally:
-                results.put((session, sample, faces, error))
+                result = CaptureValidation(session, frozen_sample, faces, error,
+                                           request_id, max(0,time.monotonic()-started))
+                try:
+                    results.put_nowait(result)
+                except queue.Full:
+                    try:
+                        results.get_nowait()
+                    except queue.Empty:
+                        pass
+                    results.put_nowait(result)
+                if state.get('inflight') is token:
+                    state['worker_busy'] = False
+                    state['inflight'] = None
                 self._capture_inference_lock.release()
 
         try:
-            threading.Thread(target=detect, daemon=True, name="enrollment-validation").start()
-        except Exception:
-            state["worker_busy"] = False
+            threading.Thread(target=detect, daemon=True, name='enrollment-validation').start()
+        except Exception as exc:
+            state['worker_busy'] = False
+            state['inflight'] = None
             self._capture_inference_lock.release()
-            raise
+            session.invalidate(f'Face validation could not start: {exc}. Try again.')
 
     @staticmethod
     def _wizard_feedback(state, session):
         frozen = session.frozen is not None
         message = ("Frozen face preview — confirm or retake" if frozen else
-                   "Capturing — hold still" if session.pending else session.message)
+                   "Validating capture… Hold still." if session.pending else session.message)
         ready = frozen or session.ready and not session.pending
         color = COLOR_SAFE if ready else COLOR_DANGER
         value = (message, color, "Use This Capture" if frozen else "Capture This Angle",
@@ -1086,6 +1143,8 @@ class EnrollmentPanel(ctk.CTkFrame):
 
     def _wizard_tick(self, state: dict) -> None:
         if not state.get("alive") or not state["modal"].winfo_exists():
+            state["session"].invalidate("Capture closed.")
+            state["worker_busy"] = False
             return
         started = time.monotonic()
         session = state["session"]
@@ -1113,11 +1172,14 @@ class EnrollmentPanel(ctk.CTkFrame):
             state["last_source_sample"] = None
             state["next_diagnostics"] = started + 5
         if not state["reviewing"] and session.frozen is None:
-            sample = self.get_frame_sample() if self.get_frame_sample else None
+            try:
+                sample = self.get_frame_sample() if self.get_frame_sample else None
+            except Exception:
+                sample = None
             now = time.monotonic()
             fresh = sample is not None and 0 <= now-sample.captured_at <= MAX_FRAME_AGE
             if not fresh:
-                session.invalidate()
+                session.invalidate(STALE_MESSAGE)
                 tracker.clear()
                 if state["last_rendered"] is not None:
                     state["canvas"].delete("all")
@@ -1130,26 +1192,45 @@ class EnrollmentPanel(ctk.CTkFrame):
             if fresh and sample.frame_id != state["last_source_sample"]:
                 state["source_times"].append(sample.captured_at)
                 state["last_source_sample"] = sample.frame_id
-            # A delayed post-click result must not win a race with newer pixels
-            # showing that the target left. Cancel before observe() can freeze it.
-            if session.pending and fresh and tracker.advance(sample, state["step"]) is None:
-                session.invalidate("Tracking uncertain. Hold still inside the guide.")
+            session.expire(now)
+            # Loss of an established flow track is a reason to reject an in-flight
+            # capture. Failure to initialize flow is NOT evidence of target loss.
+            tracked_before = tracker.sample is not None
             try:
-                owner, detected_sample, faces, error = state["results"].get_nowait()
+                preview_box = tracker.advance(sample, state['step']) if fresh else None
+            except cv2.error:
+                tracker.fail('flow_error')
+                preview_box = None
+            if session.pending and fresh and tracked_before and preview_box is None:
+                session.invalidate('Target tracking lost. Reacquiring face; capture again when Ready.')
+            if state.get('worker_busy') and now-state.get('validation_started_at',now) >= CAPTURE_TIMEOUT:
+                session.invalidate('Face detector is busy. Retry when Ready, or restart the app if it does not recover.')
+            try:
+                result = state["results"].get_nowait()
+                owner, detected_sample, faces, error = result
+                state["last_face_count"] = len(faces)
                 state["worker_busy"] = False
                 state["preview_metrics"].inference_seconds.append(
-                    max(0, now-state.get("validation_started_at", now)))
-                if owner is session and fresh and sample.frame_id[0] == detected_sample.frame_id[0]:
+                    getattr(result,"duration",max(0, now-state.get("validation_started_at", now))))
+                if (owner is session and fresh and sample.frame_id[0] == detected_sample.frame_id[0]
+                        and getattr(result,"request_id",session.request_id) == session.request_id):
                     # Never freeze an in-flight frame acquired before the user's click.
                     if not session.pending or detected_sample.captured_at > state.get("requested_at", 0):
-                        face = session.observe(detected_sample, faces, state["step"], now)
                         if error:
-                            session.invalidate("Face detection unavailable. Please try again.")
+                            session.invalidate(f'Face detection unavailable: {error}. Please try again.')
                             face = None
+                        elif not 0 <= now-detected_sample.captured_at <= MAX_FRAME_AGE:
+                            session.invalidate('Face validation took too long. Wait for fresh validation and retry.')
+                            face = None
+                        else:
+                            face = session.observe(detected_sample, faces, state['step'], now)
                         if face is None:
                             tracker.clear()
                         else:
-                            tracker.reset(detected_sample, face[0])
+                            try:
+                                tracker.reset(detected_sample, face[0])
+                            except cv2.error:
+                                tracker.fail('initialization_error')
                         if session.frozen is not None:
                             captures = self._ordered_captures(state)
                             if captures and float(captures[0].embedding @ session.frozen.embedding) < .55:
@@ -1163,11 +1244,19 @@ class EnrollmentPanel(ctk.CTkFrame):
             if session.frozen is None:
                 # Only optical flow runs between validations; its box is display-only.
                 # Full validation of a fresh frame still determines every saved pixel.
-                box = tracker.advance(sample, state["step"]) if fresh else None
-                if session.previous is not None and box is None:
-                    session.invalidate("Tracking uncertain. Hold still inside the guide.")
-                if session.last_sample and now-session.last_sample.captured_at > MAX_FRAME_AGE:
-                    session.invalidate()
+                try:
+                    box = tracker.advance(sample, state['step']) if fresh else None
+                except cv2.error:
+                    tracker.fail('flow_error')
+                    box = None
+                if session.previous is not None and box is None and not session.pending:
+                    session.message = ('Ready — face validated; preview guide reacquiring.' if session.ready else
+                                       'Reacquiring face — hold still inside the guide.')
+                    # Keep the four-per-second cap; the next validation uses latest pixels.
+                    state['next_validation'] = min(state['next_validation'],
+                        state.get('validation_started_at',now) + VALIDATION_INTERVAL)
+                if session.previous is not None and session.last_sample and not session.pending and now-session.last_sample.captured_at > MAX_FRAME_AGE:
+                    session.invalidate("Face validation is stale. Reacquiring face…")
                     tracker.clear()
                     box = None
                 orientation = state["mirror"].display_mirror()
@@ -1180,6 +1269,18 @@ class EnrollmentPanel(ctk.CTkFrame):
                         (session.last_sample is None or sample.frame_id != session.last_sample.frame_id)):
                     self._start_wizard_validation(state, session, sample)
             self._wizard_feedback(state, session)
+            # At most two records per second per wizard, no images/embeddings/names.
+            if now >= state.get('next_capture_diagnostic',0):
+                state['next_capture_diagnostic'] = now + .5
+                event('enrollment_capture_state', wizard=state.get('wizard_id'), step=state['step'],
+                      frame_id=sample.frame_id if sample else None,
+                      frame_age=round(now-sample.captured_at,3) if sample else None,
+                      validated_frame=session.last_sample.frame_id if session.last_sample else None,
+                      inference_seconds=state['preview_metrics'].inference_seconds[-1] if state['preview_metrics'].inference_seconds else None,
+                      phase=session.phase, ready=session.ready, pending=session.pending,
+                      detected_faces=state.get('last_face_count'), selected=session.previous is not None,
+                      reason=session.message, tracking_failure=getattr(tracker,'failure_reason',''),
+                      worker_busy=state.get('worker_busy'), lock_busy=self._capture_inference_lock.locked())
         if os.environ.get("CBVMS_CAMERA_DIAGNOSTICS") == "1" and started >= state["next_diagnostics"]:
             metrics = state["preview_metrics"].summary(state["source_times"])
             # These source samples are those observed by this consumer, not all reads.
@@ -1223,7 +1324,8 @@ class EnrollmentPanel(ctk.CTkFrame):
             state["angle_frames"][_ANGLES[state["step"]][0]] = [session.frozen]
             self._wizard_next(state, on_finish, finish_text)
         elif session.request(time.monotonic()):
-            state["requested_at"] = time.monotonic()
+            state["requested_at"] = session.requested_at
+            self._wizard_feedback(state, session)
             state["next_validation"] = 0.0
             state["preview_feedback"] = None
             state["cap_btn"].configure(state="disabled")
@@ -1236,7 +1338,12 @@ class EnrollmentPanel(ctk.CTkFrame):
             state["angle_frames"] = {}
             state["step"] = 0
         state["reviewing"] = False
+        if "review_controls" in state:
+            state["review_controls"].pack_forget()
         state["session"] = CaptureSession(state["student_key"])
+        confirmed = self._ordered_captures(state)
+        if confirmed:
+            state['session'].anchor = confirmed[0].embedding
         state["canvas"].delete("all")
         state["canvas_item"] = None
         state["img"] = None
@@ -1254,13 +1361,21 @@ class EnrollmentPanel(ctk.CTkFrame):
         self._wizard_next(state, on_finish, finish_text)
 
     def _wizard_next(self, state: dict, on_finish, finish_text: str) -> None:
+        anchor = state["session"].anchor
         state["step"] += 1
         state["session"] = CaptureSession(state["student_key"])
+        state["session"].anchor = anchor
+        confirmed = self._ordered_captures(state)
+        if confirmed:
+            state['session'].anchor = confirmed[0].embedding
         if state["step"] >= len(_ANGLES):
             state["reviewing"] = True
             self._show_frozen(state, self._ordered_captures(state)[0])
             state["step_caption"].configure(text=f"Review — {state['identity']}")
-            state["det_status"].configure(text="This photo and the confirmed angle embeddings will be saved.", text_color=COLOR_SAFE)
+            state['review_index'] = 0
+            state["det_status"].configure(text="Review every confirmed capture using the arrows. These images supply the saved embeddings.", text_color=COLOR_SAFE)
+            if 'review_controls' in state:
+                state['review_controls'].pack(fill='x', padx=12, pady=4)
             state["cap_btn"].configure(text="Save", state="normal")
             state["skip_btn"].configure(text="Retake", state="normal")
             self._update_pills(state)
@@ -1268,7 +1383,7 @@ class EnrollmentPanel(ctk.CTkFrame):
         self._wizard_refresh(state, finish_text)
 
     def _capture_save_payload(self, state):
-        if not self._capture_current(state) or not state.get("reviewing") or state.get("capturing"):
+        if not self._capture_current(state) or not state.get("reviewing") or state.get("capturing") or state.get("saved"):
             raise ValueError("Capture changed. Review the selected student's face again.")
         if "target_pk" in state:
             row = self.database.get_student(state["target_pk"])
@@ -1276,151 +1391,113 @@ class EnrollmentPanel(ctk.CTkFrame):
                 raise ValueError("Student record changed. Reopen capture for the correct student.")
         return capture_payload(self._ordered_captures(state), state["student_key"])
 
+    def _save_capture_async(self, state, operation, completed):
+        """Keep SQLite/gallery/email latency off Tk, and deliver on Tk's own timer."""
+        state['capturing'] = True
+        state['cap_btn'].configure(text='Saving…',state='disabled')
+        state['skip_btn'].configure(state='disabled')
+        results = queue.Queue(maxsize=1)
+        def work():
+            try:
+                results.put((operation(),None))
+            except Exception as exc:
+                results.put((None,str(exc)))
+        def deliver():
+            if not state.get('alive') or not state['modal'].winfo_exists():
+                state['capturing'] = False
+                return
+            try:
+                result,error = results.get_nowait()
+            except queue.Empty:
+                state['job_save'] = state['modal'].after(50,deliver)
+                return
+            state['capturing'] = False
+            if error:
+                state['det_status'].configure(text=f'Save failed: {error}. Your captures are preserved; retry.',text_color=COLOR_DANGER)
+                state['cap_btn'].configure(text='Save',state='normal')
+                state['skip_btn'].configure(state='normal')
+            else:
+                state['saved'] = True
+                completed(result)
+        try:
+            threading.Thread(target=work,daemon=True,name='enrollment-save').start()
+        except Exception as exc:
+            results.put((None,str(exc)))
+        deliver()
+
     def _finish_enroll(self, modal, state: dict) -> None:
         try:
-            blob, photo = self._capture_save_payload(state)
+            blob,photo = self._capture_save_payload(state)
+            values = {key:entry.get().strip() for key,entry in self._entries.items()}
+            if not all(values.get(k) for k in ('name','student_id','course','year_and_section')):
+                raise ValueError('Name, student ID, course, and year/section are required.')
+            contacts = {key:values.get(key,'') for _,key in CONTACT_FIELDS}
+            validate_contacts(dict(contacts,email=values.get('email','')))
         except ValueError as exc:
-            state["det_status"].configure(text=str(exc), text_color=COLOR_DANGER)
+            state['det_status'].configure(text=str(exc),text_color=COLOR_DANGER)
             return
-        angle_frames = {k: v for k, v in state["angle_frames"].items() if v}
-        if not angle_frames:
-            self._set_enroll_status("Please capture at least one angle.", error=True)
-            state["step"] = 0
-            self._wizard_refresh(state, _ENROLL_FINISH_TEXT)
-            return
-        if not self._entries or self._gender_var is None:
-            return
-
-        name = self._entries["name"].get().strip()
-        student_id = self._entries["student_id"].get().strip()
-        course = self._entries["course"].get().strip()
-        year_and_section = self._entries["year_and_section"].get().strip()
-        email = self._entries.get("email", None)
-        email = email.get().strip() if email else ""
-        contacts = {key: self._entries[key].get() for _, key in CONTACT_FIELDS}
+        import secrets
+        import string
+        password = ''.join(secrets.choice(string.ascii_letters+string.digits) for _ in range(10))
         gender = self._gender_var.get()
-
-        def _rearm(msg: str) -> None:
-            state["capturing"] = False
-            self._set_enroll_status(msg, error=True)
-            if modal.winfo_exists():
-                state["cap_btn"].configure(text="Save", state="normal")
-
-        if not all([name, student_id, course, year_and_section]):
-            _rearm("Name, student ID, course, and year/section are required. Contacts are optional.")
-            return
-        if self.database.student_id_exists(student_id):
-            _rearm(f"Student ID '{student_id}' is already enrolled.")
-            return
-        if self.recognizer is None:
-            _rearm("Face recognition not ready.")
-            return
-
-        # Commit only the already reviewed payload; block repeated saves.
-        state["capturing"] = True
-        state["cap_btn"].configure(text="Enrolling…", state="disabled")
-        state["skip_btn"].configure(state="disabled")
-        self._set_enroll_status("Saving confirmed captures…")
-
-        try:
-            self.database.insert_student(
-                student_id=student_id, name=name, course=course,
-                year_and_section=year_and_section, gender=gender,
-                encoding=blob, photo=photo, email=email, contacts=contacts,
-            )
-        except Exception as exc:
-            _rearm(f"Enrollment failed: {exc}")
-            return
-
-        def _do_enroll() -> None:
-            import random
-            import string
-            from core.email_sender import send_credentials
-
-            # Auto-generate a new password and upsert the student account.
-            # upsert preserves an existing username (e.g. from self-registration)
-            # while resetting the password to the newly-generated one.
-            chars = string.ascii_letters + string.digits
-            password = "".join(random.choices(chars, k=10))
-            ok_acct, actual_username = self.database.upsert_student_account(
-                student_id, student_id, password
-            )
-
-            email_note = ""
-            if email and ok_acct:
-                ok_mail, err = send_credentials(
-                    to_email=email,
-                    student_name=name,
-                    student_id=student_id,
-                    username=actual_username,
-                    password=password,
-                )
-                email_note = " Email sent." if ok_mail else f" (Email failed: {err})"
-            elif not ok_acct:
-                email_note = " (Account creation failed — email not sent.)"
-
-            modal.after(0, lambda: _on_success(email_note, actual_username, password))
-
-        def _on_success(email_note: str, username: str, password: str) -> None:
-            state["capturing"] = False
+        sid = values['student_id']
+        database,recognizer = self.database,self.recognizer
+        def save():
+            # Row, contacts, photo, all confirmed embeddings, and account commit together.
+            database.insert_student(student_id=sid,name=values['name'],course=values['course'],
+                year_and_section=values['year_and_section'],gender=gender,encoding=blob,photo=photo,
+                email=values.get('email',''),contacts=contacts,account_password=password)
+            note = ''
+            try:
+                recognizer.load_known_faces()
+            except Exception:
+                note = ' Saved; reopen the monitor to reload recognition.'
+            username = None
+            try:
+                with database.connect() as conn:
+                    username = conn.execute('SELECT username FROM student_accounts WHERE student_id=?',(sid,)).fetchone()[0]
+            except Exception:
+                note += ' Account saved; check Account Manager for the username.'
+            return note,username
+        def completed(result):
+            note,username = result
             self._clear_form()
             self._reload_students()
-            self.recognizer.load_known_faces()
-            msg = f"Enrolled! Login: {username} / {password}.{email_note}"
-            self._set_status(msg, success=True)
-            close = state.get("close")
-            if close is not None:
-                close()
-
-        threading.Thread(target=_do_enroll, daemon=True).start()
+            self._set_status(f'Enrolled! Login: {username or "See Account Manager"} / {password}.{note}',success=True)
+            if state.get('close'):
+                state['close']()
+            # Existing optional delivery never determines whether registration committed.
+            if values.get('email') and username:
+                def email():
+                    from core.email_sender import send_credentials
+                    send_credentials(to_email=values['email'],student_name=values['name'],
+                                     student_id=sid,username=username,password=password)
+                threading.Thread(target=email,daemon=True,name='enrollment-credentials').start()
+        self._save_capture_async(state,save,completed)
 
     def _finish_update(self, modal, state: dict) -> None:
         try:
-            blob, photo = self._capture_save_payload(state)
+            blob,photo = self._capture_save_payload(state)
         except ValueError as exc:
-            state["det_status"].configure(text=str(exc), text_color=COLOR_DANGER)
+            state['det_status'].configure(text=str(exc),text_color=COLOR_DANGER)
             return
-        angle_frames = {k: v for k, v in state["angle_frames"].items() if v}
-        if not angle_frames:
-            state["dot"].configure(text_color=COLOR_DANGER)
-            state["det_status"].configure(text="Capture at least one angle.", text_color=COLOR_DANGER)
-            state["step"] = 0
-            self._wizard_refresh(state, _UPDATE_FINISH_TEXT)
-            return
-        pk = state["target_pk"]
-
-        def _rearm(msg: str) -> None:
-            state["capturing"] = False
-            if not modal.winfo_exists():
-                return
-            state["dot"].configure(text_color=COLOR_DANGER)
-            state["det_status"].configure(text=msg, text_color=COLOR_DANGER)
-            state["cap_btn"].configure(text="Save", state="normal")
-
-        # Commit only the already reviewed payload; block repeated saves.
-        state["capturing"] = True
-        state["cap_btn"].configure(text="Updating…", state="disabled")
-        state["skip_btn"].configure(state="disabled")
-        state["det_status"].configure(text="Saving confirmed captures…", text_color=COLOR_TEXT_MUTED)
-
-        def _on_done(ok: bool, photo: bytes) -> None:
-            if not ok:
-                _rearm("Update failed.")
-                return
-            self.recognizer.load_known_faces()
+        pk,sid = state['target_pk'],state['target_student_id']
+        database,recognizer = self.database,self.recognizer
+        def save():
+            if not database.update_student_encoding(pk,blob,photo,expected_student_id=sid):
+                raise ValueError('Student record changed. Reopen Update Photo for the correct student.')
+            note = ''
+            try:
+                recognizer.load_known_faces()
+            except Exception:
+                note = ' Reopen the monitor to reload recognition.'
+            return note
+        def completed(note):
             self._reload_students()
-            state["capturing"] = False
-            self._set_status("Photo updated successfully.", success=True)
-            close = state.get("close")
-            if close is not None:
-                close()
-
-        try:
-            ok = self.database.update_student_encoding(pk, blob, photo)
-        except Exception as exc:
-            _rearm(f"Update failed: {exc}")
-            return
-        _on_done(ok, photo)
+            self._set_status('Photo updated successfully.'+note,success=True)
+            if state.get('close'):
+                state['close']()
+        self._save_capture_async(state,save,completed)
 
     # ------------------------------------------------------------------
     # Delete
@@ -1540,6 +1617,8 @@ class EnrollmentPanel(ctk.CTkFrame):
             if state.get("capturing"):
                 return
             state["alive"] = False
+            state["session"].invalidate("Capture cancelled.")
+            state["worker_busy"] = False
             self._update_close = None
             for job_key in ("job_tick", "job_detect"):
                 if state.get(job_key) is not None:
