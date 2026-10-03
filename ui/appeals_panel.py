@@ -7,6 +7,15 @@ from core.discipline import display_local_datetime as ts
 from core.evidence_integrity import original_evidence, supporting_evidence, INTEGRITY_HELP
 from ui.components import COLOR_BG, COLOR_SURFACE, COLOR_TEXT, COLOR_ACCENT, COLOR_DANGER
 
+MUTED = '#9EB3C4'
+BORDER = '#2D4356'
+CARD = '#182C3D'
+STATUS_COLORS = {
+    'pending': ('#F5C76A', '#3B3426'),
+    'approved': ('#6DE0BC', '#193D38'),
+    'rejected': ('#FFA0A8', '#402D3A'),
+}
+
 
 class AppealsPanel(ctk.CTkFrame):
     PAGE_SIZE = 10
@@ -28,28 +37,46 @@ class AppealsPanel(ctk.CTkFrame):
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='admin-appeals')
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(2, weight=1)
-        header = ctk.CTkFrame(self, fg_color='transparent')
-        header.grid(row=0, column=0, sticky='ew', padx=12, pady=8)
-        self.heading = ctk.CTkLabel(header, text='Appeals', font=ctk.CTkFont(size=22, weight='bold'))
-        self.heading.pack(side='left')
+        header = ctk.CTkFrame(self, fg_color='#1B3144', corner_radius=18,
+                              border_width=1, border_color=BORDER)
+        header.grid(row=0, column=0, sticky='ew', padx=18, pady=(18, 12))
+        titles = ctk.CTkFrame(header, fg_color='transparent')
+        titles.pack(side='left', fill='x', expand=True, padx=22, pady=18)
+        ctk.CTkLabel(titles, text='STUDENT AFFAIRS  /  CASE MANAGEMENT',
+                     text_color='#6DE0BC', font=ctk.CTkFont(size=11, weight='bold'),
+                     anchor='w').pack(fill='x')
+        self.heading = ctk.CTkLabel(titles, text='Appeals', anchor='w',
+                                    wraplength=340, font=ctk.CTkFont(size=30, weight='bold'))
+        self.heading.pack(fill='x', pady=(3, 2))
+        self.subtitle = ctk.CTkLabel(titles,
+            text='Every appeal deserves a clear, considered decision.', anchor='w',
+            wraplength=300, justify='left', text_color=MUTED, font=ctk.CTkFont(size=13))
+        self.subtitle.pack(fill='x')
         self.back = ctk.CTkButton(header, text='Back to Appeals', command=self.show_inbox)
         self.refresh_button = ctk.CTkButton(header, text='Refresh', width=90, command=self.refresh)
-        self.refresh_button.pack(side='right')
-        self.toolbar = ctk.CTkFrame(self, fg_color='transparent')
-        self.toolbar.grid(row=1, column=0, sticky='ew', padx=12)
-        self.filter = ctk.CTkOptionMenu(self.toolbar, values=['Pending', 'Approved', 'Rejected', 'All'],
+        self.refresh_button.configure(height=36, corner_radius=10, fg_color='#29485E',
+                                      hover_color='#365D76')
+        self.refresh_button.pack(side='right', padx=20)
+        self.toolbar = ctk.CTkFrame(self, fg_color=COLOR_SURFACE, corner_radius=12)
+        self.toolbar.grid(row=1, column=0, sticky='ew', padx=18)
+        self.filter = ctk.CTkOptionMenu(self.toolbar, values=['Pending', 'History', 'Approved', 'Rejected', 'All'],
                                      command=lambda _: self.search_inbox())
-        self.filter.pack(side='left')
-        self.search = ctk.CTkEntry(self.toolbar, placeholder_text='Student ID or name', width=240)
+        self.filter.configure(height=36, corner_radius=8)
+        self.filter.pack(side='left', padx=(12, 0), pady=12)
+        ctk.CTkButton(self.toolbar, text='Appeal History', width=115,
+                      command=self.show_history).pack(side='left', padx=(8, 0))
+        self.search = ctk.CTkEntry(self.toolbar, placeholder_text='Search student name or ID...', width=240,
+                                   height=36, corner_radius=8, border_color=BORDER)
         self.search.pack(side='left', fill='x', expand=True, padx=8)
         self.search.bind('<Return>', lambda _: self.search_inbox())
-        ctk.CTkButton(self.toolbar, text='Search', width=80, command=self.search_inbox).pack(side='left')
+        ctk.CTkButton(self.toolbar, text='Search', width=80, height=36,
+                      command=self.search_inbox).pack(side='left', padx=(0,12))
         self.body = ctk.CTkFrame(self, fg_color='transparent')
-        self.body.grid(row=2, column=0, sticky='nsew', padx=12, pady=8)
+        self.body.grid(row=2, column=0, sticky='nsew', padx=18, pady=12)
         self.body.grid_columnconfigure(0, weight=1)
         self.body.grid_rowconfigure(0, weight=1)
         self.footer = ctk.CTkFrame(self, fg_color='transparent')
-        self.footer.grid(row=3, column=0, sticky='ew', padx=12, pady=(0,8))
+        self.footer.grid(row=3, column=0, sticky='ew', padx=18, pady=(0,12))
         self.status = ctk.CTkLabel(self, text='', anchor='w', wraplength=800)
         self.status.grid(row=4, column=0, sticky='ew', padx=12)
         self._poll_job = self.after(50, self._poll)
@@ -129,13 +156,19 @@ class AppealsPanel(ctk.CTkFrame):
         self.inbox_scroll = 0.
         self.show_inbox()
 
+    def show_history(self):
+        if self.busy:
+            return
+        self.filter.set('History')
+        self.search_inbox()
+
     def show_inbox(self):
         if self.busy:
             return
         self._remember_reason()
         self.case_id = None
         self.generation += 1
-        self.heading.configure(text='Appeals')
+        self.heading.configure(text='Appeal History' if self.filter.get() == 'History' else 'Appeals')
         self.back.pack_forget()
         self.toolbar.grid()
         self._clear()
@@ -144,22 +177,55 @@ class AppealsPanel(ctk.CTkFrame):
             status=status, search=search, offset=offset, limit=self.PAGE_SIZE), self._inbox_loaded)
 
     def _inbox_loaded(self, result):
-        listing = self.listing = ctk.CTkScrollableFrame(self.body, fg_color=COLOR_SURFACE)
+        self.subtitle.configure(text=f"{result['total']} appeals in this view  /  {self.filter.get()}" )
+        listing = self.listing = ctk.CTkScrollableFrame(self.body, fg_color=COLOR_BG,
+            scrollbar_button_color=BORDER, scrollbar_button_hover_color='#49677D')
         listing.grid(row=0, column=0, sticky='nsew')
         listing.grid_columnconfigure(0, weight=1)
         if not result['rows']:
-            ctk.CTkLabel(listing, text='No appeals match this filter.').grid(row=0, column=0, pady=30)
+            empty = ctk.CTkFrame(listing, fg_color=CARD, corner_radius=16)
+            empty.grid(row=0, column=0, sticky='ew', pady=20)
+            ctk.CTkLabel(empty, text='All clear', font=ctk.CTkFont(size=24, weight='bold')).pack(pady=(32,8))
+            ctk.CTkLabel(empty, text='No appeals match this filter. Try another status or student.',
+                         text_color=MUTED).pack(pady=(0,32))
         for index, row in enumerate(result['rows']):
-            card = ctk.CTkFrame(listing)
-            card.grid(row=index, column=0, sticky='ew', pady=4)
-            card.grid_columnconfigure(0, weight=1)
-            label = ctk.CTkLabel(card, anchor='w', justify='left', text=(
-                f"{row['student_name'] or 'Unknown student'} · {row['student_id']}\n"
-                f"Appeal #{row['id']} · Violation #{row['violation_id']} · {row['violation_type']} · {row['status'].title()}\nSubmitted: {ts(row['submitted_at'])}"))
-            label.grid(row=0, column=0, sticky='ew', padx=12, pady=6)
-            card.bind('<Configure>', lambda e, label=label: label.configure(wraplength=max(160,e.width-150)))
-            ctk.CTkButton(card, text='Open Case', width=110,
-                command=lambda aid=row['id']: self.open_case(aid)).grid(row=0, column=1, padx=10)
+            decision_details = ''
+            if row['status'] in ('approved', 'rejected'):
+                decision_details = (f"\nDecided: {ts(row.get('decided_at'))}"
+                                    f" by {row.get('decided_by') or 'Not recorded'}"
+                                    f"\nReason: {row.get('admin_notes') or 'Not recorded'}")
+            tone, tint = STATUS_COLORS.get(row['status'], (MUTED, BORDER))
+            card = ctk.CTkFrame(listing, fg_color=CARD, corner_radius=14,
+                                border_width=1, border_color=BORDER)
+            card.grid(row=index, column=0, sticky='ew', pady=(0, 12), padx=2)
+            card.grid_columnconfigure(1, weight=1)
+            name = row['student_name'] or 'Unknown student'
+            initials = ''.join(word[0] for word in name.split()[:2]).upper()
+            ctk.CTkLabel(card, text=initials, width=44, height=44, corner_radius=12,
+                fg_color='#28475D', text_color='#C5E2F4',
+                font=ctk.CTkFont(size=16, weight='bold')).grid(row=0, column=0,
+                    rowspan=2, padx=(16,12), pady=(18,8), sticky='n')
+            ctk.CTkLabel(card, text=name, anchor='w', font=ctk.CTkFont(size=17, weight='bold')).grid(
+                row=0, column=1, sticky='ew', pady=(16,0))
+            ctk.CTkLabel(card, text=f"{row['student_id']}  /  Appeal #{row['id']}  /  Violation #{row['violation_id']}",
+                         anchor='w', text_color=MUTED, font=ctk.CTkFont(size=12)).grid(row=1, column=1, sticky='ew')
+            ctk.CTkLabel(card, text=row['status'].upper(), text_color=tone,
+                         fg_color=tint, corner_radius=8, width=100, height=28,
+                         font=ctk.CTkFont(size=11, weight='bold')).grid(row=0, column=2, padx=16, pady=(18,0))
+            label = ctk.CTkLabel(card, anchor='w', justify='left', text=row['violation_type'],
+                                 font=ctk.CTkFont(size=14, weight='bold'))
+            label.grid(row=2, column=1, sticky='ew', pady=(12,4))
+            metadata = ctk.CTkLabel(card, anchor='w', justify='left', text_color=MUTED,
+                font=ctk.CTkFont(size=12), text=f"Submitted: {ts(row['submitted_at'])}{decision_details}")
+            metadata.grid(row=3, column=1, sticky='ew', pady=(0,16), padx=(0,12))
+            def resize_card(event, title=label, details=metadata):
+                width = max(140, event.width - 230)
+                title.configure(wraplength=width)
+                details.configure(wraplength=width)
+            card.bind('<Configure>', resize_card)
+            ctk.CTkButton(card, text='Open Case  →', width=114, height=34, corner_radius=9,
+                fg_color='#29485E', hover_color='#365D76',
+                command=lambda aid=row['id']: self.open_case(aid)).grid(row=3, column=2, padx=16, pady=(0,16), sticky='s')
         ctk.CTkButton(self.footer, text='Previous', width=100,
             state='normal' if self.offset else 'disabled', command=lambda: self._page(-1)).pack(side='left')
         ctk.CTkLabel(self.footer, text=f"Page {self.offset//self.PAGE_SIZE+1} · {result['total']} appeals").pack(side='left', padx=16)
@@ -189,7 +255,8 @@ class AppealsPanel(ctk.CTkFrame):
         self.case_id = appeal_id
         self.generation += 1
         self.heading.configure(text=f'Appeal #{appeal_id}')
-        self.back.pack(side='left', padx=20)
+        self.back.pack(side='bottom', anchor='w', padx=22, pady=(0,8),
+                       before=self.heading.master)
         self.toolbar.grid_remove()
         self._clear()
         generation = self.generation
@@ -214,9 +281,11 @@ class AppealsPanel(ctk.CTkFrame):
             return
         self.violation_id = case['violation_id']
         self.case = case
+        self.subtitle.configure(text='Review the evidence, read the explanation, and record your decision.')
         self.heading.configure(text=f"Appeal #{case['id']} · Violation #{case['violation_id']}")
         # Only the evidence/details area scrolls at small sizes. Decisions stay in a fixed footer.
-        content = ctk.CTkScrollableFrame(self.body, fg_color=COLOR_SURFACE)
+        content = ctk.CTkScrollableFrame(self.body, fg_color=CARD, corner_radius=16,
+            border_width=1, border_color=BORDER)
         content.grid(row=0, column=0, sticky='nsew')
         content.grid_columnconfigure((0,1), weight=1, uniform='evidence')
         details = ctk.CTkLabel(content, justify='left', anchor='w', text=(
@@ -226,7 +295,8 @@ class AppealsPanel(ctk.CTkFrame):
             f"Published: {ts(case['appeal_opened_at'], 'Not recorded (legacy)')}\n"
             f"Submitted: {ts(case['submitted_at'])} · Decision: {ts(case['decided_at'])}\n"
             f"Appeal deadline: {ts(case['appeal_deadline'])} · Active strike: {'Yes' if case['strike_active'] else 'No'}"))
-        details.grid(row=0,column=0,columnspan=2,sticky='ew',padx=8,pady=4)
+        details.configure(font=ctk.CTkFont(size=14), text_color=COLOR_TEXT)
+        details.grid(row=0,column=0,columnspan=2,sticky='ew',padx=18,pady=18)
         content.bind('<Configure>',lambda e: details.configure(wraplength=max(240,e.width-30)), add='+')
         sources = [case['original'], *(case['supporting'] or [supporting_evidence({})])]
         image_columns = [ctk.CTkFrame(content, fg_color='transparent') for _ in range(2)]
@@ -236,7 +306,8 @@ class AppealsPanel(ctk.CTkFrame):
             label, picture = source['label'], source['image']
             box = ctk.CTkFrame(image_columns[min(col, 1)],fg_color='transparent')
             box.pack(fill='both', expand=True, padx=6, pady=4)
-            caption = ctk.CTkLabel(box,text=label, wraplength=220)
+            caption = ctk.CTkLabel(box,text=label, wraplength=220,
+                font=ctk.CTkFont(size=13, weight='bold'), text_color='#6DE0BC')
             caption.pack(fill='x')
             box.bind('<Configure>', lambda e, text=caption: text.configure(
                 wraplength=max(120, int(self._reverse_widget_scaling(e.width))-12)), add='+')
@@ -252,10 +323,12 @@ class AppealsPanel(ctk.CTkFrame):
                 warning.pack(fill='x')
                 box.bind('<Configure>', lambda e, text=warning: text.configure(
                     wraplength=max(120, int(self._reverse_widget_scaling(e.width))-12)), add='+')
-        ctk.CTkLabel(content,text='Student explanation',anchor='w').grid(row=2,column=0,sticky='w',padx=8)
+        ctk.CTkLabel(content,text='Student explanation',anchor='w',
+            font=ctk.CTkFont(size=15, weight='bold')).grid(row=2,column=0,sticky='w',padx=18,pady=(14,4))
         ctk.CTkButton(content,text='Read full explanation',height=26,width=160,
             command=lambda:self._full_text(case['reason'])).grid(row=2,column=1,sticky='e',padx=8)
-        explanation=ctk.CTkTextbox(content,height=70,wrap='word')
+        explanation=ctk.CTkTextbox(content,height=90,wrap='word', fg_color=COLOR_BG,
+            corner_radius=10, border_width=1, border_color=BORDER)
         explanation.grid(row=3,column=0,columnspan=2,sticky='ew',padx=8,pady=4)
         explanation.insert('1.0',case['reason']); explanation.configure(state='disabled')
         if case['ai_recommendation']:
@@ -263,8 +336,10 @@ class AppealsPanel(ctk.CTkFrame):
         if case['lifecycle_origin']=='reconciliation_required':
             self.status.configure(text='Historical strike conflict: reconciliation required. Existing history has been preserved.')
         self.footer.grid_columnconfigure(0,weight=1)
-        ctk.CTkLabel(self.footer,text='Administrator decision reason (required)',anchor='w').grid(row=0,column=0,sticky='w')
-        self.reason=ctk.CTkTextbox(self.footer,height=64,wrap='word')
+        ctk.CTkLabel(self.footer,text='Administrator decision reason (required)',anchor='w',
+            font=ctk.CTkFont(size=14, weight='bold')).grid(row=0,column=0,sticky='w',pady=(4,6))
+        self.reason=ctk.CTkTextbox(self.footer,height=64,wrap='word', corner_radius=10,
+            border_width=1, border_color=BORDER)
         self.reason.grid(row=1,column=0,sticky='ew')
         self.reason.insert('1.0',self.drafts.get(self.case_id, '') if case['status']=='pending' else case['admin_notes'] or '')
         controls=ctk.CTkFrame(self.footer,fg_color='transparent')

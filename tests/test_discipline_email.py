@@ -23,11 +23,17 @@ class DisciplineEmailTests(unittest.TestCase):
                              else self.dispatch)(*args)).start()
         self.addCleanup(patch.stopall)
 
-    def test_detection_and_confirmation_do_not_email(self):
+    def test_detection_emails_designated_student_once_confirmation_does_not_repeat(self):
+        self.db.insert_student('S2', 'Other Student', 'BSIT', '3A', b'', b'', email='other@example.com')
         vid = self.db.log_violation('S1', 'Student', 'wrong_uniform')
         self.db.confirm_violation(vid)
         self.db.confirm_violation(vid)
-        self.publication_dispatch.assert_not_called()
+        self.publication_dispatch.assert_called_once()
+        args = self.publication_dispatch.call_args.args
+        self.assertEqual(args[:3], ('student@example.com', 'Student', 'S1'))
+        self.assertIn('Wrong uniform', args[4])
+        self.assertIn(f'Violation #{vid}', args[4])
+        self.assertIn('Appeal deadline:', args[4])
         self.dispatch.assert_not_called()
 
     def test_rejected_appeals_award_one_strike_and_third_emails_suspension(self):
@@ -47,7 +53,7 @@ class DisciplineEmailTests(unittest.TestCase):
                     "SELECT COUNT(*) FROM strikes WHERE student_id='S1' AND is_active=1"
                 ).fetchone()[0], count)
             self.assertEqual(self.dispatch.call_count, int(count == 3))
-        self.publication_dispatch.assert_not_called()
+        self.assertEqual(self.publication_dispatch.call_count, 3)
         self.assertEqual(self.dispatch.call_args.args[0], 'student@example.com')
         self.assertEqual(self.dispatch.call_args.args[3], 'CBVMS - Suspension Notice')
         self.assertEqual(len(self.db.get_suspension_history('S1')), 1)
@@ -59,6 +65,29 @@ class DisciplineEmailTests(unittest.TestCase):
         self.publication_dispatch.assert_not_called()
         with self.db.connect() as conn:
             self.assertEqual(conn.execute('SELECT COUNT(*) FROM violations').fetchone()[0], 0)
+
+    def test_appeal_history_for_both_admin_roles(self):
+        from tests.evidence_fixture import picture_evidence
+        vid = self.db.log_violation('S1', 'Student', 'wrong_uniform',
+                                    snapshot_jpeg=picture_evidence()[2])
+        aid = self.db.insert_appeal(vid, 'S1', 'Please review my uniform evidence.', evidence=picture_evidence())
+        self.assertTrue(self.db.update_appeal_decision(
+            aid, 'approved', 'Uniform verified', decided_by='admin'))
+        self.db.log_violation('S1', 'Student', 'wrong_uniform')
+        reopened = CBVMSDatabase(self.db.db_path)
+        reopened.initialize(process_deadlines=False)
+        for username in ('admin', 'superadmin'):
+            result = reopened.get_appeal_inbox(username=username, status='history', search='S1')
+            self.assertEqual(result['total'], 1)
+            row = result['rows'][0]
+            self.assertEqual(row['id'], aid)
+            self.assertEqual(row['decided_by'], 'admin')
+            self.assertEqual(row['admin_notes'], 'Uniform verified')
+            self.assertTrue(row['decided_at'])
+            self.assertEqual(reopened.get_appeal_inbox(
+                username=username, status='history', search='S1', offset=1)['rows'], [])
+        with self.assertRaises(PermissionError):
+            reopened.get_appeal_inbox(username='student', status='history')
 
     def test_publication_without_email_skips_delivery(self):
         with self.db.connect() as conn:

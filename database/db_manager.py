@@ -35,6 +35,8 @@ from core.evidence_integrity import digest, original_evidence, supporting_eviden
 
 DEFAULT_ADMIN_USERNAME = "admin"
 DEFAULT_ADMIN_PASSWORD = "admin123"
+DEFAULT_SUPERADMIN_USERNAME = "superadmin"
+DEFAULT_SUPERADMIN_PASSWORD = "superadmin123"
 
 SECURITY_EVENTS_TABLE = """
 CREATE TABLE IF NOT EXISTS security_events (
@@ -242,6 +244,10 @@ class CBVMSDatabase(StudentManagement):
         with self.connect() as conn:
             for ddl in ALL_TABLES:
                 conn.execute(ddl)
+            user_cols = {r[1] for r in conn.execute("PRAGMA table_info(users)")}
+            if "role" not in user_cols:
+                conn.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'admin' "
+                             "CHECK (role IN ('admin', 'superadmin'))")
             migrate_student_management(conn)
             student_cols = {r[1] for r in conn.execute("PRAGMA table_info(students)")}
             if "profile_photo" not in student_cols:
@@ -359,6 +365,7 @@ class CBVMSDatabase(StudentManagement):
             migrate_appeals(self, conn, utc_now())
             conn.commit()
         self._seed_default_admin()
+        self._seed_default_superadmin()
         # Normal startup processing makes persisted deadlines reliable even after the
         # app was closed.  Migration/diagnostic tools may explicitly suppress this
         # workflow mutation while still applying the repeat-safe schema migration.
@@ -420,6 +427,25 @@ class CBVMSDatabase(StudentManagement):
                 (DEFAULT_ADMIN_USERNAME, hash_password(DEFAULT_ADMIN_PASSWORD)),
             )
             conn.commit()
+
+    def _seed_default_superadmin(self) -> None:
+        """Create the superadmin once; preserve existing credentials and roles."""
+        with self.connect() as conn:
+            if conn.execute("SELECT 1 FROM users WHERE username = ?",
+                            (DEFAULT_SUPERADMIN_USERNAME,)).fetchone():
+                return
+            if conn.execute("SELECT 1 FROM student_accounts WHERE username = ?",
+                            (DEFAULT_SUPERADMIN_USERNAME,)).fetchone():
+                raise ValueError("The superadmin username is already used by a student account.")
+            conn.execute("INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)",
+                         (DEFAULT_SUPERADMIN_USERNAME,
+                          hash_password(DEFAULT_SUPERADMIN_PASSWORD), "superadmin"))
+
+    def get_user_role(self, username: str) -> str | None:
+        with self.connect() as conn:
+            row = conn.execute("SELECT role FROM users WHERE username = ?",
+                               (username.strip(),)).fetchone()
+        return row["role"] if row else None
 
     # ------------------------------------------------------------------
     # Academic-term configuration
@@ -1005,6 +1031,17 @@ class CBVMSDatabase(StudentManagement):
                     "to appeal with an explanation and picture. No strike while appeal is available or pending. "
                     "Open the record to see your local deadline.",
             event_key=f"violation:{violation_id}:published", created_at=opened, violation_id=violation_id)
+        if row["violation_code"] == "wrong_uniform":
+            self._queue_discipline_email_conn(conn, row["student_id"],
+                "CBVMS - Violation Notice",
+                f"Wrong uniform was detected for your student record.\n"
+                f"Violation #{violation_id}: {label}\n"
+                f"Detected at: {row['timestamp']} (UTC)\n"
+                f"Appeal deadline: {deadline} (UTC)\n\n"
+                "Log in to the student portal and open My Violations to review the evidence. "
+                "If the detection is incorrect, submit an appeal with an explanation and picture "
+                "within 120 hours of publication. No strike is awarded while the appeal "
+                "is available or pending.")
 
     def _award_final_strike_conn(self, conn, violation, changed_at, cause):
         """Called only by locked expiry/decision transitions; unique ledger prevents retries."""
@@ -2078,18 +2115,19 @@ class CBVMSDatabase(StudentManagement):
             return conn.execute("SELECT COUNT(*) FROM appeals WHERE status='pending'").fetchone()[0]
 
     def get_appeal_inbox(self, *, username, status="pending", search="", offset=0, limit=12):
-        if status not in ("pending", "approved", "rejected", "all"):
+        if status not in ("pending", "approved", "rejected", "all", "history"):
             raise ValueError("Unknown appeal filter")
         with self.connect() as conn:
             self._require_admin_conn(conn, username)
             query = """FROM appeals a JOIN violations v ON v.id=a.violation_id
                 LEFT JOIN students s ON s.student_id=a.student_id
-                WHERE (?='all' OR a.status=?) AND
+                WHERE (?='all' OR a.status=? OR (?='history' AND a.status IN ('approved','rejected'))) AND
                 (instr(lower(a.student_id),lower(?))>0 OR instr(lower(COALESCE(s.name,'')),lower(?))>0)"""
-            params = (status, status, search.strip(), search.strip())
+            params = (status, status, status, search.strip(), search.strip())
             total = conn.execute("SELECT COUNT(*) " + query, params).fetchone()[0]
-            rows = conn.execute("SELECT a.id,a.violation_id,a.student_id,a.status,a.submitted_at,v.violation_type,s.name student_name "
-                + query + " ORDER BY a.submitted_at DESC,a.id DESC LIMIT ? OFFSET ?",
+            ordering = "a.decided_at" if status == "history" else "a.submitted_at"
+            rows = conn.execute("SELECT a.id,a.violation_id,a.student_id,a.status,a.submitted_at,a.decided_at,a.decided_by,a.admin_notes,v.violation_type,s.name student_name "
+                + query + f" ORDER BY {ordering} DESC,a.id DESC LIMIT ? OFFSET ?",
                 (*params, min(50,max(1,limit)), max(0,offset))).fetchall()
         return {"rows": [dict(r) for r in rows], "total": total}
 

@@ -41,6 +41,7 @@ from ui.training_panel import TrainingPanel
 from ui.records_panel import RecordsPanel
 from ui.appeals_panel import AppealsPanel
 from ui.suspensions_panel import SuspensionsPanel
+from ui.reports_panel import ReportsPanel
 from ui.violation_log import ViolationLogPanel
 from ui.account_manager import AccountManagerPanel
 from ui.components import (
@@ -153,6 +154,9 @@ class CBVMSDashboard(WorkspaceWindow):
             self._database = CBVMSDatabase()
             self._database.initialize()
 
+        self.role = self._database.get_user_role(self.username) or "admin"
+        self._is_superadmin = self.role == "superadmin"
+
         # Face recognizer (InsightFace buffalo_l: SCRFD + ArcFace) — lazy model load inside
         self._recognizer = recognizer if recognizer is not None else FaceRecognizer(self._database)
 
@@ -220,6 +224,7 @@ class CBVMSDashboard(WorkspaceWindow):
         self._enrollment_panel: EnrollmentPanel | None = None
         self._training_panel: TrainingPanel | None = None
         self._suspensions_panel: SuspensionsPanel | None = None
+        self._reports_panel = None
         self._violation_panel: ViolationLogPanel | None = None
         self._settings_panel: SettingsPanel | None = None
         self._notifications_panel: NotificationsPanel | None = None
@@ -232,7 +237,7 @@ class CBVMSDashboard(WorkspaceWindow):
         self._stat_last_value: ctk.CTkLabel | None = None
 
         apply_cbvms_theme()
-        self.title("CBVMS — Dashboard")
+        self.title("CBVMS — Superadmin Dashboard" if self._is_superadmin else "CBVMS — Dashboard")
         self.geometry("1280x800")
         self.minsize(1280, 800)
         self.configure(fg_color=COLOR_BG)
@@ -276,7 +281,7 @@ class CBVMSDashboard(WorkspaceWindow):
         counts = _drain(self._appeal_counts)
         if counts is not None:
             pending, self._appeal_unread = counts
-            self._nav_buttons["appeals"].configure(text=f"Appeals ({pending})")
+            self._nav_buttons["appeals"].configure(text=f"⚖  Appeals ({pending})")
             self._update_bell_badge()
         def read():
             try:
@@ -335,14 +340,17 @@ class CBVMSDashboard(WorkspaceWindow):
             ("enrollment", "👤  Student Management"),
             ("suspensions", "⏸  Suspensions"),
             ("violations", "⚠  Violation Log"),
+            ("appeals",    "⚖  Appeals"),
             ("records",    "🗄  Records"),
-            ("appeals",    "Appeals"),
+            ("reports",    "Reports"),
             ("training",   "🎓  Training"),
             ("accounts",   "🔑  Account Manager"),
             ("settings",   "⚙  Settings"),
         ]
         self._nav_buttons: dict[str, ctk.CTkButton] = {}
         for key, label in nav_items:
+            if key in {"training", "accounts"} and not self._is_superadmin:
+                continue
             btn = ctk.CTkButton(
                 sidebar, text=label, anchor="w", height=40,
                 corner_radius=CORNER_RADIUS,
@@ -369,7 +377,7 @@ class CBVMSDashboard(WorkspaceWindow):
         footer.pack(side="bottom", fill="x", padx=PADDING, pady=PADDING)
 
         ctk.CTkLabel(
-            footer, text=f"Administrator\n{self.username}",
+            footer, text=f"{'Superadmin' if self._is_superadmin else 'Administrator'}\n{self.username}",
             font=body_small_font(), text_color=COLOR_TEXT_MUTED,
         ).pack(anchor="w", pady=(0, 8))
 
@@ -483,6 +491,7 @@ class CBVMSDashboard(WorkspaceWindow):
 
         # Build secondary pages only when first opened, then reuse them.
         self._panel_factories = {
+            "reports": ("_reports_panel", lambda: ReportsPanel(self._view_host, database=self._database)),
             "enrollment": ("_enrollment_panel", lambda: EnrollmentPanel(
             self._view_host,
             database=self._database,
@@ -525,6 +534,9 @@ class CBVMSDashboard(WorkspaceWindow):
             "accounts": ("_account_manager_panel", lambda: AccountManagerPanel(
             self._view_host, database=self._database)),
         }
+        if not self._is_superadmin:
+            for key in ("training", "accounts"):
+                self._panel_factories.pop(key, None)
         self._views = {"live": self._live_frame}
         self._live_frame.grid(row=0, column=0, sticky="nsew")
         self._schedule_stats_refresh()
@@ -620,6 +632,8 @@ class CBVMSDashboard(WorkspaceWindow):
         self._on_nav_select("suspensions")
 
     def _on_nav_select(self, key: str) -> None:
+        if key in {"training", "accounts"} and not self._is_superadmin:
+            return
         if key not in self._views:
             if key not in self._panel_factories:
                 return
@@ -675,6 +689,7 @@ class CBVMSDashboard(WorkspaceWindow):
             self._suspensions_panel.on_hide()
 
         titles = {
+            "reports":    "Reports",
             "live":       "Live Monitor",
             "enrollment": "Student Management",
             "suspensions": "Suspensions",
@@ -707,6 +722,8 @@ class CBVMSDashboard(WorkspaceWindow):
                 self._violation_panel.refresh()
             if key == "appeals":
                 self._appeals_panel.on_show()
+            if key == "reports":
+                self._reports_panel.refresh()
             if key == "records" and self._records_panel is not None:
                 self._records_panel.on_show()
             if key == "accounts" and self._account_manager_panel is not None:

@@ -175,7 +175,7 @@ class CBVMSLoginWindow(WorkspaceWindow):
             self.error_label.configure(text="")
             self.result = result
             self.result_username = result["username"]
-            name = "Admin"
+            name = "Superadmin" if result["role"] == "superadmin" else "Admin"
             if result["role"] == "student":
                 student = self._auth._db.get_student_by_student_id(result["student_id"]) or {}
                 name = student.get("name") or result.get("display_name") or result["username"]

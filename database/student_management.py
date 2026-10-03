@@ -4,10 +4,14 @@ from core.student_status import STUDENT_STATUSES, CONTACT_FIELDS, validate_conta
 
 
 def migrate_student_management(conn):
+    conn.execute('CREATE TABLE IF NOT EXISTS report_csv_snapshot (id INTEGER PRIMARY KEY, payload TEXT NOT NULL)')
     columns = {r[1] for r in conn.execute("PRAGMA table_info(students)")}
     additions = {key: "TEXT NOT NULL DEFAULT ''" for _, key in CONTACT_FIELDS}
     additions.update(student_status="TEXT NOT NULL DEFAULT 'Enrolled'",
-                     registration_pending="INTEGER NOT NULL DEFAULT 0")
+                     registration_pending="INTEGER NOT NULL DEFAULT 0",
+                     college_department="TEXT NOT NULL DEFAULT ''",
+                     report_section="TEXT NOT NULL DEFAULT ''",
+                     report_year_level="TEXT NOT NULL DEFAULT ''")
     for key, ddl in additions.items():
         if key not in columns:
             conn.execute(f"ALTER TABLE students ADD COLUMN {key} {ddl}")

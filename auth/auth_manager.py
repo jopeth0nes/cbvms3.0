@@ -18,7 +18,7 @@ class AuthManager:
         """Return an auth dict on success, else None.
 
         Only persisted account mappings authorize student access.
-        Dict keys: role ("admin"|"student"), username, student_id (None for admin),
+        Dict keys: role ("admin"|"superadmin"|"student"), username, student_id (None for staff),
         display_name.
         """
         if not username or not password:
@@ -42,7 +42,7 @@ class AuthManager:
         # 3. Admin users (DB)
         if self._db.verify_user(uname, password):
             return {
-                "role": "admin",
+                "role": self._db.get_user_role(uname),
                 "username": uname,
                 "student_id": None,
                 "display_name": uname,

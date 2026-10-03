@@ -110,13 +110,21 @@ class SuspensionsPanel(ctk.CTkFrame):
         return label
 
     def _wrap_to_parent(self, label, parent):
+        pending = None
         def resize(event):
+            nonlocal pending
             width = max(120, int(self._reverse_widget_scaling(event.width)) - 12)
-            if label.cget("wraplength") != width:
-                label.configure(wraplength=width)
+            if pending is not None:
+                label.after_cancel(pending)
+            def apply_wrap():
+                nonlocal pending
+                pending = None
+                if abs(label.cget("wraplength") - width) > 4:
+                    label.configure(wraplength=width)
+            pending = label.after(40, apply_wrap)
         parent.bind("<Configure>", resize, add="+")
 
-    def _table(self, parent, columns, *, height=6):
+    def _table(self, parent, columns, *, height=3):
         frame = ctk.CTkFrame(parent, fg_color=COLOR_BG)
         frame.pack(fill="both", expand=True)
         frame.grid_columnconfigure(0, weight=1)
@@ -138,26 +146,33 @@ class SuspensionsPanel(ctk.CTkFrame):
     def _build_ui(self):
         style = ttk.Style()
         style.configure("Suspensions.Treeview", background=COLOR_BG, foreground=COLOR_TEXT,
-                        fieldbackground=COLOR_BG, rowheight=28, bordercolor=COLOR_BORDER)
+                        fieldbackground=COLOR_BG, rowheight=32, bordercolor=COLOR_BORDER,
+                        font=("Segoe UI", 11), relief="flat", borderwidth=0)
         style.configure("Suspensions.Treeview.Heading", background=COLOR_SURFACE,
-                        foreground=COLOR_TEXT, relief="flat")
+                        foreground=COLOR_TEXT_MUTED, relief="flat",
+                        font=("Segoe UI", 10, "bold"), padding=(10, 8))
         style.map("Suspensions.Treeview", background=[("selected", COLOR_ACCENT)],
                   foreground=[("selected", COLOR_TEXT)])
         header = ctk.CTkFrame(self, fg_color="transparent")
         header.grid(row=0, column=0, sticky="ew", pady=(0, 8))
-        ctk.CTkLabel(header, text="Suspensions", font=heading_font(20),
+        ctk.CTkLabel(header, text="Suspensions", font=heading_font(24),
                      text_color=COLOR_TEXT).pack(side="left")
-        ctk.CTkButton(header, text="Refresh", width=90, height=32,
+        ctk.CTkButton(header, text="Refresh records", width=128, height=34,
                       fg_color=COLOR_BORDER, hover_color=COLOR_ACCENT_HOVER,
                       command=self.refresh).pack(side="right")
-        search_tools = ctk.CTkFrame(self, fg_color="transparent")
+        search_tools = ctk.CTkFrame(self, fg_color=COLOR_SURFACE,
+                                    corner_radius=CORNER_RADIUS, border_width=1, border_color=COLOR_BORDER)
         search_tools.grid(row=1, column=0, sticky="ew", pady=(0, 6))
         search_tools.grid_columnconfigure(0, weight=1)
         self._search_var = tk.StringVar()
         self._year_var = tk.StringVar(value=ALL_YEARS)
         self._course_var = tk.StringVar(value=ALL_COURSES)
         toolbar = ctk.CTkFrame(search_tools, fg_color="transparent")
-        toolbar.grid(row=0, column=0, sticky="ew")
+        self._search_entry = ctk.CTkEntry(search_tools, textvariable=self._search_var,
+            placeholder_text="Search students by name or student ID", height=36,
+            fg_color=COLOR_BG, border_color=COLOR_BORDER, corner_radius=8)
+        self._search_entry.grid(row=0, column=0, sticky="ew", padx=12, pady=(10, 8))
+        toolbar.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 10))
         toolbar.grid_columnconfigure((1, 3), weight=1)
         for column, text in ((0, "Year Level:"), (2, "Course:")):
             ctk.CTkLabel(toolbar, text=text, font=body_small_font(), text_color=COLOR_TEXT_MUTED).grid(
@@ -183,18 +198,38 @@ class SuspensionsPanel(ctk.CTkFrame):
         self._result_count = self._label(selector, "0 of 0 students", text_color=COLOR_TEXT_MUTED)
         self._student_tree = self._table(selector, [
             ("name", "Student name", 230), ("sid", "Student ID", 155),
-            ("year", "Year Level", 110), ("course", "Course", 130)], height=3)
+            ("year", "Year Level", 110), ("course", "Course", 130)], height=2)
         self._student_tree.bind("<<TreeviewSelect>>", self._on_student_select)
         summary = ctk.CTkFrame(self, fg_color=COLOR_SURFACE, corner_radius=CORNER_RADIUS)
         summary.grid(row=3, column=0, sticky="ew", pady=8)
         inner = ctk.CTkFrame(summary, fg_color="transparent")
         inner.pack(fill="x", padx=PADDING, pady=8)
         self._identity = self._label(inner, text_color=COLOR_TEXT)
-        self._strike_summary = self._label(inner, text_color=COLOR_ACCENT)
-        self._suspension_status = self._label(inner, text_color=COLOR_TEXT)
+        self._identity.configure(font=heading_font(16))
+        metrics = ctk.CTkFrame(inner, fg_color="transparent", height=92)
+        metrics.pack(fill="x", pady=(6, 4))
+        metrics.grid_propagate(False)
+        metrics.grid_rowconfigure(0, weight=1)
+        metrics.grid_columnconfigure(0, weight=3, uniform="summary")
+        metrics.grid_columnconfigure(1, weight=2, uniform="summary")
+        for column, title in enumerate(("SEMESTER STRIKES", "SUSPENSION STATUS")):
+            card = ctk.CTkFrame(metrics, fg_color=COLOR_BG, corner_radius=8)
+            card.grid(row=0, column=column, sticky="nsew", padx=(0, 8) if column == 0 else 0)
+            content = ctk.CTkFrame(card, fg_color="transparent")
+            content.pack(fill="both", expand=True, padx=10, pady=6)
+            self._label(content, title, text_color=COLOR_TEXT_MUTED).configure(font=heading_font(10))
+            value = self._label(content, text_color=COLOR_ACCENT if column == 0 else COLOR_TEXT)
+            if column == 0:
+                self._strike_summary = value
+            else:
+                self._suspension_status = value
         self._explanation = self._label(inner, text_color=COLOR_TEXT_MUTED)
 
-        self._tabs = ctk.CTkTabview(self, fg_color=COLOR_SURFACE, corner_radius=CORNER_RADIUS)
+        self._tabs = ctk.CTkTabview(self, fg_color=COLOR_SURFACE, corner_radius=CORNER_RADIUS,
+            segmented_button_fg_color=COLOR_BG, segmented_button_selected_color=COLOR_ACCENT,
+            segmented_button_selected_hover_color=COLOR_ACCENT_HOVER,
+            segmented_button_unselected_color=COLOR_BG,
+            segmented_button_unselected_hover_color=COLOR_BORDER)
         self._tabs.grid(row=4, column=0, sticky="nsew")
         violations, history = (self._tabs.add(name) for name in
                                ("Violation History", "Suspension History"))
@@ -216,15 +251,16 @@ class SuspensionsPanel(ctk.CTkFrame):
         self._history_tree = self._table(history, [
             ("id", "Suspension ID", 100), ("status", "Status", 145),
             ("start", "Starts (UTC)", 155), ("end", "Ends (UTC)", 155),
-            ("reason", "Reason", 240), ("violation", "Related violation", 130)], height=4)
+            ("reason", "Reason", 240), ("violation", "Related violation", 130)], height=3)
         self._history_detail = self._label(history_actions, text_color=COLOR_TEXT_MUTED)
         self._label(history_actions, "Reason for lifting / cancelling suspension (required)",
                     text_color=COLOR_TEXT_MUTED)
         self._lift_reason = ctk.CTkEntry(history_actions, placeholder_text="Reason for lifting / cancelling (required)")
-        self._lift_reason.pack(fill="x", pady=5)
-        self._lift_btn = ctk.CTkButton(history_actions, text="Lift / Cancel Selected", fg_color=COLOR_DANGER,
+        self._lift_reason.pack(side="left", fill="x", expand=True, padx=(0, 10), pady=(4, 8))
+        self._lift_btn = ctk.CTkButton(history_actions, text="Lift / Cancel Selected", width=160, height=34,
+                                       fg_color=COLOR_ACCENT, hover_color=COLOR_ACCENT_HOVER,
                                        command=self._lift_selected)
-        self._lift_btn.pack(anchor="e", pady=5)
+        self._lift_btn.pack(side="right", pady=(4, 8))
         self._history_tree.bind("<<TreeviewSelect>>", self._on_suspension_select)
 
         self._message = ctk.CTkLabel(self, text="", anchor="w", justify="left", width=1,

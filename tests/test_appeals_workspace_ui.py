@@ -87,6 +87,27 @@ class AppealsWorkspaceTests(unittest.TestCase):
         self.until(lambda:self.panel.status.cget('text')=='')
         self.assertAlmostEqual(self.panel.listing._parent_canvas.yview()[0],position,delta=.02)
 
+    def test_history_available_to_both_admin_roles_and_survives_restart(self):
+        aid = self.ids[0]
+        self.assertTrue(self.db.update_appeal_decision(
+            aid, 'approved', 'Uniform evidence verified', decided_by='admin'))
+        reopened = CBVMSDatabase(self.db.db_path)
+        reopened.initialize(process_deadlines=False)
+        for username in ('admin', 'superadmin'):
+            history = reopened.get_appeal_inbox(username=username, status='history',
+                                                search='2023-00883')
+            self.assertEqual(history['total'], 1)
+            row = history['rows'][0]
+            self.assertEqual(row['id'], aid)
+            self.assertEqual(row['decided_by'], 'admin')
+            self.assertEqual(row['admin_notes'], 'Uniform evidence verified')
+            self.assertTrue(row['decided_at'])
+        self.panel.show_history()
+        self.until(lambda: self.panel.listing is not None and self.panel.status.cget('text') == '')
+        self.assertEqual(self.panel.heading.cget('text'), 'Appeal History')
+        with self.assertRaises(PermissionError):
+            reopened.get_appeal_inbox(username='student', status='history')
+
     def test_competing_decision_displays_winner_and_reason_required(self):
         aid=self.ids[0];self.open(aid)
         self.panel.approve.invoke()
