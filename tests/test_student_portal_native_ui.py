@@ -1,3 +1,4 @@
+from tests.auth_fixture import portal_session
 """Native sidebar navigation and workflow tests using isolated SQLite records."""
 from datetime import datetime, timezone
 from pathlib import Path
@@ -49,7 +50,7 @@ class PortalNativeTests(unittest.TestCase):
         self.db.initialize()
         for sid in (self.SID, self.OTHER):
             self.db.insert_student(sid, 'Same display name', 'BSIT', '3A', b'', b'')
-        self.app = StudentPortal(student_id=self.SID, display_name='Portal test', database=self.db)
+        self.app = StudentPortal(student_id=self.SID, display_name='Portal test', database=self.db, session_token=portal_session(self.db, self.SID))
         self.errors = []
         self.app.report_callback_exception = lambda *args: self.errors.append(args)
         self.wait_page()
@@ -147,7 +148,10 @@ class PortalNativeTests(unittest.TestCase):
             self.wait_page()
         appeal = self.db.get_appeals_for_student(self.SID)[0]
         self.assertEqual(appeal['violation_id'], own)
-        self.db.update_appeal_decision(appeal['id'], 'approved', 'Verified test evidence', decided_by='admin')
+        self.db.update_appeal_decision(appeal['id'], 'approved', 'Verified test evidence', decided_by='admin', decision_category_code='approval.detection_error')
+        self.click('appeals');self.wait_page()
+        self.assertIn('Decision category: Uniform compliant / detection error',self.texts())
+        self.assertIn('Verified test evidence',self.texts())
         pending = self.detect()
         self.db.dismiss_violation(pending, decided_by='test', reason='False positive')
         self.click('violations')
@@ -218,7 +222,7 @@ class PortalNativeTests(unittest.TestCase):
         self.app._logout_button.invoke()
         self.assertTrue(self.app._refresh.done.wait(2))
         gc.collect()
-        self.app = StudentPortal(student_id=self.SID, display_name='Relogin test', database=self.db)
+        self.app = StudentPortal(student_id=self.SID, display_name='Relogin test', database=self.db, session_token=portal_session(self.db, self.SID))
         self.app.report_callback_exception = lambda *args: self.errors.append(args)
         self.wait_page()
         self.click('notifications')
@@ -371,14 +375,13 @@ class PortalNativeTests(unittest.TestCase):
         self.wait_page()
         self.assertEqual(self.db.get_student_by_student_id(self.SID)['name'], 'Updated Test Name')
         self.assertEqual(self.db.get_student_by_student_id(self.OTHER)['name'], 'Same display name')
-        self.db.insert_student_account(self.SID, 'native-test', 'old-password')
         entries = [w for w in self.widgets() if isinstance(w, ctk.CTkEntry)]
         self.assertEqual(len(entries), 3)
-        for entry, value in zip(entries, ('old-password', 'new-password', 'new-password')):
+        for entry, value in zip(entries, ('fixture personal passphrase', 'new-password', 'new-password')):
             entry.insert(0, value)
         self.button('Save Password').invoke()
         self.until(lambda: self.app._action_request is None)
-        self.assertEqual(self.db.verify_student_account('native-test', 'new-password')['student_id'], self.SID)
+        self.assertEqual(self.db.verify_student_account(self.SID, 'new-password')['student_id'], self.SID)
         photo = Path(self.tmp.name) / 'profile.png'
         Image.new('RGB', (90, 60), 'green').save(photo)
         with patch('ui.student_portal.filedialog.askopenfilename', return_value=str(photo)):

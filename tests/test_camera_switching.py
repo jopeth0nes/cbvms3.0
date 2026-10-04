@@ -498,6 +498,7 @@ class DashboardSwitchRegressionTests(unittest.TestCase):
             _camera_needed=lambda: True,
             _active_nav="live",
             _status_camera=MagicMock(), _status_models=MagicMock(),
+            _attendance_writer_status=MagicMock(), _database=MagicMock(),
             _readiness=types.SimpleNamespace(message=lambda: "Loading face detector", snapshot=lambda: {}),
             _retry_model_btn=MagicMock(),
             camera_feed=types.SimpleNamespace(

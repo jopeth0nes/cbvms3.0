@@ -18,7 +18,8 @@ class SavedYearLevelTests(unittest.TestCase):
             "2nd Year": [2, "2B", "2ND YEAR - A", "Second Year", "Year 2"],
             "3rd Year": [3, "3A", "3rd Year", "Third Year", "3 / B"],
             "4th Year": [4, "4A", "4th Year", "Fourth Year - C"],
-            None: [None, "", "   ", "Unknown", "2023-00883", "2023", "5A"],
+            "5th Year": ["5A"],
+            None: [None, "", "   ", "Unknown", "2023-00883", "2023"],
         }.items():
             for value in values:
                 with self.subTest(value=value):
@@ -83,7 +84,7 @@ class SuspensionHistoryTests(unittest.TestCase):
             self.db.confirm_violation(vid)
         self.assertEqual(len(self.db.get_suspension_history(self.SID)), 1)
         appeal = self.db.get_appeal_for_violation(ids[0])["id"]
-        self.assertTrue(self.db.update_appeal_decision(appeal, "approved", "Evidence accepted", decided_by="admin"))
+        self.assertTrue(self.db.update_appeal_decision(appeal, "approved", "Evidence accepted", decided_by="admin", decision_category_code='approval.detection_error'))
         self.assertEqual(self.db.get_strike_count(self.SID, "earring"), 2)
         self.assertEqual(self.db.get_active_suspension(self.SID)["id"], suspension_id)
         rows = {row["id"]: row for row in self.db.get_discipline_history_for_student(self.SID)}
@@ -109,13 +110,13 @@ class SuspensionHistoryTests(unittest.TestCase):
         from ui.student_portal import _NAV_ITEMS
         student_login = MagicMock()
         student_login.result = {"role": "student", "student_id": self.SID,
-                                "display_name": "Same Name", "username": "learner"}
+                                "display_name": "Same Name", "username": "learner", "session_token": "fixture-session"}
         portal = MagicMock(logged_out=False)
         auth = MagicMock()
         with patch("auth.login.CBVMSLoginWindow", return_value=student_login), \
                 patch("ui.student_portal.StudentPortal", return_value=portal) as factory:
             self.assertIsNone(run_login(auth))
-            factory.assert_called_once_with(student_id=self.SID, display_name="Same Name", database=auth._db)
+            factory.assert_called_once_with(student_id=self.SID, display_name="Same Name", database=auth._db, session_token="fixture-session")
         self.assertNotIn("suspensions", [key for key, _ in _NAV_ITEMS])
         admin_login = MagicMock()
         admin_login.result = {"role": "admin", "username": "osa"}

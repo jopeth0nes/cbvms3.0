@@ -14,6 +14,8 @@ import weakref
 import cv2
 import numpy as np
 
+from core.attendance import Sighting, utc_stamp, snapshot_fields
+import json
 from core.live_state import FrameContext, LiveState, associate_faces_to_bodies, validate_torso
 from core.person_detector import MAX_TORSO_SKIN_FRACTION, skin_fraction
 from core.student_status import standing_label, suspension_label
@@ -58,6 +60,8 @@ class MonitorTask:
     earring_enabled: bool = True
     camera_generation: int = 0
     observations: tuple[TrackedFace, ...] | None = None
+    source_id: str = "unspecified-camera"
+    source_label: str = "Unspecified camera"
 
     def __post_init__(self):
         frame = self.frame.copy()
@@ -162,12 +166,14 @@ class LiveProcessor:
         self.state=state or LiveState()
         self.cooldowns={}
         self.attendance_cooldowns={}
+        self.attendance_writer=None
+        self.read_database=None
         self.suspension_cooldowns={}
         self.write_count=0
         self._analyzed_frames = deque(maxlen=128)
         self.readiness = None
         self.publish_identity = None
-        self.identity_state = LiveState()
+        self.identity_state = LiveState(self.state.config)
         self._assessment_cursor = 0
 
     def analyze(self,task):
@@ -200,18 +206,24 @@ class LiveProcessor:
         if not task.valid():
             event("frame_rejected", stage="recognition", reason=task.rejection())
             return None
+        read_database = self.read_database or self.database
+        term = read_database.attendance_term_snapshot()
+        if not isinstance(term, dict):
+            term = {}
         for row in rows:
             row.update(student_status="Unknown person",discipline_eligible=False,suspension_tag="")
             if row.get('matched'):
-                student=self.database.get_student_by_student_id(row.get('student_id'))
+                student=read_database.get_student_by_student_id(row.get('student_id'))
                 if student is None:
                     row.update(matched=False,identity_uncertain=True,student_id="",name="Identity uncertain")
                     continue
+                row['academic_snapshot'] = tuple(snapshot_fields(student).items())
+                row['term_snapshot'] = tuple(term.items())
                 row['name'] = student.get('name') or row.get('name', '')
                 row['gender'] = student.get('gender') or row.get('gender', '')
                 row['student_status']=standing_label(student)
                 row['discipline_eligible']=(student['student_status']=='Enrolled' and not student['registration_pending'])
-                suspension=self.database.get_active_suspension(student['student_id'])
+                suspension=read_database.get_active_suspension(student['student_id'])
                 row['suspension_tag']=suspension_label(suspension) if suspension else ''
         if task.observations is None and self.publish_identity is not None and task.valid():
             identities = self.identity_state.update(task.context, rows, now=time.monotonic())
@@ -343,6 +355,53 @@ class LiveProcessor:
         if task.valid():
             self.state.update(task.context, (), now=time.monotonic())
 
+    def submit_attendance(self,result):
+        """Freeze a qualified identity before replaceable discipline queues or DB latency.
+
+        Freshness and same-person motion are checked here, never relaxed. Once
+        qualified, delayed persistence checks cancellation, not a new frame's identity.
+        """
+        task=result.task
+        latest=self.latest_sample()
+        if (not task.valid() or latest is None or latest.frame_id[0]!=task.context.frame_id[0]
+                or not 0<=time.monotonic()-latest.captured_at<=1):
+            return
+        observed=datetime.fromtimestamp(task.observed_at,timezone.utc)
+        for assessment in result.assessments:
+            if (assessment.context!=task.context or not assessment.reliable_identity or not assessment.student_id
+                    or not task.valid()):
+                continue
+            if latest.frame_id!=task.context.frame_id and MotionProjection(task.frame,assessment.face_box).advance(latest.frame) is None:
+                continue
+            snapshot=dict(assessment.academic_snapshot)
+            term=dict(assessment.term_snapshot)
+            fact=Sighting(student_id=assessment.student_id,student_name=assessment.name,
+                observed_at=utc_stamp(observed),source_id=task.source_id,source_label=task.source_label,
+                session_id=str(task.context.frame_id[0]),frame_id=json.dumps(task.context.frame_id,default=str),
+                monitor_generation=task.context.generation,camera_generation=task.camera_generation,
+                presence_id=assessment.presence_id,student_status=assessment.student_status,
+                college_department=snapshot.get('college_department','Unspecified/Needs review'),
+                course=snapshot.get('course','Unspecified/Needs review'),report_year_level=snapshot.get('report_year_level',''),
+                report_section=snapshot.get('report_section',''),semester_id=term.get('id'),
+                semester_name=term.get('semester_name',''),school_year=term.get('school_year',''))
+            if self.attendance_writer is not None:
+                self.attendance_writer.offer(fact,task.cancelled)
+            else:
+                # Synchronous adapter for legacy callers/tests. The live application always uses the bounded writer.
+                now=time.monotonic()
+                if now-self.attendance_cooldowns.get(assessment.student_id,-300)<300:
+                    continue
+                def guard():
+                    current=self.latest_sample()
+                    return (task.valid() and current is not None and current.frame_id[0]==task.context.frame_id[0]
+                        and 0<=time.monotonic()-current.captured_at<=1
+                        and (current.frame_id==task.context.frame_id or MotionProjection(task.frame,assessment.face_box).advance(current.frame) is not None))
+                try:
+                    if self.database.record_attendance(assessment.student_id,observed_at=observed,sighting=fact,valid_if=guard):
+                        self.attendance_cooldowns[assessment.student_id]=now
+                except Exception as exc:
+                    event('attendance_write_failed',error=str(exc))
+
     def persist(self,result):
         """Side effects consume the very same accepted assessment as the UI.
 
@@ -350,6 +409,8 @@ class LiveProcessor:
         notifications. Failed writes do not consume cooldowns.
         """
         task=result.task
+        if self.attendance_writer is None:
+            self.submit_attendance(result)
         if not task.valid():
             return
         observed=datetime.fromtimestamp(task.observed_at,timezone.utc)
@@ -383,20 +444,13 @@ class LiveProcessor:
                 return MotionProjection(task.frame, assessment.face_box).advance(current.frame) is not None
             sid=assessment.student_id
             if assessment.reliable_identity:
-                key=(sid,observed.astimezone().date().isoformat())
-                if now-self.attendance_cooldowns.get(key,-30)>=30 and guard():
+                key=(sid, 'premises')
+                if assessment.student_status in ('Graduate','Unenrolled') and now-self.attendance_cooldowns.get(key,-30)>=30 and guard():
                     try:
-                        if assessment.student_status in ('Graduate','Unenrolled'):
-                            ok=self.database.record_premises_entry(sid,observed_at=observed,valid_if=guard)
-                        elif assessment.discipline_eligible:
-                            ok=self.database.record_attendance(sid,observed_at=observed,valid_if=guard)
-                        else:
-                            ok=False
-                        if ok:
+                        if self.database.record_premises_entry(sid,observed_at=observed,valid_if=guard):
                             self.attendance_cooldowns[key]=now
-                        event("database_presence_outcome", student_id=sid, committed=bool(ok))
                     except Exception as exc:
-                        event("database_presence_failed", student_id=sid, error=str(exc))
+                        event('database_presence_failed',student_id=sid,error=str(exc))
                 tag=assessment.suspension_tag
                 suspension_key=(sid,tag)
                 if tag and guard() and now-self.suspension_cooldowns.get(suspension_key,-30)>=30:
@@ -525,6 +579,13 @@ class LiveWorker:
     """One stoppable worker with single-slot input/output queues."""
     def __init__(self,processor, *, persistence_worker=False):
         self.processor=processor
+        self.attendance_writer = None
+        if persistence_worker and isinstance(processor,LiveProcessor):
+            from core.attendance_writer import AttendanceWriter
+            self.attendance_writer = processor.attendance_writer = AttendanceWriter(processor.database)
+            from copy import copy
+            processor.read_database = copy(processor.database)
+            processor.read_database.timeout = .1
         self.requests=queue.Queue(maxsize=1)
         self.results=queue.Queue(maxsize=1)
         self.stop_event=threading.Event()
@@ -539,10 +600,17 @@ class LiveWorker:
         if not persistence_worker:
             self.writes_done.set()
         if persistence_worker:
-            processor.publish_identity = lambda result: put_latest(self.results, result)
+            def publish_identity(result):
+                if self.attendance_writer is not None and not self.stop_event.is_set():
+                    # Existing confirmed identity result is independent of uniform inference.
+                    self.processor.submit_attendance(result)
+                put_latest(self.results, result)
+            processor.publish_identity = publish_identity
         self.thread=threading.Thread(target=self._run,daemon=True,name='live-monitor-analysis')
 
     def start(self):
+        if self.attendance_writer is not None:
+            self.attendance_writer.start()
         self.thread.start()
         if self.persistence_worker:
             threading.Thread(target=self._persist, daemon=True, name="live-monitor-database").start()
@@ -574,6 +642,8 @@ class LiveWorker:
 
     def stop(self):
         self.stop_event.set()
+        if self.attendance_writer is not None:
+            self.attendance_writer.stop()
         if self.active_task is not None:
             self.active_task.cancelled.set()
         if self.active_write is not None:
@@ -602,6 +672,8 @@ class LiveWorker:
                     if result is not None and task.valid() and not self.stop_event.is_set():
                         self.last_error = ""
                         if self.persistence_worker:
+                            if self.attendance_writer is not None:
+                                self.processor.submit_attendance(result)
                             put_latest(self.writes, result)
                         else:
                             self.processor.persist(result)

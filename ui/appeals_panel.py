@@ -3,6 +3,7 @@ import queue
 from concurrent.futures import ThreadPoolExecutor
 from tkinter import messagebox
 import customtkinter as ctk
+from core.appeal_categories import CATEGORIES, BY_CODE, BY_OPTION, SELECT_CATEGORY, category_display, validate_category
 from core.discipline import display_local_datetime as ts
 from core.evidence_integrity import original_evidence, supporting_evidence, INTEGRITY_HELP
 from ui.components import COLOR_BG, COLOR_SURFACE, COLOR_TEXT, COLOR_ACCENT, COLOR_DANGER
@@ -17,6 +18,14 @@ STATUS_COLORS = {
 }
 
 
+class DecisionCategoryMenu(ctk.CTkOptionMenu):
+    def destroy(self):
+        # CTk 5.2.2 unregisters the menu's appearance callback but leaves its
+        # scaling callback alive after case navigation destroys the menu.
+        ctk.ScalingTracker.remove_widget(self._dropdown_menu._set_scaling, self._dropdown_menu)
+        super().destroy()
+
+
 class AppealsPanel(ctk.CTkFrame):
     PAGE_SIZE = 10
 
@@ -26,6 +35,7 @@ class AppealsPanel(ctk.CTkFrame):
         self.offset, self.generation, self.case_id = 0, 0, None
         self.busy = False
         self._read_future = None
+        self._next_read = None
         self.closed = False
         self.drafts = {}
         self.case = {}
@@ -86,13 +96,14 @@ class AppealsPanel(ctk.CTkFrame):
             return
         generation = self.generation
         self.status.configure(text='Saving decision…' if action else 'Loading…')
+        if not action and self._read_future and not self._read_future.done():
+            self._next_read=(generation,operation,callback)
+            return
         def run():
             try:
                 self.results.put((generation, callback, operation(), None, action))
             except Exception as exc:
                 self.results.put((generation, callback, None, str(exc), action))
-        if not action and self._read_future:
-            self._read_future.cancel()
         future = self.executor.submit(run)
         if not action:
             self._read_future = future
@@ -110,7 +121,7 @@ class AppealsPanel(ctk.CTkFrame):
                         self.refresh()
                     continue
                 if error:
-                    self.status.configure(text=f'{error} Use Refresh to retry; your reason is preserved.')
+                    self.status.configure(text=f'{error} Use Refresh to retry; your category and reason are preserved.')
                     if self.case_id:
                         self._enable_decisions(True)
                 else:
@@ -118,6 +129,11 @@ class AppealsPanel(ctk.CTkFrame):
                     callback(value)
         except queue.Empty:
             pass
+        if self._next_read and (self._read_future is None or self._read_future.done()) and not self.busy:
+            generation,operation,callback=self._next_read
+            self._next_read=None
+            if generation==self.generation:
+                self._request(operation,callback)
         self._poll_job = self.after(50, self._poll)
 
     def _clear(self):
@@ -132,8 +148,11 @@ class AppealsPanel(ctk.CTkFrame):
                 widget.destroy()
 
     def _remember_reason(self):
-        if self.case_id and hasattr(self, 'reason') and self.reason.winfo_exists():
-            self.drafts[self.case_id] = self.reason.get('1.0', 'end-1c')
+        if (self.case_id and self.case.get('status') == 'pending'
+                and hasattr(self, 'reason') and self.reason.winfo_exists()):
+            selected = BY_OPTION.get(self.category.get())
+            self.drafts[self.case_id] = dict(reason=self.reason.get('1.0', 'end-1c'),
+                                            category=selected.code if selected else '')
 
     def on_show(self):
         self.refresh()
@@ -193,6 +212,7 @@ class AppealsPanel(ctk.CTkFrame):
             if row['status'] in ('approved', 'rejected'):
                 decision_details = (f"\nDecided: {ts(row.get('decided_at'))}"
                                     f" by {row.get('decided_by') or 'Not recorded'}"
+                                    f"\nDecision category: {category_display(row)}"
                                     f"\nReason: {row.get('admin_notes') or 'Not recorded'}")
             tone, tint = STATUS_COLORS.get(row['status'], (MUTED, BORDER))
             card = ctk.CTkFrame(listing, fg_color=CARD, corner_radius=14,
@@ -336,14 +356,27 @@ class AppealsPanel(ctk.CTkFrame):
         if case['lifecycle_origin']=='reconciliation_required':
             self.status.configure(text='Historical strike conflict: reconciliation required. Existing history has been preserved.')
         self.footer.grid_columnconfigure(0,weight=1)
+        draft = self.drafts.get(self.case_id, {})
+        category_row = ctk.CTkFrame(self.footer, fg_color='transparent')
+        category_row.grid(row=0,column=0,sticky='ew',pady=(0,4))
+        category_row.grid_columnconfigure(1,weight=1)
+        ctk.CTkLabel(category_row,text='Decision category (required)',anchor='w',
+            font=ctk.CTkFont(size=13,weight='bold')).grid(row=0,column=0,padx=(0,10))
+        self.category = DecisionCategoryMenu(category_row,width=160,height=30,dynamic_resizing=False,
+            values=[SELECT_CATEGORY,*(category.option for category in CATEGORIES)],
+            command=lambda _:self._enable_decisions(not self.busy))
+        self.category.grid(row=0,column=1,sticky='ew')
+        selected = BY_CODE.get(draft.get('category'))
+        self.category.set((selected.option if selected else SELECT_CATEGORY)
+                          if case['status']=='pending' else category_display(case))
         ctk.CTkLabel(self.footer,text='Administrator decision reason (required)',anchor='w',
-            font=ctk.CTkFont(size=14, weight='bold')).grid(row=0,column=0,sticky='w',pady=(4,6))
-        self.reason=ctk.CTkTextbox(self.footer,height=64,wrap='word', corner_radius=10,
+            font=ctk.CTkFont(size=14, weight='bold')).grid(row=1,column=0,sticky='w',pady=(2,4))
+        self.reason=ctk.CTkTextbox(self.footer,height=54,wrap='word', corner_radius=10,
             border_width=1, border_color=BORDER)
-        self.reason.grid(row=1,column=0,sticky='ew')
-        self.reason.insert('1.0',self.drafts.get(self.case_id, '') if case['status']=='pending' else case['admin_notes'] or '')
+        self.reason.grid(row=2,column=0,sticky='ew')
+        self.reason.insert('1.0',draft.get('reason', '') if case['status']=='pending' else case['admin_notes'] or '')
         controls=ctk.CTkFrame(self.footer,fg_color='transparent')
-        controls.grid(row=2,column=0,sticky='ew',pady=5)
+        controls.grid(row=3,column=0,sticky='ew',pady=5)
         controls.grid_columnconfigure((0,1),weight=1)
         self.approve=ctk.CTkButton(controls,text='Approve Appeal',fg_color=COLOR_ACCENT,
                                  command=lambda:self._decide('approved'))
@@ -362,25 +395,37 @@ class AppealsPanel(ctk.CTkFrame):
             self.status.configure(text=f"{case['status'].title()} by {case['decided_by']} · {ts(case['decided_at'])}")
 
     def _enable_decisions(self, enabled):
-        allowed = enabled and self.case.get('status') == 'pending'
+        allowed = enabled and not self.busy and self.case.get('status') == 'pending'
+        selected = BY_OPTION.get(self.category.get()) if hasattr(self,'category') and self.category.winfo_exists() else None
+        for widget_name in ('category','reason'):
+            widget=getattr(self,widget_name,None)
+            if widget and widget.winfo_exists():
+                widget.configure(state='normal' if allowed else 'disabled')
         for name in ('approve', 'reject'):
             button = getattr(self, name, None)
             if button and button.winfo_exists():
-                blocked = name == 'reject' and self.case.get('integrity_blocked')
+                blocked = ((name == 'reject' and self.case.get('integrity_blocked')) or
+                           (selected is not None and selected.decision != ('approved' if name=='approve' else 'rejected')))
                 button.configure(state='normal' if allowed and not blocked else 'disabled')
 
     def _decide(self, decision):
-        if self.busy or self.case.get('id') != self.case_id:
+        if self.busy or self.case.get('id') != self.case_id or self.case.get('status')!='pending':
             return
         if decision == 'rejected' and self.case.get('integrity_blocked'):
             self.status.configure(text=INTEGRITY_HELP)
+            return
+        selected=BY_OPTION.get(self.category.get())
+        try:
+            category=validate_category(selected.code if selected else None,decision)
+        except ValueError as exc:
+            self.status.configure(text=str(exc))
             return
         notes=self.reason.get('1.0','end-1c').strip()
         if not notes:
             self.status.configure(text='Enter a decision reason before saving.')
             return
         effect='resolve this violation without a strike' if decision=='approved' else 'award one strike for this violation'
-        if not messagebox.askyesno('Save appeal decision',f'This will {effect}. Save the decision?',parent=self):
+        if not messagebox.askyesno('Save appeal decision',f'Category: {category.label}\nThis will {effect}. Save the decision?',parent=self):
             return
         self._remember_reason()
         self.busy=True
@@ -389,7 +434,7 @@ class AppealsPanel(ctk.CTkFrame):
         vid, evidence_keys = self.violation_id, self.case['evidence_keys']
         def save():
             ok=self.database.update_appeal_decision(aid,decision,notes,decided_by=self.username,
-                expected_violation_id=vid, expected_evidence_keys=evidence_keys)
+                expected_violation_id=vid, expected_evidence_keys=evidence_keys, decision_category_code=category.code)
             outcome=self.database.get_appeal_case(aid,username=self.username)
             if not ok and outcome['status']=='pending':
                 raise ValueError('Decision could not be saved. Refresh to check the evidence integrity, case association, and administrator access.')

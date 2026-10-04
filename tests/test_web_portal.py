@@ -59,6 +59,9 @@ class WebPortalTests(unittest.TestCase):
         status, session = self.request('/api/login', {'username': 'S1', 'password': 'password'})
         self.assertEqual(status, 200)
         self.csrf = session['csrf']
+        status, session = self.request('/api/setup/password', {'password': 'personal passphrase', 'confirmation': 'personal passphrase'})
+        self.assertEqual(status, 200, session)
+        self.csrf = session['csrf']
 
     def test_authentication_csrf_logout_and_preferences(self):
         self.assertEqual(self.request('/api/page')[0], 401)
@@ -86,6 +89,37 @@ class WebPortalTests(unittest.TestCase):
         self.assertEqual(self.db.get_unread_notification_count('S1'), 0)
         self.assertGreater(self.db.get_unread_notification_count('S2'), 0)
 
+    def test_student_cannot_query_or_export_other_students_attendance(self):
+        self.db.record_attendance('S2')
+        self.login()
+        for path in ('/api/attendance?student_id=S2', '/api/attendance/events?student_id=S2',
+                     '/api/attendance/export?student_id=S2', '/api/page?page=attendance&student_id=S2'):
+            status, body = self.request(path)
+            self.assertIn(status, (400, 404))
+            self.assertNotIn('first_seen', str(body))
+        self.assertEqual(self.request('/api/attendance', {'student_id': 'S2'})[0], 404)
+        self.assertEqual(self.db.query_attendance()['count'], 1)
+
+    def test_appeal_category_and_explanation_are_student_scoped(self):
+        vid=self.db.log_violation('S1','S1','wrong_uniform',snapshot_jpeg=picture_evidence()[2])
+        aid=self.db.insert_appeal(vid,'S1','Please review this original evidence.',evidence=picture_evidence())
+        self.assertTrue(self.db.update_appeal_decision(aid,'approved','Verified the original picture.',
+            decided_by='admin',decision_category_code='approval.detection_error'))
+        other=self.db.log_violation('S2','S2','wrong_uniform',snapshot_jpeg=picture_evidence()[2])
+        other_aid=self.db.insert_appeal(other,'S2','Private explanation for review.',evidence=picture_evidence())
+        self.assertTrue(self.db.update_appeal_decision(other_aid,'approved','Other student private outcome',
+            decided_by='admin',decision_category_code='approval.other'))
+        self.login()
+        status,data=self.request('/api/page?page=appeals&student_id=S2')
+        self.assertEqual(status,200)
+        self.assertEqual([a['id'] for a in data['_appeals']],[aid])
+        row=data['_appeals'][0]
+        self.assertEqual(row['decision_category_code'],'approval.detection_error')
+        self.assertEqual(row['decision_category_display'],'Uniform compliant / detection error')
+        self.assertEqual(row['admin_notes'],'Verified the original picture.')
+        self.assertNotIn('Other student private outcome',str(data))
+        self.assertEqual(self.request('/api/appeals/decision',{'appeal_id':other_aid,'decision':'rejected'})[0],404)
+
     def test_browser_appeals_share_admin_strikes_and_suspension(self):
         self.login()
         for strike in range(1, 4):
@@ -94,9 +128,9 @@ class WebPortalTests(unittest.TestCase):
                 'violation_id': vid, 'reason': 'Please review this picture.',
                 'filename': 'picture.png', 'file': base64.b64encode(picture_evidence()[2]).decode()})
             self.assertEqual(status, 201, appeal)
-            self.assertTrue(self.db.update_appeal_decision(appeal['id'], 'rejected', 'Reviewed', decided_by='admin'))
-        self.dispatch.assert_called_once()
-        self.assertIn('Suspension Notice', self.dispatch.call_args.args[3])
+            self.assertTrue(self.db.update_appeal_decision(appeal['id'], 'rejected', 'Reviewed', decided_by='admin', decision_category_code='rejection.violation_confirmed'))
+        suspension_notices = [call for call in self.dispatch.call_args_list if 'Suspension Notice' in call.args[3]]
+        self.assertEqual(len(suspension_notices), 1)
         status, page = self.request('/api/page?page=dashboard')
         self.assertEqual(status, 200)
         self.assertEqual(page['_strike_summary'][0]['active_count'], 3)

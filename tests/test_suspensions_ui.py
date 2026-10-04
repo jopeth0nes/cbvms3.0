@@ -125,6 +125,11 @@ class SuspensionsUITests(unittest.TestCase):
                                      on_open_suspensions=callback)
         self.addCleanup(enrollment.destroy)
         pk = self.db.get_student_by_student_id(self.SID)["id"]
+        deadline = time.monotonic() + 5
+        while enrollment._list_task.busy and time.monotonic() < deadline:
+            self.root.update()
+            time.sleep(.01)
+        self.assertFalse(enrollment._list_task.busy)
         enrollment._tree.selection_set(str(pk))
         enrollment._on_row_select()
         self.assertEqual(enrollment._details_btn.cget("text"), "Edit Details")
@@ -152,6 +157,7 @@ class SuspensionsUITests(unittest.TestCase):
         root._center_title = MagicMock()
         root._view_host = MagicMock()
         root._fade_transition = lambda callback: callback()
+        root._is_superadmin = False
         CBVMSDashboard._build_left_sidebar(root)
         self.assertIn("Suspensions", root._nav_buttons["suspensions"].cget("text"))
         root._nav_buttons["suspensions"].invoke()
@@ -215,7 +221,9 @@ class SuspensionsUITests(unittest.TestCase):
             ("missing-null", "Null Values", "", ""),
             ("unrecognized", "Unrecognized Year", "Unknown", "BSIT"),
         ):
-            self.db.insert_student(sid, name, course, year, b"", b"")
+            with self.db.connect() as conn:
+                conn.execute('INSERT INTO students(student_id,name,course,year_and_section) VALUES(?,?,?,?)',
+                             (sid, name, course, year))
         with self.db.connect() as conn:
             conn.execute("UPDATE students SET course=NULL, year_and_section=NULL WHERE student_id='missing-null'")
             conn.execute("UPDATE students SET course='  bscs  ' WHERE student_id='0001-00002'")
@@ -231,10 +239,10 @@ class SuspensionsUITests(unittest.TestCase):
         self.assertEqual(len(all_students), 14)
         self.assertEqual(self.panel._year_var.get(), ALL_YEARS)
         self.assertEqual(self.panel._course_var.get(), ALL_COURSES)
-        self.assertEqual(self.panel._course_filter.cget("values"), [ALL_COURSES, "BSCS", "BSIT", "Nursing"])
+        self.assertEqual(self.panel._course_filter.cget("values"), [ALL_COURSES, "Computer Science", "Information Technology", "Nursing", "Unspecified/Needs review"])
         self.assertEqual(self.panel._student_tree.item("0001-00001", "values"),
-                         ("Alice One", "0001-00001", "1st Year", "BSCS"))
-        self.assertEqual(self.panel._student_tree.item("missing-null", "values")[-2:], ("—", "—"))
+                         ("Alice One", "0001-00001", "1st Year", "Computer Science"))
+        self.assertEqual(self.panel._student_tree.item("missing-null", "values")[-2:], ("—", "Unspecified/Needs review"))
         years = {
             ALL_YEARS: all_students,
             "1st Year": {"0001-00001", "0001-00002"},
@@ -244,8 +252,8 @@ class SuspensionsUITests(unittest.TestCase):
         }
         courses = {
             ALL_COURSES: all_students,
-            "BSCS": {"0001-00001", "0001-00002", "0003-00005"},
-            "BSIT": {self.SID, self.OTHER, "0002-00003", "0004-00006", "0001-00008", "unrecognized"},
+            "Computer Science": {"0001-00001", "0001-00002", "0003-00005"},
+            "Information Technology": {self.SID, self.OTHER, "0002-00003", "0004-00006", "0001-00008", "unrecognized"},
             "Nursing": {"0002-00004", "0004-00007"},
         }
         # No Refresh: every dropdown change must filter the original complete list.
@@ -261,7 +269,7 @@ class SuspensionsUITests(unittest.TestCase):
     def test_filters_combine_with_name_and_exact_string_id_search_and_clear(self):
         self.seed_filter_students()
         self.panel._year_var.set("3rd Year")
-        self.panel._course_var.set("BSIT")
+        self.panel._course_var.set("Information Technology")
         for search, expected in (("FIRST student", {self.SID}), (self.SID, {self.SID}),
                                  (self.OTHER, {self.OTHER}), ("0003-00005", set()), ("no-match", set())):
             self.panel._search_var.set(search)
@@ -276,22 +284,22 @@ class SuspensionsUITests(unittest.TestCase):
     def test_refresh_preserves_filters_selection_and_updates_course_options(self):
         self.select(self.SID)
         self.panel._year_var.set("3rd Year")
-        self.panel._course_var.set("BSIT")
+        self.panel._course_var.set("Information Technology")
         self.panel._search_var.set("First")
         self.db.insert_student("0003-00100", "First Transfer", "BSIT", "Third Year", b"", b"")
-        self.db.insert_student("0004-00101", "New Course", "Engineering", "4A", b"", b"")
+        self.db.insert_student("0004-00101", "New Course", "Computer Engineering", "4A", b"", b"")
         self.panel.refresh()
         self.wait_loaded()
         self.assertEqual((self.panel._year_var.get(), self.panel._course_var.get(), self.panel._search_var.get()),
-                         ("3rd Year", "BSIT", "First"))
+                         ("3rd Year", "Information Technology", "First"))
         self.assertEqual(self.shown_students(), {self.SID, "0003-00100"})
         self.assertEqual(self.panel.student_id, self.SID)
         self.assertEqual(self.panel._student_tree.selection(), (self.SID,))
-        self.assertIn("Engineering", self.panel._course_filter.cget("values"))
+        self.assertIn("Computer Engineering", self.panel._course_filter.cget("values"))
         self.assertEqual(self.panel._lift_reason.cget("state"), "normal")
         # A saved year change on Refresh also excludes and clears the selection.
         with self.db.connect() as conn:
-            conn.execute("UPDATE students SET year_and_section='4A' WHERE student_id=?", (self.SID,))
+            conn.execute("UPDATE students SET year_and_section='4th Year - A', report_year_level='4th Year', report_section='A' WHERE student_id=?", (self.SID,))
         self.panel.refresh()
         self.wait_loaded()
         self.assertIsNone(self.panel.student_id)
@@ -303,7 +311,7 @@ class SuspensionsUITests(unittest.TestCase):
         self.select(self.SID)
         self.panel._lift_reason.insert(0, "Draft for the first student")
         self.panel._year_var.set("3rd Year")
-        self.panel._course_var.set("BSIT")
+        self.panel._course_var.set("Information Technology")
         self.assertEqual(self.panel.student_id, self.SID)
         self.assertEqual(self.panel._lift_reason.get(), "Draft for the first student")
         with self.db.connect() as conn:

@@ -75,7 +75,7 @@ class PortalRequestTests(unittest.TestCase):
         aid = self.db.insert_appeal(own, self.SID, 'Please review this picture and explanation.',
                                     evidence=picture_evidence())
         self.assertIsNotNone(aid)
-        self.db.update_appeal_decision(aid, 'approved', 'Verified', decided_by='admin')
+        self.db.update_appeal_decision(aid, 'approved', 'Verified', decided_by='admin', decision_category_code='approval.detection_error')
         data = page_snapshot(self.db, self.SID, 'settings', appeal_ids=(own,))
         self.assertFalse(data['_appeal_eligibility'][own]['eligible'])
         data = page_snapshot(self.db, self.SID, 'notifications')

@@ -15,7 +15,7 @@ class ReportCSVTests(unittest.TestCase):
         self.db = CBVMSDatabase(self.path / 'test.db')
         self.db.initialize(process_deadlines=False)
         self.db.insert_student('00001', 'Original', 'BSIT', '3A', b'face', b'photo')
-        self.row = dict(zip(ROSTER, ['00001', 'Updated', 'Computing', 'BSCS', 'B', '2nd Year']))
+        self.row = dict(zip(ROSTER, ['00001', 'Updated', 'College of Computer Studies', 'Computer Science', 'B', '2nd Year']))
 
     def test_roster_roundtrip_preserves_identity_and_face_data(self):
         target = self.path / 'roster.csv'
@@ -53,8 +53,8 @@ class ReportCSVTests(unittest.TestCase):
     def test_migration_is_idempotent_and_blank_classification_is_not_guessed(self):
         self.db.initialize(process_deadlines=False)
         with self.db.connect() as conn:
-            conn.execute("UPDATE students SET year_and_section='Unknown'")
+            conn.execute("UPDATE students SET year_and_section='Unknown', report_year_level='', report_section='', course='', college_department=''")
         row = live_rows(self.db, 'Roster')[0]
         self.assertEqual(row['section'], '')
-        self.assertEqual(row['college_department'], '')
+        self.assertEqual(row['college_department'], 'Unspecified/Needs review')
         self.assertEqual(row['year_level'], '')

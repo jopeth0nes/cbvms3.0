@@ -36,3 +36,6 @@ data/
 models/*.pt
 models/*.pth
 !models/.gitkeep
+
+# Metadata-only attendance retry journals (may contain student identifiers)
+*.attendance-pending/

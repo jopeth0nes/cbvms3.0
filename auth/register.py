@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from ui.academic_fields import AcademicFields
+from ui.background_task import BackgroundTask
 from core.student_status import CONTACT_FIELDS, validate_contacts
 
 import os
@@ -203,8 +205,8 @@ class StudentRegistrationWindow(ctk.CTkToplevel):
         self._e_username = row(1, "Username",         entry("choose a username"))
         self._e_password = row(2, "Password",         entry("at least 6 characters", show="•"))
         self._e_sid      = row(3, "Student ID",       entry("e.g. 2024-00001"))
-        self._e_course   = row(4, "Course",           entry("e.g. BSIT"))
-        self._e_year     = row(5, "Year & Section",   entry("e.g. 2ND YEAR - A"))
+        self._academics = AcademicFields(card)
+        self._academics.grid(row=4, column=0, columnspan=2, sticky="ew", padx=PADDING)
 
         # Gender
         ctk.CTkLabel(card, text="Gender", font=body_font(12),
@@ -432,16 +434,15 @@ class StudentRegistrationWindow(ctk.CTkToplevel):
         username = self._e_username.get().strip()
         password = self._e_password.get()
         sid      = self._e_sid.get().strip()
-        course   = self._e_course.get().strip()
-        year     = self._e_year.get().strip()
         gender   = self._gender_var.get()
         try:
+            academics = self._academics.values()
             contacts = validate_contacts({key: entry.get() for key, entry in self._contact_entries.items()})
         except ValueError as exc:
             self._set_err(str(exc))
             return
 
-        if not all([name, username, password, sid, course, year]):
+        if not all([name, username, password, sid]):
             self._set_err("Please fill in all fields.")
             return
         if len(username) < 3:
@@ -449,12 +450,6 @@ class StudentRegistrationWindow(ctk.CTkToplevel):
             return
         if len(password) < 6:
             self._set_err("Password must be at least 6 characters.")
-            return
-        if self.database.student_id_exists(sid):
-            self._set_err(f"Student ID '{sid}' is already registered.")
-            return
-        if self.database.username_exists(username):
-            self._set_err(f"Username '{username}' is already taken.")
             return
         if self._captured_frame is None:
             self._set_err("Position your face inside the guide.")
@@ -475,24 +470,29 @@ class StudentRegistrationWindow(ctk.CTkToplevel):
         self._set_err("")
         self._submitting = True
         self._cap_btn.configure(state="disabled")
-        # Commit the validated identity + frozen payload together on the UI thread.
-        # No camera reads, inference, or mutable form reads after this point.
-        try:
-            self.database.insert_student(
-                student_id=sid, name=name, course=course,
-                year_and_section=year, gender=gender,
-                encoding=blob, photo=photo_bytes, email=contacts["email"],
-                contacts=contacts, registration_pending=True,
-                account_username=username, account_password=password,
-            )
-            if self._recognizer and blob:
-                self._recognizer.load_known_faces()
-        except Exception as exc:
-            self._submitting = False
-            self._set_err(f"Registration failed: {exc}")
-            self._cap_btn.configure(state="normal")
-            return
-        self._on_success()
+        # Immutable form + frozen identity payload are committed together off Tk.
+        if not hasattr(self, '_save_task'):
+            self._save_task = BackgroundTask(self)
+        database, recognizer = self.database, self._recognizer
+        def save():
+            if database.student_id_exists(sid):
+                raise ValueError(f"Student ID '{sid}' is already registered.")
+            if database.username_exists(username):
+                raise ValueError(f"Username '{username}' is already taken.")
+            database.insert_student(student_id=sid, name=name, **academics, gender=gender,
+                encoding=blob, photo=photo_bytes, email=contacts['email'], contacts=contacts,
+                registration_pending=True, account_username=username, account_password=password)
+            if recognizer and blob:
+                try:
+                    recognizer.load_known_faces()
+                except Exception:
+                    pass  # Registration committed; next monitor load refreshes the gallery.
+        def failed(message):
+            if not self._save_task.busy:
+                self._submitting = False
+                self._cap_btn.configure(state='normal')
+            self._set_err(f'Registration: {message}')
+        self._save_task.run(save, lambda _: self._on_success(), failed)
 
     def _on_success(self) -> None:
         self._set_err("✓ Registered! You can log in; OSA must verify your enrollment.", ok=True)
@@ -529,6 +529,9 @@ class StudentRegistrationWindow(ctk.CTkToplevel):
             self._shutdown_camera()
 
     def _close(self) -> None:
+        if self._submitting and getattr(self, '_save_task', None) and self._save_task.busy:
+            self._set_err('Registration is saving. Please wait before closing.')
+            return
         self._shutdown_camera()
         try:
             self.grab_release()

@@ -24,6 +24,7 @@ class FixtureCamera:
     def __init__(self):
         self.camera=CameraCapture();self.camera._cap=self;self.camera.is_open=True
         self.step=0;self.person=0;self.disconnected=False
+        self.pump_lock=threading.Lock()
         self.stop=threading.Event();self.thread=threading.Thread(target=self.pump,daemon=True)
         self.thread.start()
 
@@ -36,7 +37,8 @@ class FixtureCamera:
 
     def pump(self):
         while not self.stop.wait(1/30):
-            if not self.disconnected:self.camera.read()
+            with self.pump_lock:
+                if not self.disconnected:self.camera.read()
 
     def latest(self):
         return None if self.disconnected else self.camera.get_latest_sample()
@@ -107,9 +109,16 @@ class EnrollmentNativeTests(unittest.TestCase):
 
     def begin(self,sid='FIXTURE'):
         self.panel._open_enroll_flow()
-        for key,value in dict(name='Disposable Fixture',student_id=sid,course='BSIT',year_and_section='3A').items():
+        for key,value in dict(name='Disposable Fixture',student_id=sid).items():
             self.panel._entries[key].insert(0,value)
+        academics = self.panel._academics
+        academics.college.set('College of Computer Studies')
+        academics.change_college(academics.college.get())
+        academics.course.set('Information Technology')
+        academics.year.set('3rd Year')
+        academics.section.insert(0, 'A')
         self.panel._enroll_continue(self.state)
+        self.until(lambda: self.state.get('session') is not None)
 
     def capture(self,step):
         self.camera.step=step
@@ -176,6 +185,9 @@ class EnrollmentNativeTests(unittest.TestCase):
     def test_update_photo_retake_and_owner_preservation(self):
         pk=self.db.insert_student('UPDATE','Fixture','BSIT','3A',b'',b'old')
         other=self.db.insert_student('OTHER','Other','BSIT','3A',b'',b'untouched')
+        self.panel._reload_students()
+        self.state = {}
+        self.until(lambda: not self.panel._list_task.busy)
         self.panel._selected_pk=pk
         self.panel._open_update_modal(dict(self.db.get_student(pk)))
         first=self.capture(0)
@@ -195,8 +207,11 @@ class EnrollmentNativeTests(unittest.TestCase):
         for person in (9,1):
             self.camera.person=0
             self.until(lambda:self.state['session'].ready)
-            self.state['cap_btn'].invoke()
-            self.camera.person=person
+            # The first post-click sample must represent the departure/replacement.
+            # Otherwise the producer can legally publish the old face during invoke().
+            with self.camera.pump_lock:
+                self.state['cap_btn'].invoke()
+                self.camera.person=person
             self.until(lambda:not self.state['session'].pending)
             self.assertIsNone(self.state['session'].frozen)
             self.assertFalse(self.db.student_id_exists('FIXTURE'))
@@ -241,7 +256,11 @@ class EnrollmentNativeTests(unittest.TestCase):
         old=self.state['session']
         self.panel._enroll_back_to_form(self.state)
         self.assertEqual(self.panel._entries['student_id'].get(),'FIXTURE')
+        self.assertEqual(self.panel._academics.course.get(), 'Information Technology')
+        self.assertEqual(self.panel._academics.year.get(), '3rd Year')
+        self.assertEqual(self.panel._academics.section.get(), 'A')
         self.panel._enroll_continue(self.state)
+        self.until(lambda: self.state['session'] is not old)
         self.assertIsNot(self.state['session'],old)
         self.until(lambda:self.state['session'].ready)
         self.camera.disconnected=True

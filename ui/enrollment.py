@@ -5,6 +5,11 @@ from __future__ import annotations
 from core.student_status import CONTACT_FIELDS, validate_contacts, standing_label, suspension_label
 from ui.student_management import open_student_details, open_premises_log
 
+from core.academics import display_academics
+from ui.academic_fields import AcademicFields
+from ui.background_task import BackgroundTask
+
+import gc
 import os
 import queue
 import uuid
@@ -93,6 +98,9 @@ class EnrollmentPanel(ctk.CTkFrame):
         self.username = username
         self.on_open_suspensions = on_open_suspensions
         self.database = database
+        self._list_task = BackgroundTask(self)
+        self._list_refresh_pending = False
+        self._delete_task = BackgroundTask(self)
         self.recognizer = recognizer
         self.get_frame = get_frame
         self.get_frame_sample = get_frame_sample
@@ -391,9 +399,22 @@ class EnrollmentPanel(ctk.CTkFrame):
     # ------------------------------------------------------------------
 
     def _reload_students(self) -> None:
-        rows = self.database.get_all_students()
-        self._students = [dict(row) for row in rows]
-        self._apply_filter()
+        if self._list_task.busy:
+            self._list_refresh_pending = True
+            return
+        def read():
+            students = [dict(row) for row in self.database.get_all_students()]
+            for student in students:
+                student['_active_suspension'] = self.database.get_active_suspension(student['student_id'])
+            return students
+        def loaded(students):
+            if self._list_refresh_pending:
+                self._list_refresh_pending = False
+                self._reload_students()
+                return
+            self._students = students
+            self._apply_filter()
+        self._list_task.run(read, loaded, lambda error: self._set_status(f'Could not load students: {error}', error=True))
 
     def _apply_filter(self) -> None:
         selection = self._tree.selection()
@@ -411,7 +432,7 @@ class EnrollmentPanel(ctk.CTkFrame):
             if query and query not in name and query not in sid:
                 continue
             shown += 1
-            active_suspension = self.database.get_active_suspension(student["student_id"])
+            active_suspension = student.get("_active_suspension")
             enrolled = student.get("enrolled_at") or ""
             if enrolled and "T" not in enrolled:
                 enrolled = enrolled.replace(" ", " ")[:16]
@@ -420,7 +441,7 @@ class EnrollmentPanel(ctk.CTkFrame):
                 values=(
                     student.get("name", ""),
                     student.get("student_id", ""),
-                    student.get("course", "") or "—",
+                    display_academics(student)["course"],
                     student.get("year_and_section", "") or "—",
                     student.get("gender", "") or "—",
                     standing_label(student),
@@ -462,14 +483,15 @@ class EnrollmentPanel(ctk.CTkFrame):
         self._selected_photo_label.configure(cursor="hand2")
         self._photo_hint.configure(text="Click to enlarge" if student.get("photo") else "")
         self._summary_name.configure(text=student.get("name") or "Unnamed student")
+        display = dict(student, **display_academics(student))
         self._summary_identity.configure(text=" · ".join(
-            str(student.get(key) or "—") for key in ("student_id", "course", "year_and_section")))
+            str(display.get(key) or "—") for key in ("student_id", "college_department", "course", "year_and_section")))
         standing = standing_label(student)
         self._summary_standing.configure(
             text=f"Status: {standing}",
             text_color=COLOR_SAFE if standing == "Enrolled" else COLOR_WARNING,
         )
-        active = self.database.get_active_suspension(student["student_id"])
+        active = student.get("_active_suspension")
         self._summary_suspension.configure(
             text=suspension_label(active), text_color=COLOR_DANGER if active else COLOR_TEXT_MUTED)
 
@@ -513,9 +535,6 @@ class EnrollmentPanel(ctk.CTkFrame):
         if self._selected_pk is None:
             return None
         student = next((s for s in self._students if s["id"] == self._selected_pk), None)
-        if student is None:
-            row = self.database.get_student(self._selected_pk)
-            student = dict(row) if row is not None else None
         return student
 
     @staticmethod
@@ -696,12 +715,14 @@ class EnrollmentPanel(ctk.CTkFrame):
         fields = [
             ("Full Name", "name"),
             ("Student ID", "student_id"),
-            ("Course", "course"),
-            ("Year and Section", "year_and_section"),
             *CONTACT_FIELDS,
         ]
         self._entries = {}
+        self._academics = AcademicFields(form)
+        self._academics.grid(row=2, column=0, columnspan=2, sticky="ew")
         for r, (label, key) in enumerate(fields):
+            if r >= 2:
+                r += 1
             ctk.CTkLabel(form, text=label, font=body_font(13), text_color=COLOR_TEXT_MUTED).grid(
                 row=r, column=0, sticky="w", pady=9, padx=(0, 16)
             )
@@ -711,12 +732,12 @@ class EnrollmentPanel(ctk.CTkFrame):
             self._entries[key] = entry
 
         ctk.CTkLabel(form, text="Gender", font=body_font(13), text_color=COLOR_TEXT_MUTED).grid(
-            row=len(fields), column=0, sticky="w", pady=9, padx=(0, 16)
+            row=len(fields) + 1, column=0, sticky="w", pady=9, padx=(0, 16)
         )
         self._gender_var = ctk.StringVar(value="Male")
         ctk.CTkSegmentedButton(
             form, values=["Male", "Female"], variable=self._gender_var, height=36,
-        ).grid(row=len(fields), column=1, sticky="ew", pady=9)
+        ).grid(row=len(fields) + 1, column=1, sticky="ew", pady=9)
 
         btns = ctk.CTkFrame(card, fg_color="transparent")
         btns.grid(row=3, column=0, sticky="ew", padx=PADDING_LG, pady=(14, PADDING_LG))
@@ -775,28 +796,37 @@ class EnrollmentPanel(ctk.CTkFrame):
             return
         name = self._entries["name"].get().strip()
         student_id = self._entries["student_id"].get().strip()
-        course = self._entries["course"].get().strip()
-        year_and_section = self._entries["year_and_section"].get().strip()
         email = self._entries["email"].get().strip()
 
-        if not all([name, student_id, course, year_and_section]):
-            self._set_enroll_status("Name, student ID, course, and year/section are required. Contacts are optional.", error=True)
+        if not all([name, student_id]):
+            self._set_enroll_status("Name and student ID are required. Contacts are optional.", error=True)
             return
         if email and not _EMAIL_RE.match(email):
             self._set_enroll_status(
                 "Please enter a valid email address (or leave it blank).", error=True)
             return
-        if self.database.student_id_exists(student_id):
-            self._set_enroll_status(f"Student ID '{student_id}' is already enrolled.", error=True)
-            return
-
         try:
+            self._academics.values()
             validate_contacts({key: self._entries[key].get() for _, key in CONTACT_FIELDS})
         except ValueError as exc:
             self._set_enroll_status(str(exc), error=True)
             return
-        self._set_enroll_status("")
-        self._build_enroll_capture(state)
+        self._set_enroll_status('Checking student ID…')
+        if 'details_task' not in state:
+            state['details_task'] = BackgroundTask(state['form_frame'])
+        snapshot = (student_id, self._academics.raw())
+        def checked(exists):
+            if (snapshot !=
+                    (self._entries['student_id'].get().strip(), self._academics.raw())):
+                self._set_enroll_status('Details changed. Continue again.', error=True)
+                return
+            if exists:
+                self._set_enroll_status(f"Student ID '{student_id}' is already enrolled.", error=True)
+                return
+            self._set_enroll_status('')
+            self._build_enroll_capture(state)
+        state['details_task'].run(lambda: self.database.student_id_exists(student_id), checked,
+            lambda message: self._set_enroll_status(message, error=True))
 
     def _build_enroll_capture(self, state: dict) -> None:
         """Sub-step 2 — guided multi-angle capture. The form is hidden (not destroyed) so
@@ -1005,7 +1035,7 @@ class EnrollmentPanel(ctk.CTkFrame):
         if "target_pk" in state:
             return ("update", self._selected_pk, state["target_student_id"])
         return ("enroll", tuple((key, entry.get().strip())
-                               for key, entry in self._entries.items()), self._gender_var.get())
+                               for key, entry in self._entries.items()), self._academics.raw(), self._gender_var.get())
 
     def _capture_current(self, state):
         return (state.get("alive", False) and state["modal"].winfo_exists()
@@ -1114,6 +1144,10 @@ class EnrollmentPanel(ctk.CTkFrame):
                 self._capture_inference_lock.release()
 
         try:
+            # Retire destroyed Tk widget/font cycles on their owning thread.
+            # Otherwise thread startup can trigger a font finalizer on the new
+            # worker while Tk is waiting for Thread.start(), deadlocking both.
+            gc.collect()
             threading.Thread(target=detect, daemon=True, name='enrollment-validation').start()
         except Exception as exc:
             state['worker_busy'] = False
@@ -1385,10 +1419,6 @@ class EnrollmentPanel(ctk.CTkFrame):
     def _capture_save_payload(self, state):
         if not self._capture_current(state) or not state.get("reviewing") or state.get("capturing") or state.get("saved"):
             raise ValueError("Capture changed. Review the selected student's face again.")
-        if "target_pk" in state:
-            row = self.database.get_student(state["target_pk"])
-            if row is None or row["student_id"] != state["target_student_id"]:
-                raise ValueError("Student record changed. Reopen capture for the correct student.")
         return capture_payload(self._ordered_captures(state), state["student_key"])
 
     def _save_capture_async(self, state, operation, completed):
@@ -1429,8 +1459,9 @@ class EnrollmentPanel(ctk.CTkFrame):
         try:
             blob,photo = self._capture_save_payload(state)
             values = {key:entry.get().strip() for key,entry in self._entries.items()}
-            if not all(values.get(k) for k in ('name','student_id','course','year_and_section')):
-                raise ValueError('Name, student ID, course, and year/section are required.')
+            values.update(self._academics.values())
+            if not all(values.get(k) for k in ('name','student_id')):
+                raise ValueError('Name and student ID are required.')
             contacts = {key:values.get(key,'') for _,key in CONTACT_FIELDS}
             validate_contacts(dict(contacts,email=values.get('email','')))
         except ValueError as exc:
@@ -1446,6 +1477,8 @@ class EnrollmentPanel(ctk.CTkFrame):
             # Row, contacts, photo, all confirmed embeddings, and account commit together.
             database.insert_student(student_id=sid,name=values['name'],course=values['course'],
                 year_and_section=values['year_and_section'],gender=gender,encoding=blob,photo=photo,
+                college_department=values['college_department'], report_year_level=values['report_year_level'],
+                report_section=values['report_section'],
                 email=values.get('email',''),contacts=contacts,account_password=password)
             note = ''
             try:
@@ -1484,6 +1517,9 @@ class EnrollmentPanel(ctk.CTkFrame):
         pk,sid = state['target_pk'],state['target_student_id']
         database,recognizer = self.database,self.recognizer
         def save():
+            row = database.get_student(pk)
+            if row is None or row['student_id'] != sid:
+                raise ValueError('Student record changed. Reopen capture for the correct student.')
             if not database.update_student_encoding(pk,blob,photo,expected_student_id=sid):
                 raise ValueError('Student record changed. Reopen Update Photo for the correct student.')
             note = ''
@@ -1517,13 +1553,16 @@ class EnrollmentPanel(ctk.CTkFrame):
         ):
             return
 
-        if self.database.delete_student(self._selected_pk):
-            self._set_status("Student deleted.", success=True)
-            self._reload_students()
-            if self.recognizer is not None:
+        pk = self._selected_pk
+        def remove():
+            deleted = self.database.delete_student(pk)
+            if deleted and self.recognizer is not None:
                 self.recognizer.load_known_faces()
-        else:
-            self._set_status("Delete failed.", error=True)
+            return deleted
+        def completed(deleted):
+            self._set_status('Student deleted.' if deleted else 'Delete failed.', success=deleted, error=not deleted)
+            self._reload_students()
+        self._delete_task.run(remove, completed, lambda error: self._set_status(error, error=True))
 
     # ------------------------------------------------------------------
     # View photo (enlarge) modal

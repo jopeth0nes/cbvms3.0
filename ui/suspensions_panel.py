@@ -11,6 +11,7 @@ from tkinter import ttk
 import customtkinter as ctk
 
 from core.discipline import parse_db_datetime, utc_now, violation_display_name
+from core.academics import YEAR_LEVELS, legacy_year_section, resolve_pair, NEEDS_REVIEW, display_academics
 from core.student_status import suspension_label
 from ui.components import (
     COLOR_ACCENT, COLOR_ACCENT_HOVER, COLOR_BG, COLOR_BORDER, COLOR_DANGER,
@@ -21,28 +22,17 @@ from ui.components import (
 
 ALL_YEARS = "All Year Levels"
 ALL_COURSES = "All Courses"
-YEAR_LEVELS = ("1st Year", "2nd Year", "3rd Year", "4th Year")
 NO_STUDENT_MATCHES = "No students match your search and filters."
 SELECT_STUDENT = "Select a student to view suspension details."
 
 
 def saved_year_level(value):
-    """Read a year from the saved Year & Section field, never from a student ID.
-
-    Enrollment saves free text (e.g. 3A); registration suggests 2ND YEAR - A.
-    Unknown formats remain unclassified instead of guessing a student's year.
-    """
-    text = " ".join(str(value or "").casefold().split())
-    words = {"first": "1", "second": "2", "third": "3", "fourth": "4"}
-    text = re.sub(r"\b(first|second|third|fourth)\b", lambda m: words[m[0]], text)
-    match = re.fullmatch(
-        r"(?:year\s+)?([1-4])(?:st|nd|rd|th)?(?:\s*(?:year|yr))?"
-        r"(?:\s*[-/,]?\s*(?:section\s+)?[a-z]{1,3}\d*)?", text)
-    return YEAR_LEVELS[int(match[1]) - 1] if match else None
+    return legacy_year_section(value)[0] or None
 
 
 def saved_course(value):
-    return " ".join(str(value or "").split())
+    pair = resolve_pair('', value)
+    return pair[1] if pair else NEEDS_REVIEW
 
 
 def strike_explanation(row, current_term_id):
@@ -360,12 +350,14 @@ class SuspensionsPanel(ctk.CTkFrame):
 
     def _sync_course_options(self):
         # Use the full reloaded student dataset, including rows hidden by filters.
-        courses = sorted({saved_course(s.get("course")) for s in self._students} - {""},
+        courses = sorted({display_academics(s)["course"] for s in self._students} - {""},
                          key=lambda value: (value.casefold(), value))
         distinct = {}
         for course in courses:
             distinct.setdefault(course.casefold(), course)
         self._course_filter.configure(values=[ALL_COURSES, *distinct.values()])
+        years = {s.get('report_year_level') or saved_year_level(s.get('year_and_section')) for s in self._students}
+        self._year_filter.configure(values=list(dict.fromkeys([ALL_YEARS, *YEAR_LEVELS, *sorted(years - {None, ''})])))
         # Keep the chosen value even if its last student was removed on Refresh.
         # It then correctly matches zero rows until the user changes/clears it.
 
@@ -392,8 +384,8 @@ class SuspensionsPanel(ctk.CTkFrame):
         for student in self._students:
             sid = student["student_id"]
             name = student.get("name") or ""
-            year = saved_year_level(student.get("year_and_section"))
-            course = saved_course(student.get("course"))
+            year = student.get("report_year_level") or saved_year_level(student.get("year_and_section"))
+            course = display_academics(student)["course"]
             if query and query not in sid.casefold() and query not in name.casefold():
                 continue
             if year_filter != ALL_YEARS and year != year_filter:

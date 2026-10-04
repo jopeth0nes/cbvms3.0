@@ -85,20 +85,20 @@ class EvidenceAssociationTests(AssociationFixture):
                 self.assertTrue(source['warning'])
                 self.assertEqual(source['blocked'],bool(expected))
                 self.assertIsNotNone(supporting_evidence(case['evidence'][0])['image'])
-        self.assertFalse(self.db.update_appeal_decision(aid,'rejected','Suspect evidence',decided_by='admin'))
+        self.assertFalse(self.db.update_appeal_decision(aid,'rejected','Suspect evidence',decided_by='admin', decision_category_code='rejection.violation_confirmed'))
         self.assertEqual(self.db.get_decision_history(),[])
-        self.assertTrue(self.db.update_appeal_decision(aid,'approved','Cannot substantiate with preserved original',decided_by='admin'))
+        self.assertTrue(self.db.update_appeal_decision(aid,'approved','Cannot substantiate with preserved original',decided_by='admin', decision_category_code='approval.detection_error'))
         self.assertEqual(self.db.get_strike_count('S1','wrong_uniform'),0)
 
     def test_supporting_mismatch_and_changed_record_prevent_rejection(self):
         aid = self.submit(self.new)
         case = self.db.get_appeal_case(aid, username='admin')
         keys = (original_evidence(case)['key'],supporting_evidence(case['evidence'][0])['key'])
-        self.assertFalse(self.db.update_appeal_decision(aid,'rejected','reviewed',decided_by='admin',expected_violation_id=self.old))
+        self.assertFalse(self.db.update_appeal_decision(aid,'rejected','reviewed',decided_by='admin',expected_violation_id=self.old, decision_category_code='rejection.violation_confirmed'))
         with self.db.connect() as conn:
             conn.execute('UPDATE evidence_files SET file_data=? WHERE appeal_id=?',(self.a,aid))
-        self.assertFalse(self.db.update_appeal_decision(aid,'rejected','reviewed',decided_by='admin',expected_evidence_keys=keys))
-        self.assertFalse(self.db.update_appeal_decision(aid,'rejected','reviewed',decided_by='admin'))
+        self.assertFalse(self.db.update_appeal_decision(aid,'rejected','reviewed',decided_by='admin',expected_evidence_keys=keys, decision_category_code='rejection.violation_confirmed'))
+        self.assertFalse(self.db.update_appeal_decision(aid,'rejected','reviewed',decided_by='admin', decision_category_code='rejection.violation_confirmed'))
         self.assertEqual(self.db.get_appeal_for_violation(self.new)['status'],'pending')
 
     def test_provenance_mismatch_and_expiry_hold(self):

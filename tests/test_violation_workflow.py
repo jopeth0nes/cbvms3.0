@@ -36,7 +36,7 @@ class ViolationWorkflowTests(unittest.TestCase):
                                    evidence=picture_evidence())
 
     def decide(self, aid, decision='rejected'):
-        return self.db.update_appeal_decision(aid,decision,'Evidence reviewed by administrator.',decided_by='admin')
+        return self.db.update_appeal_decision(aid,decision,'Evidence reviewed by administrator.',decided_by='admin', decision_category_code=('approval.detection_error' if decision=='approved' else 'rejection.violation_confirmed'))
 
     def count(self, table):
         with self.db.connect() as conn:
@@ -129,7 +129,7 @@ class ViolationWorkflowTests(unittest.TestCase):
     def test_decision_requires_real_admin_and_reason(self):
         aid=self.submit(self.detect())
         for actor,reason in [('', 'Reason'),(self.SID,'Reason'),('unknown','Reason'),('admin','  ')]:
-            self.assertFalse(self.db.update_appeal_decision(aid,'rejected',reason,decided_by=actor))
+            self.assertFalse(self.db.update_appeal_decision(aid,'rejected',reason,decided_by=actor, decision_category_code='rejection.violation_confirmed'))
         self.assertEqual(self.count('strikes'),0);self.assertEqual(self.count('decision_history'),0)
         with self.assertRaises(PermissionError):
             self.db.get_appeal_case(aid,username=self.SID)
@@ -193,6 +193,14 @@ class ViolationWorkflowTests(unittest.TestCase):
         self.assertEqual(self.db.get_strike_count(self.SID,'wrong_uniform'),3)
         self.assertEqual(self.count('strike_events'),1)
         self.assertTrue(self.db.get_strike_summary(self.SID)[0]['action_required'])
+        automatic = self.db.get_active_suspension(self.SID, now=self.now)
+        self.assertIsNotNone(automatic)
+        with self.assertRaisesRegex(ValueError, 'overlapping'):
+            self.db.impose_suspension(self.SID, reason='Office reviewed', starts_at=self.now,
+                ends_at=None, imposed_by='admin', violation_id=pending)
+        with patch('database.student_management.utc_now', return_value=self.now):
+            self.assertTrue(self.db.lift_suspension(automatic['id'], lifted_by='admin',
+                reason='Office reviewed and replaced with manual suspension'))
         suspension=self.db.impose_suspension(self.SID,reason='Office reviewed',starts_at=self.now,
             ends_at=None,imposed_by='admin',violation_id=pending)
         self.decide(aid,'approved')

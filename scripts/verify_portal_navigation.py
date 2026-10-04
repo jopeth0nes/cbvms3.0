@@ -35,7 +35,10 @@ def run_child(args):
             source.close()
             target.close()
         db = CBVMSDatabase(copy)
-        app = StudentPortal(student_id=args.student, display_name='Isolated portal verification', database=db)
+        db.initialize(process_deadlines=False)
+        from tests.auth_fixture import portal_session
+        token = portal_session(db, args.student)
+        app = StudentPortal(session_token=token, student_id=args.student, display_name='Isolated portal verification', database=db)
         app.title('CBVMS PORTAL TEST — disposable database copy')
         errors, samples = [], []
         app.report_callback_exception = lambda kind, value, tb: errors.append(f'{kind.__name__}: {value}')

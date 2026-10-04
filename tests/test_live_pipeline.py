@@ -234,7 +234,7 @@ class LivePipelineTests(unittest.TestCase):
                 student_id=sid, student_status=status, registration_pending=pending)
             result = fx.confirmed()
             fx.persist(result)
-            fx.database.record_attendance.assert_not_called()
+            fx.database.record_attendance.assert_called_once()
             fx.database.log_violation.assert_not_called()
             self.assertEqual(fx.database.record_premises_entry.call_count, int(not pending))
         fx = PipelineFixture()

@@ -19,3 +19,6 @@ tifffile==2024.8.30
 # HEIC/HEIF decode (iPhone/macOS default photo format) for Training-module uploads.
 # Pure Pillow add-on with bundled libheif — no system libraries required.
 pillow-heif==0.16.0
+
+# IANA timezone data for explicit Asia/Manila dates on systems without a zone database.
+tzdata>=2024.1

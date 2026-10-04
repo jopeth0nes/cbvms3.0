@@ -199,6 +199,8 @@ class LiveAssessment:
     uniform_confidence: float
     accepted_categories: tuple[str, ...]
     association_valid: bool
+    academic_snapshot: tuple = ()
+    term_snapshot: tuple = ()
 
     @property
     def matched(self) -> bool:
@@ -506,4 +508,6 @@ class LiveState:
             discipline_eligible=eligible, reliable_identity=reliable,
             state=state, reason=reason, uniform_label=label, uniform_confidence=confidence,
             accepted_categories=tuple(accepted), association_valid=association_valid,
+            academic_snapshot=tuple(row.get("academic_snapshot", ())),
+            term_snapshot=tuple(row.get("term_snapshot", ())),
         )

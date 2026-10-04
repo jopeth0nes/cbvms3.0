@@ -133,7 +133,7 @@ class LivePersistenceTests(unittest.TestCase):
         self.assertFalse(self.db.record_premises_entry(
             "G1", observed_at=newer, valid_if=Mock(side_effect=[True, False])))
         self.assertEqual(self.db.get_attendance_report()[0]["last_seen"],
-                         format_db_datetime(self.observed))
+                         format_db_datetime(self.observed)+".000000")
         self.assertEqual(self.db.get_premises_entries()[0]["last_seen"],
                          format_db_datetime(self.observed))
         # A valid deduplicated entry still updates last_seen without creating a

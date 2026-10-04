@@ -3,6 +3,8 @@ import tkinter as tk
 from tkinter import ttk
 import customtkinter as ctk
 
+from ui.academic_fields import AcademicFields
+from ui.background_task import BackgroundTask
 from core.student_status import CONTACT_FIELDS, STUDENT_STATUSES
 from ui.components import (COLOR_BG, COLOR_SURFACE, COLOR_TEXT, COLOR_TEXT_MUTED,
                            COLOR_ACCENT, COLOR_DANGER, CORNER_RADIUS, heading_font, body_font)
@@ -29,51 +31,79 @@ def _field(parent, label, value=""):
 
 
 def open_student_details(parent, database, student_id, actor, on_saved):
-    student = database.get_student_by_student_id(student_id)
-    if not student:
-        return
     win = _window(parent, "Student Details")
-    tabs = ctk.CTkTabview(win, corner_radius=CORNER_RADIUS)
-    tabs.pack(fill="both", expand=True, padx=16, pady=16)
-    details, history = (tabs.add(name) for name in ("Details", "Status History"))
-    form = ctk.CTkScrollableFrame(details, fg_color=COLOR_SURFACE)
-    form.pack(fill="both", expand=True)
-    ctk.CTkLabel(form, text=f"{student['name']} · {student_id}", font=heading_font(16),
-                 text_color=COLOR_TEXT).pack(anchor="w", pady=8)
-    ctk.CTkLabel(form, text="Academic status", text_color=COLOR_TEXT_MUTED).pack(anchor="w")
-    status = ctk.CTkOptionMenu(form, values=list(STUDENT_STATUSES))
-    status.set(student["student_status"])
-    status.pack(fill="x", pady=4)
-    verify = tk.BooleanVar(value=False)
-    if student.get("registration_pending"):
-        ctk.CTkCheckBox(form, text="OSA verified current enrollment", variable=verify).pack(anchor="w", pady=8)
-    reason = _field(form, "Reason for status change / verification")
-    entries = {key: _field(form, label, student.get(key)) for label, key in CONTACT_FIELDS}
-    error = ctk.CTkLabel(details, text="", text_color=COLOR_DANGER, wraplength=650)
-    error.pack(fill="x")
+    task = BackgroundTask(win)
+    loading = ctk.CTkLabel(win, text='Loading student details…')
+    loading.pack(pady=12)
+    retry = ctk.CTkButton(win, text='Retry', command=lambda: load())
+    retry.pack()
+    def load():
+        def read():
+            return database.get_student_by_student_id(student_id), database.get_student_status_history(student_id)
+        def loaded(result):
+            student, history_rows = result
+            if not student:
+                loading.configure(text='Student no longer exists.')
+                return
+            loading.destroy()
+            retry.destroy()
+            build(student, history_rows)
+        task.run(read, loaded, lambda message: loading.configure(text=message))
+    def build(student, history_rows):
+        tabs = ctk.CTkTabview(win, corner_radius=CORNER_RADIUS)
+        tabs.pack(fill="both", expand=True, padx=16, pady=16)
+        details, history = (tabs.add(name) for name in ("Details", "Status History"))
+        form = ctk.CTkScrollableFrame(details, fg_color=COLOR_SURFACE)
+        form.pack(fill="both", expand=True)
+        ctk.CTkLabel(form, text=f"{student['name']} · {student_id}", font=heading_font(16),
+                     text_color=COLOR_TEXT).pack(anchor="w", pady=8)
+        ctk.CTkLabel(form, text="Academic status", text_color=COLOR_TEXT_MUTED).pack(anchor="w")
+        status = ctk.CTkOptionMenu(form, values=list(STUDENT_STATUSES))
+        status.set(student["student_status"])
+        status.pack(fill="x", pady=4)
+        verify = tk.BooleanVar(value=False)
+        if student.get("registration_pending"):
+            ctk.CTkCheckBox(form, text="OSA verified current enrollment", variable=verify).pack(anchor="w", pady=8)
+        academics = AcademicFields(form, student)
+        academics.pack(fill="x", pady=8)
+        reason = _field(form, "Reason for status change / verification")
+        entries = {key: _field(form, label, student.get(key)) for label, key in CONTACT_FIELDS}
+        error = ctk.CTkLabel(details, text="", text_color=COLOR_DANGER, wraplength=650)
+        error.pack(fill="x")
 
-    def save():
-        try:
-            database.update_student_details(student_id, student_status=status.get(),
+        def save():
+            try:
+                changes = academics.changes()
+            except ValueError as exc:
+                error.configure(text=str(exc))
+                return
+            values = dict(student_status=status.get(),
                 contacts={key: entry.get() for key, entry in entries.items()}, changed_by=actor,
-                reason=reason.get(), verify_registration=verify.get())
-        except ValueError as exc:
-            error.configure(text=str(exc))
-            return
-        on_saved()
-        win.destroy()
-    ctk.CTkButton(details, text="Save Details", fg_color=COLOR_ACCENT,
-                  corner_radius=CORNER_RADIUS, command=save).pack(fill="x", pady=8)
+                reason=reason.get(), verify_registration=verify.get(), academics=changes)
+            save_button.configure(state='disabled')
+            def completed(_):
+                on_saved()
+                win.destroy()
+            def failed(message):
+                error.configure(text=message)
+                if not task.busy:
+                    save_button.configure(state='normal')
+            task.run(lambda: database.update_student_details(student_id, **values), completed, failed)
+        save_button = ctk.CTkButton(details, text="Save Details", fg_color=COLOR_ACCENT,
+                      corner_radius=CORNER_RADIUS, command=save)
+        save_button.pack(fill="x", pady=8)
 
-    log = ctk.CTkScrollableFrame(history, fg_color=COLOR_SURFACE)
-    log.pack(fill="both", expand=True)
-    messages = []
-    for item in database.get_student_status_history(student_id):
-        messages.append(f"{item['changed_at']} UTC · {item['changed_by']}\n"
-                        f"{item['previous_status']} → {item['new_status']}\n{item['reason']}")
-    for message in messages or ["No academic status changes recorded."]:
-        ctk.CTkLabel(log, text=message, justify="left", anchor="w", wraplength=620,
-                     text_color=COLOR_TEXT).pack(fill="x", padx=10, pady=10)
+        log = ctk.CTkScrollableFrame(history, fg_color=COLOR_SURFACE)
+        log.pack(fill="both", expand=True)
+        messages = []
+        for item in history_rows:
+            messages.append(f"{item['changed_at']} UTC · {item['changed_by']}\n"
+                            f"{item['previous_status']} → {item['new_status']}\n{item['reason']}")
+        for message in messages or ["No academic status changes recorded."]:
+            ctk.CTkLabel(log, text=message, justify="left", anchor="w", wraplength=620,
+                         text_color=COLOR_TEXT).pack(fill="x", padx=10, pady=10)
+    load()
+    return win
 
 
 def open_premises_log(parent, database):

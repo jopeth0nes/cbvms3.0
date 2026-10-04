@@ -107,6 +107,9 @@ def page_snapshot(database, student_id, page, *, offset=0, group='All', violatio
                 fields += ',COALESCE(NULLIF(profile_photo, X\'\'), photo) AS portal_photo'
             row = conn.execute(f'SELECT {fields} FROM students WHERE student_id = ?', (student_id,)).fetchone()
             data['_student'] = dict(row) if row else {}
+            if row:
+                from core.academics import display_academics
+                data['_student'].update(display_academics(row))
         data['_active_suspension'] = database.get_active_suspension(student_id)
     if page in {'dashboard', 'violations'}:
         with database.connect() as conn:
@@ -194,6 +197,7 @@ class PortalRequests:
             raise ValueError('An authenticated string student ID is required')
         self.student_id = student_id.strip()
         self.database = PortalWorkerDatabase(database.db_path, timeout=.75)
+        self.database.student_session_ref = getattr(database, "student_session_ref", None)
         self.results = queue.Queue()
         self.closed = False
         self.sequence = 0

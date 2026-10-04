@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import queue
+import threading
+import time
 import tkinter as tk
 from tkinter import ttk
 from typing import TYPE_CHECKING
@@ -164,7 +167,7 @@ class AccountManagerPanel(ctk.CTkFrame):
         ctk.CTkLabel(right, text="Reset Password", font=heading_font(14),
                      text_color=COLOR_TEXT).pack(anchor="w", padx=PADDING, pady=(PADDING, 4))
         ctk.CTkLabel(right,
-                     text="Set a new password for the selected student.\nThey can use it to log in immediately.",
+                     text="Set a new password for the selected student.\nThey must replace it on their next login.",
                      font=body_small_font(), text_color=COLOR_TEXT_MUTED,
                      justify="left").pack(anchor="w", padx=PADDING, pady=(0, 10))
 
@@ -310,7 +313,7 @@ class AccountManagerPanel(ctk.CTkFrame):
 
     def _do_reset(self) -> None:
         acc = self._selected_account
-        if not acc:
+        if not acc or getattr(self, "_resetting", False):
             return
         pw  = self._pw_entry.get()
         cpw = self._pw_confirm.get()
@@ -325,24 +328,51 @@ class AccountManagerPanel(ctk.CTkFrame):
             self._set_status("Passwords do not match.", error=True)
             return
 
-        ok = self.database.reset_student_password(acc["student_id"], pw)
-        if ok:
-            # Refresh the hash display immediately
-            self._accounts = self.database.get_all_student_accounts()
-            self._apply_filter()
-            updated = next(
-                (a for a in self._accounts if a["id"] == acc["id"]), None)
-            if updated:
-                self._selected_account = updated
-                self._fill_detail()
-            self._pw_entry.delete(0, "end")
-            self._pw_confirm.delete(0, "end")
-            self._set_status(
-                f"Password reset successfully for {acc.get('name') or acc.get('student_id')}.",
-                success=True)
-            show_toast(self, "Password reset successfully.", type="success")
-        else:
-            self._set_status("Reset failed — student account not found.", error=True)
+        from database.db_manager import CBVMSDatabase
+        database = CBVMSDatabase(self.database.db_path, timeout=2)
+        results = queue.Queue()
+        self._resetting = True
+        self._reset_btn.configure(state='disabled')
+        self._set_status('Resetting password…')
+        sid = acc['student_id']
+        def reset():
+            results.put(database.reset_student_password(sid, pw))
+        threading.Thread(target=reset, daemon=True, name='admin-password-reset').start()
+        started = time.monotonic()
+        def poll():
+            if not self.winfo_exists():
+                return
+            try:
+                ok = results.get_nowait()
+            except queue.Empty:
+                if time.monotonic() - started >= 12:
+                    self._resetting = False
+                    self._reset_btn.configure(state='normal')
+                    self._set_status('Reset is still pending. Check the account before retrying.', error=True)
+                    return
+                self.after(50, poll)
+                return
+            self._resetting = False
+            self._reset_btn.configure(state='normal')
+            if ok:
+                # Refresh the hash display immediately
+                self._accounts = self.database.get_all_student_accounts()
+                self._apply_filter()
+                updated = next(
+                    (a for a in self._accounts if a["id"] == acc["id"]), None)
+                if updated:
+                    self._selected_account = updated
+                    self._fill_detail()
+                self._pw_entry.delete(0, "end")
+                self._pw_confirm.delete(0, "end")
+                self._set_status(
+                    f"Password reset; a change is required at next login for {acc.get('name') or acc.get('student_id')}.",
+                    success=True)
+                show_toast(self, "Password reset successfully.", type="success")
+            else:
+                self._set_status("Reset failed. Check database access and the selected account, then try again.", error=True)
+
+        self.after(50, poll)
 
     def _do_delete(self) -> None:
         acc = self._selected_account

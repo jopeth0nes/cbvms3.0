@@ -1,3 +1,4 @@
+from tests.auth_fixture import portal_session
 """Regression coverage for the complete picture-backed appeal and Alerts flow."""
 import io
 import gc
@@ -16,6 +17,7 @@ import customtkinter as ctk
 from PIL import Image
 
 from core.appeal_evidence import MAX_EVIDENCE_BYTES
+from core.appeal_categories import BY_CODE
 from core.notifier import Notifier, Notification
 from database.db_manager import CBVMSDatabase
 from ui.dashboard import CBVMSDashboard
@@ -131,7 +133,7 @@ class AppealFlowBackendTests(AppealFlowFixture):
         first = self.submit()
         second = self.submit(self.new_violation())
         self.db.mark_admin_appeal_alert_read(first)
-        self.db.update_appeal_decision(second, "rejected", "Evidence reviewed", decided_by="osa.reviewer")
+        self.db.update_appeal_decision(second, "rejected", "Evidence reviewed", decided_by="osa.reviewer", decision_category_code='rejection.violation_confirmed')
         reopened = CBVMSDatabase(self.db.db_path)
         reopened.initialize(process_deadlines=False)
         states = {row["id"]: row["admin_alert_read"] for row in reopened.get_admin_appeal_alerts()}
@@ -179,7 +181,7 @@ class AppealFlowWidgetTests(AppealFlowFixture):
         self.loaded()
 
     def portal(self):
-        self.root = StudentPortal(student_id="S1", display_name="Student One", database=self.db)
+        self.root = StudentPortal(student_id="S1", display_name="Student One", database=self.db, session_token=portal_session(self.db, "S1"))
         self.root.report_callback_exception = lambda *args: self.errors.append(args)
         self.loaded()
         self.navigate('violations')
@@ -241,7 +243,7 @@ class AppealFlowWidgetTests(AppealFlowFixture):
         aid = self.submit()
         portal = self.portal()
         self.assertEqual(portal._violations[0]['appeal_status'], 'pending')
-        self.db.update_appeal_decision(aid, "approved", "Picture reviewed", decided_by="osa.reviewer")
+        self.db.update_appeal_decision(aid, "approved", "Picture reviewed", decided_by="osa.reviewer", decision_category_code='approval.detection_error')
         portal._last_workflow_refresh = time.monotonic()
         portal._ai_ui_updates.put(aid)
         self.until(lambda: portal._violations[0]['appeal_status'] == 'approved')
@@ -284,6 +286,10 @@ class AppealFlowWidgetTests(AppealFlowFixture):
                 self.until(lambda: getattr(records,'case',{}).get('id') == aid)
                 self.assertEqual(records.case_id, aid)
                 self.assertIsNotNone(records.case['images'][1])
+                category = BY_CODE['approval.detection_error' if decision == 'approved'
+                                   else 'rejection.violation_confirmed']
+                records.category.set(category.option)
+                records._enable_decisions(True)
                 records.reason.insert('1.0', 'Reviewed the submitted picture.')
                 with patch('ui.appeals_panel.messagebox.askyesno',return_value=True):
                     (records.approve if decision == 'approved' else records.reject).invoke()
@@ -293,6 +299,8 @@ class AppealFlowWidgetTests(AppealFlowFixture):
                 updated = next(a for a in portal._appeals if a['id'] == aid)
                 self.assertEqual(updated['status'], decision)
                 self.assertEqual(updated['decided_by'], 'osa.reviewer')
+                self.assertEqual(updated['decision_category_code'], category.code)
+                self.assertEqual(updated['decision_category_display'], category.label)
                 outcome_text = 'Appeal Approved — No active strike' if decision == 'approved' else 'Appeal Rejected — One finalized strike'
                 self.assertTrue(any(isinstance(w, ctk.CTkLabel) and w.cget('text') == outcome_text
                                     for w in widgets(portal._page_body)))

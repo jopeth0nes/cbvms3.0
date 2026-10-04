@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
-import sys
 import time
-from typing import Callable
+import queue
+import threading
+
+from auth.passwords import validate_new_password
+from database.db_manager import CBVMSDatabase
+from database.student_credentials import SessionExpired
 
 import customtkinter as ctk
 
@@ -23,6 +27,7 @@ def body_font(size: int = 14, weight: str = "normal") -> ctk.CTkFont:
 class CBVMSLoginWindow(WorkspaceWindow):
     WIDTH = 920
     HEIGHT = 620
+    OPERATION_TIMEOUT = 12.
 
     def __init__(self, auth_manager: AuthManager, on_ready=None) -> None:
         super().__init__()
@@ -37,6 +42,10 @@ class CBVMSLoginWindow(WorkspaceWindow):
         self._reg_win = None
         self._welcome_job = None
         self._signing_in = False
+        self._pending = None
+        self._operation = None
+        self._operation_generation = 0
+        self._welcome_generation = 0
 
         apply_cbvms_theme()
         self._configure_window()
@@ -105,6 +114,7 @@ class CBVMSLoginWindow(WorkspaceWindow):
 
         panel = ctk.CTkFrame(self, fg_color="#F3F5F7", corner_radius=0)
         panel.grid(row=0, column=1, sticky="nsew")
+        self._form_panel = panel
         inner = ctk.CTkFrame(panel, fg_color="transparent")
         inner.pack(fill="both", expand=True, padx=44, pady=(40, 28))
         ctk.CTkLabel(inner, text="YOUR CAMPUS WORKSPACE", font=body_font(11, "bold"),
@@ -159,7 +169,7 @@ class CBVMSLoginWindow(WorkspaceWindow):
         self.toggle_btn.configure(text="Hide" if self._password_visible else "Show")
 
     def _attempt_login(self) -> None:
-        if not self._intro.finished or self._signing_in:
+        if not self._intro.finished or self._signing_in or self._pending or self._operation:
             return
         username = self.username_entry.get().strip()
         password = self.password_entry.get()
@@ -168,25 +178,194 @@ class CBVMSLoginWindow(WorkspaceWindow):
             self.error_label.configure(text="Enter your username and password to continue.")
             return
 
-        result = self._auth.authenticate(username, password)
-        if result is not None:
-            if not self._intro.finished:
-                self._intro.cancel()
-            self.error_label.configure(text="")
-            self.result = result
-            self.result_username = result["username"]
-            name = "Superadmin" if result["role"] == "superadmin" else "Admin"
-            if result["role"] == "student":
-                student = self._auth._db.get_student_by_student_id(result["student_id"]) or {}
-                name = student.get("name") or result.get("display_name") or result["username"]
-                self.result["display_name"] = name
-            self._show_welcome(name)
-            return
+        self._signing_in = True
+        self.login_btn.configure(state="disabled", text="Signing in…")
+        # Workers own a short-timeout DB and never touch Tk objects.
+        manager = AuthManager(CBVMSDatabase(self._auth._db.db_path, timeout=2))
+        self._start_operation(lambda cancel: manager.authenticate(username, password), self._authenticated)
 
-        self.error_label.configure(text="Invalid username or password.")
+    def _start_operation(self, work, on_success):
+        self._operation_generation += 1
+        generation = self._operation_generation
+        cancel = threading.Event()
+        results = queue.Queue()
+        self._operation = cancel
+        db = CBVMSDatabase(self._auth._db.db_path, timeout=2)
+        def run():
+            try:
+                value, error = work(cancel), None
+                if cancel.is_set() and value and value.get('session_token'):
+                    db.revoke_student_session(value['session_token'])
+            except Exception as exc:
+                value = None
+                error = str(exc) if isinstance(exc, ValueError) else 'Could not save or verify credentials. Please try again.'
+            results.put((value, error))
+        threading.Thread(target=run, name='login-credentials', daemon=True).start()
+        started = time.monotonic()
+        def poll():
+            if generation != self._operation_generation or getattr(self, '_destroying', False):
+                return
+            try:
+                value, error = results.get_nowait()
+            except queue.Empty:
+                if time.monotonic() - started >= self.OPERATION_TIMEOUT:
+                    cancel.set()
+                    self._operation_generation += 1
+                    self._operation = None
+                    self._operation_error('This is taking too long. Try again, or sign in again if the password was saved.')
+                    return
+                self.after(40, poll)
+                return
+            self._operation = None
+            if error:
+                self._operation_error(error)
+            else:
+                on_success(value)
+        self.after(40, poll)
+
+    def _operation_error(self, message):
+        self._signing_in = False
+        if self.result and not self._pending:
+            self._back_to_login()
+        if self._pending:
+            self.setup_error.configure(text=message)
+            self.save_password_btn.configure(state='normal', text='Save Password & Continue')
+        else:
+            self.error_label.configure(text=message)
+            self.login_btn.configure(state='normal', text='Sign in')
+
+    def _authenticated(self, result):
+        self._signing_in = False
+        self.login_btn.configure(state='normal', text='Sign in')
+        self.password_entry.delete(0, 'end')
+        if not result:
+            self.error_label.configure(text='Invalid username or password.')
+            return
+        if result.get('must_change_password'):
+            self._pending = result
+            self.result = self.result_username = None
+            self._show_password_setup()
+            return
+        self.result = result
+        self.result_username = result['username']
+        name = result['display_name'] if result['role'] == 'student' else (
+            'Superadmin' if result['role'] == 'superadmin' else 'Admin')
+        self._show_welcome(name)
+
+    def _show_password_setup(self):
+        self._cancel_welcome()
+        self.unbind('<Return>')
+        self._form_panel.grid_remove()
+        panel = self._setup_panel = ctk.CTkFrame(self, fg_color='#F3F5F7', corner_radius=0)
+        panel.grid(row=0, column=1, sticky='nsew')
+        inner = ctk.CTkFrame(panel, fg_color='transparent')
+        inner.pack(fill='both', expand=True, padx=36, pady=30)
+        ctk.CTkLabel(inner, text='YOUR CAMPUS WORKSPACE', anchor='w',
+                     font=body_font(11, 'bold'), text_color='#087F75').pack(fill='x')
+        ctk.CTkLabel(inner, text='Set your new password', anchor='w',
+                     font=body_font(25, 'bold'), text_color='#172F39').pack(fill='x', pady=(14, 8))
+        ctk.CTkLabel(inner, text='Before entering your student portal, replace your initial or temporary password with a password only you know.',
+                     wraplength=365, justify='left', anchor='w', font=body_font(13),
+                     text_color='#526570').pack(fill='x', pady=(0, 14))
+        self.setup_entries = []
+        for label in ('New password', 'Confirm new password'):
+            ctk.CTkLabel(inner, text=label, anchor='w', font=body_font(13, 'bold'),
+                         text_color='#172F39').pack(fill='x')
+            row = ctk.CTkFrame(inner, fg_color='transparent')
+            row.pack(fill='x', pady=(5, 12))
+            entry = ctk.CTkEntry(row, show='•', height=44, corner_radius=10,
+                                fg_color='white', text_color='#172F39', border_color='#CED8DE',
+                                font=body_font(14))
+            entry.pack(side='left', fill='x', expand=True)
+            button = ctk.CTkButton(row, text='Show', width=58, height=44, fg_color='#E2EBEE',
+                                   hover_color='#D1E0E4', text_color='#172F39')
+            def toggle(field=entry, control=button):
+                visible = bool(field.cget('show'))
+                field.configure(show='' if visible else '•')
+                control.configure(text='Hide' if visible else 'Show')
+            button.configure(command=toggle)
+            button.pack(side='right', padx=(8, 0))
+            self.setup_entries.append(entry)
+        ctk.CTkLabel(inner, text='Use at least 8 characters. Longer passphrases are welcome. Choose a different password; default credentials and account IDs are not allowed.',
+                     wraplength=365, justify='left', anchor='w', font=body_font(11),
+                     text_color='#526570').pack(fill='x')
+        self.setup_error = ctk.CTkLabel(inner, text='', wraplength=365, height=42,
+                                       anchor='w', justify='left', font=body_font(12), text_color='#B42318')
+        self.setup_error.pack(fill='x', pady=5)
+        self.save_password_btn = ctk.CTkButton(inner, text='Save Password & Continue', height=44,
+            corner_radius=10, fg_color='#087F75', hover_color='#06675F', font=body_font(14, 'bold'),
+            command=self._save_setup_password)
+        self.save_password_btn.pack(fill='x')
+        ctk.CTkButton(inner, text='Back to Login', height=36, fg_color='#E2EBEE',
+                      text_color='#172F39', hover_color='#D1E0E4', command=self._back_to_login).pack(fill='x', pady=(10, 0))
+        self.bind('<Return>', lambda e: self._save_setup_password())
+        self.setup_entries[0].focus_set()
+
+    def _save_setup_password(self):
+        if not self._pending or self._operation:
+            return
+        password, confirmation = (entry.get() for entry in self.setup_entries)
+        try:
+            validate_new_password(password, confirmation, username=self._pending['username'],
+                                  student_id=self._pending['student_id'])
+        except ValueError as exc:
+            self.setup_error.configure(text=str(exc))
+            return
+        self.save_password_btn.configure(state='disabled', text='Saving password…')
+        self.setup_error.configure(text='')
+        token = self._pending['session_token']
+        db = CBVMSDatabase(self._auth._db.db_path, timeout=2)
+        def saved(result):
+            for entry in self.setup_entries:
+                entry.delete(0, 'end')
+            self._pending = None
+            self._setup_panel.destroy()
+            self._authenticated(result)
+        self._start_operation(lambda cancel: db.change_student_password(token, password, confirmation, cancel=cancel), saved)
+
+    def _cancel_welcome(self):
+        self._welcome_generation += 1
+        if self._welcome_job is not None:
+            self.after_cancel(self._welcome_job)
+            self._welcome_job = None
+
+    def _discard_login(self):
+        self._cancel_welcome()
+        self._operation_generation += 1
+        if self._operation:
+            self._operation.set()
+            self._operation = None
+        tokens = {r['session_token'] for r in (self._pending, self.result) if r and r.get('session_token')}
+        self._pending = self.result = self.result_username = None
+        db = CBVMSDatabase(self._auth._db.db_path, timeout=2)
+        def revoke():
+            for token in tokens:
+                db.revoke_student_session(token)
+        if tokens:
+            threading.Thread(target=revoke, daemon=True).start()
+
+    def _back_to_login(self):
+        self._discard_login()
+        if hasattr(self, '_setup_panel') and self._setup_panel.winfo_exists():
+            self._setup_panel.destroy()
+        if hasattr(self, '_welcome_panel') and self._welcome_panel.winfo_exists():
+            self._welcome_panel.destroy()
+        for child in self.winfo_children():
+            if isinstance(child, ctk.CTkFrame):
+                child.grid()
+        self._signing_in = False
+        self.password_entry.delete(0, 'end')
+        self.error_label.configure(text='')
+        self.login_btn.configure(state='normal', text='Sign in')
+        self.bind('<Return>', lambda e: self._attempt_login())
+        self.username_entry.focus_set()
 
     def _show_welcome(self, name: str) -> None:
         """One in-window greeting between authentication and role routing."""
+        if not self.result or self._pending or self.result.get("must_change_password"):
+            return
+        self._cancel_welcome()
+        generation = self._welcome_generation
         self._signing_in = True
         self.login_btn.configure(state="disabled")
         self.unbind("<Return>")
@@ -196,7 +375,7 @@ class CBVMSLoginWindow(WorkspaceWindow):
         for child in self.winfo_children():
             if isinstance(child, ctk.CTkFrame):
                 child.grid_remove()
-        panel = ctk.CTkFrame(self, fg_color="#101D29", corner_radius=0)
+        panel = self._welcome_panel = ctk.CTkFrame(self, fg_color="#101D29", corner_radius=0)
         panel.place(x=0, y=0, relwidth=1, relheight=1)
         panel.lift()
         content = ctk.CTkFrame(panel, fg_color="transparent")
@@ -215,10 +394,21 @@ class CBVMSLoginWindow(WorkspaceWindow):
         started = time.monotonic()
 
         def animate():
+            if generation != self._welcome_generation or not self.result or self._pending:
+                return
             self._welcome_job = None
             elapsed = time.monotonic() - started
             if elapsed >= .65:
-                self.destroy()  # Existing run_login routing opens the correct workspace.
+                if self.result['role'] == 'student':
+                    token = self.result['session_token']
+                    db = CBVMSDatabase(self._auth._db.db_path, timeout=2)
+                    def finish(value):
+                        if generation == self._welcome_generation and self.result and not self._pending:
+                            self.result = value
+                            self.destroy()
+                    self._start_operation(lambda cancel: db.get_student_session(token, require_full=True), finish)
+                else:
+                    self.destroy()
                 return
             fade = min(1, elapsed / .2)
             color = tuple(round(a + (b-a)*fade) for a, b in
@@ -241,14 +431,11 @@ class CBVMSLoginWindow(WorkspaceWindow):
         self._reg_win = StudentRegistrationWindow(self, database=self._auth._db)
 
     def _on_close(self) -> None:
-        if self._welcome_job is not None:
-            self.after_cancel(self._welcome_job)
-            self._welcome_job = None
+        self._discard_login()
         if not self._intro.finished:
             self._intro.cancel()
-        self.result = None
-        self.result_username = None
         self.destroy()
+
 
 
 def run_login(auth_manager: AuthManager, on_ready=None) -> str | None:
@@ -274,11 +461,15 @@ def run_login(auth_manager: AuthManager, on_ready=None) -> str | None:
         if result["role"] == "student":
             from ui.student_portal import StudentPortal
 
-            portal = StudentPortal(
-                student_id=result["student_id"],
-                display_name=result["display_name"],
-                database=auth_manager._db,
-            )
+            try:
+                portal = StudentPortal(
+                    student_id=result["student_id"],
+                    display_name=result["display_name"],
+                    database=auth_manager._db,
+                    session_token=result["session_token"],
+                )
+            except SessionExpired:
+                continue  # A reset during the window handoff requires fresh authentication.
             portal.mainloop()
             logged_out = portal.logged_out
             del portal

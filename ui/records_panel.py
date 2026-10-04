@@ -22,6 +22,8 @@ from core.discipline import display_local_datetime
 from core.evidence_integrity import original_evidence, supporting_evidence
 from core.reports import (VIOLATION_HEADERS, violation_values, write_csv,
                           report_html, open_print_preview)
+from core.appeal_categories import category_display
+from ui.background_task import BackgroundTask
 from ui.attendance_panel import AttendancePanel
 from ui.components import (
     COLOR_ACCENT, COLOR_ACCENT_HOVER, COLOR_BG, COLOR_BORDER,
@@ -70,6 +72,9 @@ class RecordsPanel(ctk.CTkFrame):
         self.username = username
         self.on_open_appeals = on_open_appeals
         self._image_refs: list = []
+        self._history_task=BackgroundTask(self)
+        self._history_export_task=BackgroundTask(self)
+        self._history_generation=0
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(1, weight=0)
         self._build_ui()
@@ -128,7 +133,7 @@ class RecordsPanel(ctk.CTkFrame):
 
         self._configure_tree_style()
         self._build_violations_tab()
-        self._attendance_frame = AttendancePanel(self._content, database=self.database)
+        self._attendance_frame = AttendancePanel(self._content, database=self.database, username=self.username)
         self._build_appeals_tab()
         self._build_evidence_tab()
         self._build_history_tab()
@@ -425,6 +430,8 @@ class RecordsPanel(ctk.CTkFrame):
             "strike": f"Strike: {'Active' if r.get('strike_active') else 'Inactive / Not Awarded'}",
             "appeal": f"Appeal: {(self._violation_appeals.get(r['id']) or 'None').title()}",
         }
+        if r.get('appeal_status') in ('approved','rejected'):
+            fields['appeal'] += f"\nDecision category: {category_display(r)}\nAdministrator reason: {r.get('decision_reason') or 'Not recorded'}"
         for key, value in fields.items():
             self._vd_fields[key].configure(text=value)
         source = self._snapshot_evidence = original_evidence(r)
@@ -612,46 +619,47 @@ class RecordsPanel(ctk.CTkFrame):
             ("vtype",     "Violation",    140),
             ("decision",  "Decision",      90),
             ("ai",        "AI Rec.",      140),
-            ("notes",     "Admin Notes",  200),
+            ("category", "Decision Category", 260),
+            ("notes",     "Administrator Decision Reason", 300),
             ("by",        "Decided By",   90),
         ])
 
     def _load_history(self) -> None:
-        rows = self.database.get_decision_history()
-        for item in self._hist_tree.get_children():
-            self._hist_tree.delete(item)
-        for r in rows:
-            vtype = (r.get("violation_type") or "—").replace("_", " ").title()
-            self._hist_tree.insert("", "end", values=(
-                _ts(r.get("decided_at", "")),
-                r.get("student_name") or "—",
-                r.get("student_id") or "—",
-                vtype,
-                (r.get("decision") or "—").title(),
-                r.get("ai_recommendation") or "—",
-                (r.get("admin_notes") or "")[:60],
-                r.get("decided_by") or "admin",
-            ))
+        self._history_generation+=1
+        if self._history_task.busy:
+            return
+        generation=self._history_generation
+        def loaded(rows):
+            if generation!=self._history_generation:
+                self._load_history()
+                return
+            if self._tab_var.get()!='history':
+                return
+            self._hist_tree.delete(*self._hist_tree.get_children())
+            for r in rows:
+                self._hist_tree.insert('', 'end', values=(
+                    _ts(r.get('decided_at','')),r.get('student_name') or '—',r.get('student_id') or '—',
+                    (r.get('violation_type') or '—').replace('_',' ').title(),
+                    (r.get('decision') or '—').title(),r.get('ai_recommendation') or '—',
+                    category_display(r),r.get('admin_notes') or '',r.get('decided_by') or 'Not recorded'))
+        self._history_task.run(lambda:self.database.get_decision_history(),loaded,
+            lambda error:messagebox.showerror('Decision history',str(error),parent=self))
 
     def _export_history(self) -> None:
-        import csv
-        path = filedialog.asksaveasfilename(
-            defaultextension=".csv", filetypes=[("CSV", "*.csv")],
-            title="Export Decision History")
+        path=filedialog.asksaveasfilename(defaultextension='.csv',filetypes=[('CSV','*.csv')],
+                                         title='Export Decision History')
         if not path:
             return
-        rows = self.database.get_decision_history(limit=10000)
-        with open(path, "w", newline="", encoding="utf-8") as f:
-            w = csv.writer(f)
-            w.writerow(["Date", "Student", "Student ID", "Violation",
-                        "Decision", "AI Recommendation", "Admin Notes",
-                        "Decided By", "Appeal ID"])
-            for r in rows:
-                w.writerow([
-                    r.get("decided_at"), r.get("student_name"), r.get("student_id"),
-                    r.get("violation_type"), r.get("decision"), r.get("ai_recommendation"),
-                    r.get("admin_notes"), r.get("decided_by"), r.get("appeal_id"),
-                ])
+        def export():
+            rows=self.database.get_decision_history(limit=None)
+            write_csv(path,['Date','Student','Student ID','Violation','Decision','AI Recommendation',
+                'Decision Category Code','Decision Category','Category Version','Administrator Decision Reason',
+                'Decided By','Appeal ID'],[[r.get('decided_at'),r.get('student_name'),r.get('student_id'),
+                r.get('violation_type'),r.get('decision'),r.get('ai_recommendation'),
+                r.get('decision_category_code'),category_display(r),r.get('decision_category_version'),
+                r.get('admin_notes'),r.get('decided_by'),r.get('appeal_id')] for r in rows])
+        self._history_export_task.run(export,lambda _:None,
+            lambda error:messagebox.showerror('Decision history export',str(error),parent=self))
 
     # ------------------------------------------------------------------ public
 
@@ -667,6 +675,12 @@ class RecordsPanel(ctk.CTkFrame):
             self._switch_tab("violations")
 
     def refresh(self):
+        if self._tab_var.get() == 'history':
+            self._load_history()
+            return
+        if self._tab_var.get() == "attendance":
+            self._attendance_frame.refresh()
+            return
         self.database.process_expired_deadlines()
         self._image_refs.clear()
         tab = self._tab_var.get()

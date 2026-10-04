@@ -7,6 +7,9 @@ sees only data belonging to their own student_id. Launched from auth/login.py.
 from __future__ import annotations
 from core.evidence_integrity import original_evidence, supporting_evidence
 
+from core.appeal_categories import category_display
+from core.academics import display_academics
+
 import time
 from core.portal_state import PortalRequests, page_snapshot, prepare_photo, PAGE_SIZE, comparable, violation_group
 from core.diagnostics import event
@@ -99,7 +102,11 @@ def _display_ts(ts: str | None, *, fallback: str = "—") -> str:
 class StudentPortal(WorkspaceWindow):
     """Light-theme single-window portal scoped to one student_id."""
 
-    def __init__(self, *, student_id: str, display_name: str, database=None) -> None:
+    def __init__(self, *, student_id: str, display_name: str, database=None, session_token=None) -> None:
+        source = database if database is not None else CBVMSDatabase()
+        account = source.get_student_session(session_token or '', require_full=True)
+        if account['student_id'] != student_id:
+            raise ValueError('The session does not belong to this student.')
         super().__init__()
         self.withdraw()
         apply_cbvms_theme()
@@ -121,7 +128,12 @@ class StudentPortal(WorkspaceWindow):
         self._notification_violations = {}
         self._last_appeal_refresh = 0.
 
-        self.db = database if database is not None else CBVMSDatabase()
+        self._session_ref = {'token': session_token}
+        self._session_results = queue.Queue()
+        self._session_check_running = False
+        self._last_session_check = 0.
+        self.db = CBVMSDatabase(source.db_path, timeout=.75)
+        self.db.student_session_ref = self._session_ref
         self._prefs.update(self.db.get_portal_preferences(self.student_id))
         self._compact = self._prefs.get("compact_sidebar", False)
         ctk.set_appearance_mode("dark" if self._prefs.get("dark_mode", False) else "light")
@@ -220,6 +232,8 @@ class StudentPortal(WorkspaceWindow):
         if self._closed:
             return
         try:
+            if not self._check_session():
+                return
             self._poll_portal_results()
         except Exception as exc:
             event('portal_delivery_failed', page=self._active, error=str(exc))
@@ -227,6 +241,34 @@ class StudentPortal(WorkspaceWindow):
         finally:
             if not self._closed:
                 self._poll_job = self.after(50, self._poll_ai_updates)
+
+    def _check_session(self):
+        """Hide a revoked workspace promptly; checks never run on Tk's thread."""
+        try:
+            token, valid = self._session_results.get_nowait()
+            self._session_check_running = False
+            if token == self._session_ref['token'] and not valid and self._action_request is None:
+                self._logout()
+                return False
+        except queue.Empty:
+            pass
+        if not self._session_check_running and time.monotonic() - self._last_session_check >= 2:
+            self._last_session_check = time.monotonic()
+            self._session_check_running = True
+            token, results = self._session_ref['token'], self._session_results
+            database = CBVMSDatabase(self.db.db_path, timeout=.75)
+            def check():
+                from database.student_credentials import SessionExpired
+                try:
+                    database.get_student_session(token, require_full=True)
+                    valid = True
+                except SessionExpired:
+                    valid = False
+                except Exception:
+                    valid = True  # Operations remain independently guarded; retry the health check.
+                results.put((token, valid))
+            threading.Thread(target=check, name='portal-session-check', daemon=True).start()
+        return True
 
     def _poll_portal_results(self):
         response = self._refresh.poll(self.student_id)
@@ -1106,6 +1148,7 @@ class StudentPortal(WorkspaceWindow):
     def _load_form_detection(self, violation_id, label, metadata=None):
         """Each form has a fixed record ID, owner, and independent response channel."""
         owner, database = self.student_id, CBVMSDatabase(self.db.db_path, timeout=.75)
+        database.student_session_ref = self._session_ref
         label._violation_id = violation_id
         results = queue.Queue(maxsize=1)
         def read():
@@ -1456,9 +1499,9 @@ class StudentPortal(WorkspaceWindow):
                          text_color=SP_TEXT, anchor="w").pack(anchor="w", padx=12, pady=(0, 4))
         ctk.CTkFrame(ai_frame, fg_color="transparent", height=4).pack()
 
-        # Admin notes (if any)
+        # Completed outcomes always show the saved category, including legacy cases.
         notes = (appeal.get("admin_notes") or "").strip()
-        if notes:
+        if notes or status in ("approved", "rejected"):
             notes_frame = ctk.CTkFrame(card, fg_color=SP_PILL_OK_BG if status == "approved"
                                        else "#FEE2E2" if status == "rejected" else SP_PILL_WARN_BG,
                                        corner_radius=8)
@@ -1466,7 +1509,10 @@ class StudentPortal(WorkspaceWindow):
                              padx=(0, 16), pady=(6, 12))
             ctk.CTkLabel(notes_frame, text=f"Admin response · {appeal.get('decided_by') or 'Administrator'} · {_display_ts(appeal.get('decided_at'))}:", font=_f(11, "bold"),
                          text_color=SP_MUTED, anchor="w").pack(anchor="w", padx=12, pady=(8, 2))
-            ctk.CTkLabel(notes_frame, text=notes, font=_f(12), text_color=SP_TEXT,
+            ctk.CTkLabel(notes_frame, text=f"Decision category: {category_display(appeal)}",
+                         font=_f(12, "bold"), text_color=SP_TEXT, anchor="w", wraplength=680,
+                         justify="left").pack(anchor="w", padx=12, pady=(0,4))
+            ctk.CTkLabel(notes_frame, text=notes or "Explanation not recorded", font=_f(12), text_color=SP_TEXT,
                          anchor="w", wraplength=680, justify="left").pack(anchor="w",
                                                                            padx=12, pady=(0, 8))
         else:
@@ -1528,7 +1574,8 @@ class StudentPortal(WorkspaceWindow):
         rows = [
             ("STUDENT ID", s.get("student_id", self.student_id)),
             ("FULL NAME", s.get("name", "—")),
-            ("COURSE", s.get("course") or "—"),
+            ("COLLEGE", display_academics(s)["college_department"]),
+            ("COURSE", display_academics(s)["course"]),
             ("YEAR & SECTION", s.get("year_and_section") or "—"),
             ("GENDER", s.get("gender") or "—"),
             ("ACADEMIC STATUS", standing_label(s)),
@@ -1583,8 +1630,8 @@ class StudentPortal(WorkspaceWindow):
             if not cur or not new or not conf:
                 pw_msg.configure(text="Please fill in all three fields.", text_color=SP_DANGER)
                 return
-            if len(new) < 6:
-                pw_msg.configure(text="New password must be at least 6 characters.",
+            if len(new) < 8:
+                pw_msg.configure(text="New password must be at least 8 characters.",
                                  text_color=SP_DANGER)
                 return
             if new != conf:
@@ -1596,12 +1643,14 @@ class StudentPortal(WorkspaceWindow):
                                  text_color=SP_DANGER)
                 return
             def save(db, sid):
-                with db.connect() as conn:
-                    row = conn.execute('SELECT username FROM student_accounts WHERE student_id = ?', (sid,)).fetchone()
-                if row is None or db.verify_student_account(row[0], cur) is None:
-                    raise ValueError('Current password is incorrect.')
-                if not db.reset_student_password(sid, new):
-                    raise ValueError('Failed to save new password. Please try again.')
+                credentials = CBVMSDatabase(db.db_path, timeout=.75)
+                result = credentials.change_student_password(self._session_ref['token'], new, conf,
+                                                            current_password=cur, cancel=db.request.cancelled)
+                self._session_ref['token'] = result['session_token']
+                if db.request.cancelled.is_set():
+                    credentials.revoke_student_session(result['session_token'])
+                    raise ValueError('Password saved. Please sign in again.')
+                return result
             def saved(_):
                 for entry in (e_cur, e_new, e_conf):
                     entry.delete(0, 'end')
@@ -1666,7 +1715,8 @@ class StudentPortal(WorkspaceWindow):
         name_entry.pack(fill="x", pady=(4, 12))
 
         for label, value in (("STUDENT ID", self.student_id),
-                             ("COURSE", self._student.get("course") or "—"),
+                             ("COLLEGE", display_academics(self._student)["college_department"]),
+                             ("COURSE", display_academics(self._student)["course"]),
                              ("YEAR & SECTION", self._student.get("year_and_section") or "—")):
             ctk.CTkLabel(body, text=f"{label}: {value}  (read-only)", font=_f(11),
                          text_color=SP_MUTED).pack(anchor="w", pady=1)
@@ -1874,6 +1924,14 @@ class StudentPortal(WorkspaceWindow):
         if self._closed:
             return
         self._closed = True
+        token = self._session_ref['token']
+        database = CBVMSDatabase(self.db.db_path, timeout=.75)
+        def revoke():
+            try:
+                database.revoke_student_session(token)
+            except Exception:
+                pass  # Expiry still bounds the discarded token.
+        threading.Thread(target=revoke, daemon=True).start()
         self._page_state = 'cancelled'
         if self._request:
             self._request.state = 'cancelled'

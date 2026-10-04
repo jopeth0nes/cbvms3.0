@@ -16,6 +16,7 @@ from urllib.parse import urlsplit, parse_qs
 from core.portal_state import page_snapshot
 from core.appeal_evidence import validate_evidence, MAX_EVIDENCE_BYTES
 from database.db_manager import CBVMSDatabase
+from database.student_credentials import SessionExpired
 
 STATIC = Path(__file__).parent / 'web'
 MAX_BODY = 15 * 1024 * 1024
@@ -26,7 +27,7 @@ def public(value):
     if isinstance(value, dict):
         return {k: public(v) for k, v in value.items()
                 if k not in {'encoding', 'photo', 'profile_photo', 'portal_photo',
-                             'snapshot', 'password_hash', 'file_data'}
+                             'snapshot', 'password_hash', 'file_data', 'session_token'}
                 and not str(k).startswith('_profile') and k != '_timings'}
     if isinstance(value, (tuple, list)):
         return [public(v) for v in value]
@@ -41,7 +42,6 @@ class PortalServer(ThreadingHTTPServer):
     def __init__(self, address, database):
         super().__init__(address, PortalHandler)
         self.database = database
-        self.sessions = {}
         self.attempts = {}
         self.lock = threading.Lock()
 
@@ -69,12 +69,15 @@ class PortalHandler(BaseHTTPRequestHandler):
         jar = cookies.SimpleCookie()
         jar.load(self.headers.get('Cookie', ''))
         token = jar['cbvms_session'].value if 'cbvms_session' in jar else ''
-        with self.server.lock:
-            session = self.server.sessions.get(token)
-            if session and session['expires'] > time.time():
-                return token, session
-            self.server.sessions.pop(token, None)
-        return token, None
+        try:
+            return token, self.server.database.get_student_session(token)
+        except SessionExpired:
+            return token, None
+
+    def session_reply(self, session):
+        token = session['session_token']
+        age = max(0, int(session['expires'] - time.time()))
+        return self.reply(200, session, cookie=f'cbvms_session={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age={age}')
 
     def do_GET(self):
         self.handle_request(False)
@@ -85,6 +88,8 @@ class PortalHandler(BaseHTTPRequestHandler):
     def handle_request(self, write):
         try:
             self.route(write)
+        except SessionExpired as exc:
+            self.reply(401, {'error': str(exc)})
         except (ValueError, KeyError, TypeError) as exc:
             self.reply(400, {'error': str(exc)})
         except Exception:
@@ -124,20 +129,31 @@ class PortalHandler(BaseHTTPRequestHandler):
             account = db.verify_student_account(str(data.get('username', '')), str(data.get('password', '')))
             if not account:
                 return self.reply(401, {'error': 'Incorrect student username or password.'})
-            token = secrets.token_urlsafe(32)
-            session = {'student_id': account['student_id'], 'name': account['display_name'],
-                       'csrf': secrets.token_urlsafe(32), 'expires': now + 8*3600}
-            with self.server.lock:
-                self.server.sessions = {k: v for k, v in self.server.sessions.items() if v['expires'] > now}
-                self.server.sessions[token] = session
-            return self.reply(200, session, cookie=f'cbvms_session={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=28800')
+            if token:
+                db.revoke_student_session(token)
+            return self.session_reply(db.create_student_session(account))
         if not session:
             return self.reply(401, {'error': 'Please sign in.'})
         sid = session['student_id']
         if write and not secrets.compare_digest(self.headers.get('X-CSRF-Token', ''), session['csrf']):
             return self.reply(403, {'error': 'Please refresh and try again.'})
+        if write and path == '/api/logout':
+            db.revoke_student_session(token)
+            return self.reply(200, {'ok': True}, cookie='cbvms_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0')
         if not write and path == '/api/me':
-            return self.reply(200, dict(session, preferences=db.get_portal_preferences(sid)))
+            return self.reply(200, session if session['must_change_password'] else
+                              dict(session, preferences=db.get_portal_preferences(sid)))
+        if write and path == '/api/setup/password':
+            if not session['must_change_password']:
+                return self.reply(409, {'error': 'Password setup is already complete.'})
+            return self.session_reply(db.change_student_password(token, data.get('password'), data.get('confirmation')))
+        if session['must_change_password']:
+            return self.reply(403, {'error': 'Set your new password before entering the student portal.',
+                                    'must_change_password': True})
+        # Recheck persisted authorization before every portal operation.
+        db.get_student_session(token, require_full=True)
+        db = CBVMSDatabase(db.db_path, timeout=2)
+        db.student_session_ref = {'token': token}
         if not write and path == '/api/page':
             page = query.get('page', ['dashboard'])[0]
             if page not in {'dashboard', 'violations', 'notifications', 'appeals', 'profile', 'settings', 'report'}:
@@ -151,10 +167,6 @@ class PortalHandler(BaseHTTPRequestHandler):
             if not row.get('snapshot'):
                 return self.reply(404, {'error': 'No original picture available.'})
             return self.reply(200, row['snapshot'], content_type='image/jpeg')
-        if write and path == '/api/logout':
-            with self.server.lock:
-                self.server.sessions.pop(token, None)
-            return self.reply(200, {'ok': True}, cookie='cbvms_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0')
         if write and path == '/api/preferences':
             return self.reply(200, db.set_portal_preferences(sid, data))
         if write and path == '/api/notifications/read':
@@ -181,14 +193,8 @@ class PortalHandler(BaseHTTPRequestHandler):
             session['name'] = name
             return self.reply(200, {'ok': True})
         if write and path == '/api/password':
-            account = db.verify_student_account(data.get('username', ''), data.get('current_password', ''))
-            if not account or account['student_id'] != sid:
-                raise ValueError('Current credentials are incorrect.')
-            if len(data.get('password', '')) < 6:
-                raise ValueError('Use at least six characters.')
-            if not db.reset_student_password(sid, data['password']):
-                raise ValueError('Password could not be changed.')
-            return self.reply(200, {'ok': True})
+            return self.session_reply(self.server.database.change_student_password(token, data.get('password'),
+                                      data.get('confirmation'), current_password=data.get('current_password')))
         if write and path == '/api/reports':
             title, description = str(data.get('title', '')).strip(), str(data.get('description', '')).strip()
             if not title or not description or len(title) > 200 or len(description) > 10000:

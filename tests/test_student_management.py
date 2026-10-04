@@ -59,22 +59,23 @@ class StudentManagementTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.db.update_student_details("S1", student_status="Visitor", contacts={}, changed_by="osa", reason="x")
 
-    def test_entry_only_status_blocks_attendance_and_new_violations(self):
-        for status in ("Graduate", "Unenrolled"):
+    def test_entry_only_status_allows_campus_sightings_but_blocks_new_violations(self):
+        for index, status in enumerate(("Graduate", "Unenrolled")):
             self.change_status(status)
-            self.assertFalse(self.db.record_attendance("S1"))
+            self.assertTrue(self.db.record_attendance("S1", observed_at=self.now + timedelta(minutes=5*index)))
             self.assertIsNone(self.db.log_violation("S1", "Student One", "wrong_uniform"))
         self.assertTrue(self.db.record_premises_entry("S1", observed_at=self.now))
         self.assertFalse(self.db.record_premises_entry("S1", observed_at=self.now + timedelta(seconds=1)))
         self.assertEqual(self.db.get_premises_entries()[0]["student_status"], "Unenrolled")
         self.change_status("Enrolled")
-        self.assertTrue(self.db.record_attendance("S1"))
+        self.assertTrue(self.db.record_attendance("S1", observed_at=self.now + timedelta(minutes=10)))
+        self.assertEqual(self.db.query_attendance()["rows"][0]["sighting_count"], 3)
         self.assertFalse(self.db.record_premises_entry("S1"))
         self.assertIsNotNone(self.db.log_violation("S1", "Student One", "wrong_uniform"))
 
     def test_self_registration_needs_verification_not_unenrolled(self):
         self.db.insert_student("S2", "New Student", "BSIT", "1A", b"", b"", registration_pending=True)
-        self.assertFalse(self.db.record_attendance("S2"))
+        self.assertTrue(self.db.record_attendance("S2", observed_at=self.now))
         self.assertFalse(self.db.record_premises_entry("S2"))
         self.assertIsNone(self.db.log_violation("S2", "New Student", "wrong_uniform"))
         with self.assertRaises(ValueError):
@@ -82,7 +83,7 @@ class StudentManagementTests(unittest.TestCase):
                                            changed_by="osa", reason="Not verified")
         self.db.update_student_details("S2", student_status="Enrolled", contacts={},
             changed_by="osa", reason="Checked school enrollment", verify_registration=True)
-        self.assertTrue(self.db.record_attendance("S2"))
+        self.assertTrue(self.db.record_attendance("S2", observed_at=self.now + timedelta(minutes=5)))
 
     def test_new_registration_preserves_existing_account_and_history(self):
         self.assertTrue(self.db.insert_student_account('S1', 'old-user', 'old-password'))
@@ -164,7 +165,7 @@ class StudentManagementTests(unittest.TestCase):
         self.change_status("Graduate")
         self.assertEqual(self.db.get_appeal_for_violation(vid)["status"], "pending")
         self.assertTrue(self.db.update_appeal_decision(aid, "approved", "Evidence reviewed",
-            decided_by="admin", decided_at=self.now + timedelta(hours=1)))
+            decided_by="admin", decided_at=self.now + timedelta(hours=1), decision_category_code='approval.detection_error'))
         with self.db.connect() as conn:
             self.assertEqual(conn.execute("SELECT COALESCE(SUM(is_active),0) FROM strikes WHERE violation_id=?", (vid,)).fetchone()[0], 0)
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM violations WHERE id=?", (vid,)).fetchone()[0], 1)
@@ -193,7 +194,7 @@ class StudentManagementTests(unittest.TestCase):
         self.assertFalse(result.assessments[0].discipline_eligible)
         self.assertIn("Suspended", result.assessments[0].suspension_tag)
         self.assertIsNotNone(self.db.get_premises_entries()[0]["suspension_id"])
-        self.assertEqual(self.db.get_attendance_report(), [])
+        self.assertEqual(self.db.query_attendance(view="events")["rows"][0]["student_status"], "Graduate")
 
     def test_non_enrolled_camera_detection_skips_classifiers(self):
         self.change_status("Graduate")

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import sqlite3
 from datetime import datetime, timedelta
@@ -28,8 +27,15 @@ from core.discipline import (
     violation_display_name,
 )
 from database.models import ALL_TABLES
+from core.appeal_categories import VERSION as CATEGORY_VERSION, validate_category, decision_view
+from database.appeal_category_migration import migrate_appeal_categories
+from database.attendance import AttendanceStore, migrate_attendance
+from auth.passwords import hash_password, verify_password
+from database.student_credentials import StudentCredentials, migrate_credentials
 from database.student_management import StudentManagement, migrate_student_management
 from core.student_status import validate_contacts
+from core.academics import academic_values, resolve_pair, legacy_year_section
+from database.academic_migration import migrate_academics
 from core.appeal_evidence import validate_evidence
 from core.evidence_integrity import digest, original_evidence, supporting_evidence, INTEGRITY_HELP
 
@@ -154,10 +160,6 @@ WORKFLOW_INDEXES = (
 )
 
 
-def hash_password(password: str) -> str:
-    return hashlib.sha256(password.encode("utf-8")).hexdigest()
-
-
 def _inserted_row_id(cursor: sqlite3.Cursor) -> int:
     row_id = cursor.lastrowid
     if row_id is None:
@@ -198,11 +200,12 @@ class _ClosingConnection(sqlite3.Connection):
             self.close()
 
 
-class CBVMSDatabase(StudentManagement):
+class CBVMSDatabase(StudentManagement, StudentCredentials, AttendanceStore):
     def __init__(self, db_path: Path | str | None = None, *, timeout: float = 30.) -> None:
         if db_path is None:
             root = Path(__file__).resolve().parent.parent
             db_path = root / "data" / "cbvms.db"
+        self.student_session_ref = None
         self.timeout = timeout
         self.db_path = Path(db_path).expanduser().resolve()
         from core.diagnostics import event
@@ -214,6 +217,15 @@ class CBVMSDatabase(StudentManagement):
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute(f"PRAGMA busy_timeout = {int(self.timeout * 1000)}")
+        if self.student_session_ref is not None:
+            try:
+                row = self._session_row(conn, self.student_session_ref['token'])
+                if row['restricted'] or row['must_change_password'] or not row['first_login_completed_at']:
+                    from database.student_credentials import SessionExpired
+                    raise SessionExpired('Set your new password before entering the student portal.')
+            except Exception:
+                conn.close()
+                raise
         return conn
 
     def get_portal_preferences(self, student_id: str) -> dict:
@@ -254,10 +266,12 @@ class CBVMSDatabase(StudentManagement):
                 conn.execute("ALTER TABLE students ADD COLUMN profile_photo BLOB")
             conn.execute(SYSTEM_REPORTS_TABLE)
             conn.execute(STUDENT_ACCOUNTS_TABLE)
+            migrate_credentials(conn)
             conn.execute(STUDENT_NOTIFICATIONS_TABLE)
             conn.execute(EVIDENCE_FILES_TABLE)
             conn.execute(DECISION_HISTORY_TABLE)
             conn.execute(APPEALS_TABLE)
+            migrate_appeal_categories(conn)
             conn.execute(SECURITY_EVENTS_TABLE)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_security_events_observed "
                          "ON security_events(observed_at)")
@@ -330,6 +344,8 @@ class CBVMSDatabase(StudentManagement):
             if "email" not in cols:
                 conn.execute("ALTER TABLE students ADD COLUMN email TEXT DEFAULT ''")
 
+            migrate_academics(conn)
+            migrate_attendance(conn)
             self._ensure_current_academic_term_conn(conn)
             legacy_term_id = self._ensure_legacy_term_conn(conn)
             conn.execute(
@@ -522,13 +538,17 @@ class CBVMSDatabase(StudentManagement):
         return [dict(row) for row in rows]
 
     def verify_user(self, username: str, password: str) -> bool:
-        password_hash = hash_password(password)
         with self.connect() as conn:
-            row = conn.execute(
-                "SELECT id FROM users WHERE username = ? AND password_hash = ?",
-                (username.strip(), password_hash),
-            ).fetchone()
-        return row is not None
+            row = conn.execute("SELECT id, password_hash FROM users WHERE username=?", (username.strip(),)).fetchone()
+        if not row or not verify_password(password, row['password_hash']):
+            return False
+        if not row['password_hash'].startswith('pbkdf2_sha256$v1$'):
+            encoded = hash_password(password)
+            with self.connect() as conn:
+                changed = conn.execute('UPDATE users SET password_hash=? WHERE id=? AND password_hash=?',
+                                       (encoded, row['id'], row['password_hash']))
+                return changed.rowcount == 1
+        return True
 
     def get_all_students(self) -> list[sqlite3.Row]:
         with self.connect() as conn:
@@ -572,7 +592,19 @@ class CBVMSDatabase(StudentManagement):
         *, contacts: dict | None = None, registration_pending: bool = False,
         account_password: str | None = None,
         account_username: str | None = None,
+        college_department: str | None = None,
+        report_year_level: str | None = None, report_section: str | None = None,
     ) -> int:
+        # Older callers may supply an explicit alias without college; unknown values fail.
+        if college_department is None:
+            pair = resolve_pair('', course)
+            if not pair:
+                raise ValueError('Select a valid college and course.')
+            college_department = pair[0]
+        legacy_year, legacy_section = legacy_year_section(year_and_section)
+        academics = academic_values(college_department, course,
+            report_year_level if report_year_level is not None else legacy_year,
+            report_section if report_section is not None else legacy_section)
         contact_values = validate_contacts({**(contacts or {}), "email": email})
         with self.connect() as conn:
             cursor = conn.execute(
@@ -592,6 +624,8 @@ class CBVMSDatabase(StudentManagement):
                 ),
             )
             pk = _inserted_row_id(cursor)
+            academic_assignments = ', '.join(f'{key}=?' for key in academics)
+            conn.execute(f'UPDATE students SET {academic_assignments} WHERE id=?', (*academics.values(), pk))
             assignments = ", ".join(f"{key}=?" for key in contact_values)
             conn.execute(f"UPDATE students SET {assignments}, registration_pending=? WHERE id=?",
                          (*contact_values.values(), int(registration_pending), pk))
@@ -1004,14 +1038,19 @@ class CBVMSDatabase(StudentManagement):
     def reconcile_automatic_uniform_suspensions(self, *, now=None, student_id=None):
         """Catch up pre-policy current-semester strikes without repeating awards."""
         stamp = format_db_datetime(parse_db_datetime(now) if now is not None else utc_now())
+        scope = " AND st.student_id=?" if student_id is not None else ""
+        params = (student_id,) if student_id is not None else ()
+        candidates = """SELECT st.student_id, st.semester_id, MAX(st.violation_id) violation_id
+            FROM strikes st JOIN academic_terms t ON t.id=st.semester_id
+            WHERE st.is_active=1 AND st.violation_code='wrong_uniform' AND t.is_current=1""" + scope + \
+            " GROUP BY st.student_id, st.semester_id HAVING COUNT(*)>=3"
         with self.connect() as conn:
+            # A read-only refresh with no candidates must not wait for the writer lock.
+            if not conn.execute(candidates, params).fetchone():
+                return
             conn.execute("BEGIN IMMEDIATE")
-            scope = " AND st.student_id=?" if student_id is not None else ""
-            params = (student_id,) if student_id is not None else ()
-            rows = conn.execute("""SELECT st.student_id, st.semester_id, MAX(st.violation_id) violation_id
-                FROM strikes st JOIN academic_terms t ON t.id=st.semester_id
-                WHERE st.is_active=1 AND st.violation_code='wrong_uniform' AND t.is_current=1"""
-                + scope + " GROUP BY st.student_id, st.semester_id HAVING COUNT(*)>=3", params).fetchall()
+            # Recheck under the existing write lock; award rules and transactions are unchanged.
+            rows = conn.execute(candidates, params).fetchall()
             for row in rows:
                 violation = conn.execute("SELECT * FROM violations WHERE id=?", (row["violation_id"],)).fetchone()
                 if violation is not None:
@@ -1537,7 +1576,7 @@ class CBVMSDatabase(StudentManagement):
             rows = conn.execute(
                 """
                 SELECT sa.id, sa.student_id, sa.username, sa.password_hash, sa.created_at,
-                       s.name, s.course, s.year_and_section, s.gender
+                       s.name, s.college_department, s.course, s.year_and_section, s.gender
                 FROM student_accounts sa
                 LEFT JOIN students s ON s.student_id = sa.student_id
                 ORDER BY s.name COLLATE NOCASE
@@ -1546,11 +1585,12 @@ class CBVMSDatabase(StudentManagement):
         return [dict(r) for r in rows]
 
     def reset_student_password(self, student_id: str, new_password: str) -> bool:
-        """Reset a student account password. Returns True on success."""
+        """Administrator reset: require setup and invalidate all older credentials/sessions."""
         try:
             with self.connect() as conn:
                 cursor = conn.execute(
-                    "UPDATE student_accounts SET password_hash = ? WHERE student_id = ?",
+                    "UPDATE student_accounts SET password_hash = ?, must_change_password=1, "
+                    "credential_version=credential_version+1 WHERE student_id = ?",
                     (hash_password(new_password), (student_id or "").strip()),
                 )
                 conn.commit()
@@ -1573,35 +1613,9 @@ class CBVMSDatabase(StudentManagement):
             ).fetchone()
         if row is not None:
             existing_username = row[0]
-            try:
-                with self.connect() as conn:
-                    conn.execute(
-                        "UPDATE student_accounts SET password_hash = ? WHERE student_id = ?",
-                        (hash_password(password), sid),
-                    )
-                    conn.commit()
-                return True, existing_username
-            except Exception as exc:
-                print(f"[DB] upsert_student_account update error: {exc}")
-                return False, existing_username
+            return self.reset_student_password(sid, password), existing_username
         success = self.insert_student_account(sid, username, password)
         return success, username
-
-    def verify_student_account(self, username: str, password: str) -> dict | None:
-        """Return {student_id, display_name} if credentials match, else None."""
-        with self.connect() as conn:
-            row = conn.execute(
-                """
-                SELECT sa.student_id, s.name
-                FROM student_accounts sa
-                LEFT JOIN students s ON s.student_id = sa.student_id
-                WHERE sa.username = ? AND sa.password_hash = ?
-                """,
-                ((username or "").strip(), hash_password(password)),
-            ).fetchone()
-        if row is None:
-            return None
-        return {"student_id": row[0], "display_name": row[1] or row[0]}
 
     # ------------------------------------------------------------------
     # Notification helpers
@@ -1732,7 +1746,7 @@ class CBVMSDatabase(StudentManagement):
                 """,
                 ((student_id or "").strip(), appeal_id, appeal_id, *params),
             ).fetchall()
-        return [dict(r) for r in rows]
+        return [decision_view(r) for r in rows]
 
     def get_appeal_for_violation(self, violation_id: int) -> dict | None:
         with self.connect() as conn:
@@ -1918,17 +1932,19 @@ class CBVMSDatabase(StudentManagement):
     def log_decision(self, appeal_id: int, violation_id: int, student_id: str,
                      student_name: str, violation_type: str, decision: str,
                      previous_status: str, admin_notes: str,
-                     decided_by: str = "admin", ai_recommendation: str = "") -> bool:
+                     decided_by: str = "admin", ai_recommendation: str = "",
+                     *, decision_category_code: str | None = None) -> bool:
         # Compatibility entry point must use the same transactional decision boundary.
-        return self.update_appeal_decision(appeal_id, decision, admin_notes, decided_by=decided_by)
+        return self.update_appeal_decision(appeal_id, decision, admin_notes, decided_by=decided_by,
+                                           decision_category_code=decision_category_code)
 
-    def get_decision_history(self, limit: int = 200) -> list[dict]:
+    def get_decision_history(self, limit: int | None = 200) -> list[dict]:
         with self.connect() as conn:
             rows = conn.execute(
-                "SELECT * FROM decision_history ORDER BY decided_at DESC LIMIT ?",
-                (limit,),
+                "SELECT * FROM decision_history ORDER BY decided_at DESC,id DESC" + (" LIMIT ?" if limit is not None else ""),
+                (limit,) if limit is not None else (),
             ).fetchall()
-        return [dict(r) for r in rows]
+        return [decision_view(r) for r in rows]
 
     def get_decision_history_for_appeal(self, appeal_id: int) -> list[dict]:
         with self.connect() as conn:
@@ -1936,7 +1952,7 @@ class CBVMSDatabase(StudentManagement):
                 "SELECT * FROM decision_history WHERE appeal_id = ? ORDER BY decided_at DESC",
                 (appeal_id,),
             ).fetchall()
-        return [dict(r) for r in rows]
+        return [decision_view(r) for r in rows]
 
     def update_appeal_decision(
         self,
@@ -1945,6 +1961,7 @@ class CBVMSDatabase(StudentManagement):
         admin_notes: str,
         decided_by: str = "",
         *,
+        decision_category_code: str | None = None,
         decided_at: datetime | str | None = None,
         expected_violation_id: int | None = None,
         expected_evidence_keys: tuple | None = None,
@@ -1953,6 +1970,12 @@ class CBVMSDatabase(StudentManagement):
 
         safe_decision = (decision or "").strip().lower()
         if safe_decision not in ("approved", "rejected"):
+            return False
+        if self.student_session_ref is not None:
+            return False
+        try:
+            category = validate_category(decision_category_code, safe_decision)
+        except ValueError:
             return False
         decision_dt = parse_db_datetime(decided_at) if decided_at is not None else utc_now()
         if decision_dt is None:
@@ -1965,7 +1988,7 @@ class CBVMSDatabase(StudentManagement):
         try:
             with self.connect() as conn:
                 conn.execute("BEGIN IMMEDIATE")
-                if not conn.execute("SELECT 1 FROM users WHERE username=?", (actor,)).fetchone():
+                if not conn.execute("SELECT 1 FROM users WHERE username=? AND role IN ('admin','superadmin')", (actor,)).fetchone():
                     return False
                 decision_text = format_db_datetime(decided_at or utc_now())
                 row = conn.execute(
@@ -1985,9 +2008,10 @@ class CBVMSDatabase(StudentManagement):
                     return False
                 conn.execute(
                     """UPDATE appeals
-                       SET status = ?, admin_notes = ?, decided_at = ?, decided_by = ?
+                       SET status = ?, admin_notes = ?, decided_at = ?, decided_by = ?,
+                           decision_category_code = ?, decision_category_label = ?, decision_category_version = ?
                        WHERE id = ? AND status = 'pending'""",
-                    (safe_decision, notes, decision_text, actor, appeal_id),
+                    (safe_decision, notes, decision_text, actor, category.code, category.label, CATEGORY_VERSION, appeal_id),
                 )
                 violation = conn.execute("SELECT * FROM violations WHERE id=?", (row["violation_id"],)).fetchone()
                 if violation is None or violation["student_id"] != row["student_id"] or violation["status"] in (DISMISSED, "resolved"):
@@ -2027,8 +2051,9 @@ class CBVMSDatabase(StudentManagement):
                     """INSERT INTO decision_history
                        (appeal_id, violation_id, student_id, student_name,
                         violation_type, decision, previous_status, admin_notes,
-                        decided_by, ai_recommendation, decided_at)
-                       VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)""",
+                        decided_by, ai_recommendation, decided_at, decision_category_code,
+                        decision_category_label, decision_category_version)
+                       VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         appeal_id,
                         row["violation_id"],
@@ -2039,7 +2064,7 @@ class CBVMSDatabase(StudentManagement):
                         notes,
                         actor,
                         row["ai_recommendation"] or "",
-                        decision_text,
+                        decision_text, category.code, category.label, CATEGORY_VERSION,
                     ),
                 )
                 label = violation_display_name(
@@ -2050,7 +2075,7 @@ class CBVMSDatabase(StudentManagement):
                     if safe_decision == "approved"
                     else "One strike is active for this violation."
                 )
-                message = f"Your appeal for {label} was {safe_decision}. {effect}"
+                message = f"Your appeal for {label} was {safe_decision}. {effect} Decision category: {category.label}."
                 if notes:
                     message += f" Admin note: {notes}"
                 self._insert_event_notification_conn(
@@ -2126,10 +2151,10 @@ class CBVMSDatabase(StudentManagement):
             params = (status, status, status, search.strip(), search.strip())
             total = conn.execute("SELECT COUNT(*) " + query, params).fetchone()[0]
             ordering = "a.decided_at" if status == "history" else "a.submitted_at"
-            rows = conn.execute("SELECT a.id,a.violation_id,a.student_id,a.status,a.submitted_at,a.decided_at,a.decided_by,a.admin_notes,v.violation_type,s.name student_name "
+            rows = conn.execute("SELECT a.id,a.violation_id,a.student_id,a.status,a.submitted_at,a.decided_at,a.decided_by,a.admin_notes,a.decision_category_code,a.decision_category_label,a.decision_category_version,v.violation_type,s.name student_name "
                 + query + f" ORDER BY {ordering} DESC,a.id DESC LIMIT ? OFFSET ?",
                 (*params, min(50,max(1,limit)), max(0,offset))).fetchall()
-        return {"rows": [dict(r) for r in rows], "total": total}
+        return {"rows": [decision_view(r) for r in rows], "total": total}
 
     def get_appeal_case(self, appeal_id, *, username):
         with self.connect() as conn:
@@ -2138,14 +2163,14 @@ class CBVMSDatabase(StudentManagement):
             row = conn.execute("""SELECT a.*,v.violation_type,v.violation_code,
                 v.timestamp detection_time,v.appeal_opened_at,v.appeal_deadline,
                 v.status violation_status,v.snapshot,v.snapshot_sha256,v.snapshot_provenance,v.lifecycle_origin,
-                s.name student_name,s.course,s.year_and_section,
+                s.name student_name,s.college_department,s.course,s.year_and_section,
                 COALESCE(st.is_active,0) strike_active FROM appeals a
                 JOIN violations v ON v.id=a.violation_id AND v.student_id=a.student_id
                 LEFT JOIN students s ON s.student_id=a.student_id
                 LEFT JOIN strikes st ON st.violation_id=v.id WHERE a.id=?""", (appeal_id,)).fetchone()
             if not row:
                 raise ValueError("Appeal no longer available.")
-            case = dict(row)
+            case = decision_view(row)
             case["evidence"] = [dict(r) for r in conn.execute(
                 "SELECT * FROM evidence_files WHERE appeal_id=? AND student_id=? ORDER BY id",
                 (appeal_id, row["student_id"]))]
@@ -2177,24 +2202,26 @@ class CBVMSDatabase(StudentManagement):
                           v.snapshot AS violation_snapshot,
                           st.is_active AS strike_active,
                           st.deactivation_reason AS strike_removal_reason,
-                          s.name AS student_name_full, s.course, s.year_and_section
+                          s.name AS student_name_full, s.college_department, s.course, s.year_and_section
                    FROM appeals a
                    LEFT JOIN violations v ON v.id = a.violation_id
                    LEFT JOIN strikes st ON st.violation_id = a.violation_id
                    LEFT JOIN students s ON s.student_id = a.student_id
                    ORDER BY a.submitted_at DESC""",
             ).fetchall()
-        return [dict(r) for r in rows]
+        return [decision_view(r) for r in rows]
 
     def get_all_violations_full(self) -> list[dict]:
         """All violations joined with student info, newest first."""
         with self.connect() as conn:
             rows = conn.execute(
-                """SELECT v.*, s.course, s.year_and_section,
+                """SELECT v.*, s.college_department, s.course, s.year_and_section,
                           t.semester_name, t.school_year,
                           st.is_active AS strike_active,
                           st.deactivation_reason AS strike_removal_reason,
-                          a.status AS appeal_status
+                          a.status AS appeal_status, a.decision_category_code,
+                          a.decision_category_label,a.decision_category_version,
+                          a.admin_notes AS decision_reason,a.decided_by,a.decided_at
                    FROM violations v
                    LEFT JOIN students s ON s.student_id = v.student_id
                    LEFT JOIN academic_terms t ON t.id = v.semester_id
@@ -2220,7 +2247,9 @@ class CBVMSDatabase(StudentManagement):
                           st.id AS strike_id, st.is_active AS strike_active,
                           st.semester_id AS strike_semester_id,
                           st.deactivation_reason AS strike_removal_reason,
-                          a.status AS appeal_status
+                          a.status AS appeal_status, a.decision_category_code,
+                          a.decision_category_label,a.decision_category_version,
+                          a.admin_notes AS decision_reason,a.decided_by,a.decided_at
                    FROM violations v
                    LEFT JOIN academic_terms t ON t.id = v.semester_id
                    LEFT JOIN strikes st ON st.violation_id = v.id
@@ -2230,53 +2259,6 @@ class CBVMSDatabase(StudentManagement):
                 ((student_id or "").strip(),),
             ).fetchall()
         return [dict(row) for row in rows]
-
-    def record_attendance(self, student_id: str, *, observed_at=None,
-                          valid_if: Callable[[], bool] | None = None) -> bool:
-        """Record a recognized enrolled student's presence once per local day.
-
-        Preserve the earliest/latest sightings even if workers finish out of order.
-        Unknown people never create attendance records.
-        """
-        observed = parse_db_datetime(observed_at) if observed_at is not None else utc_now()
-        if observed is None:
-            raise ValueError("Invalid attendance observation time")
-        day = observed.astimezone().date().isoformat()
-        timestamp = format_db_datetime(observed)
-        with self.connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            if valid_if is not None and not valid_if():
-                conn.rollback()
-                return False
-            student = conn.execute("SELECT name, student_status, registration_pending FROM students WHERE student_id = ?",
-                                   (student_id,)).fetchone()
-            if student is None or student["student_status"] != "Enrolled" or student["registration_pending"]:
-                return False
-            conn.execute("""INSERT INTO attendance
-                (student_id, student_name, attendance_date, first_seen, last_seen)
-                VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(student_id, attendance_date) DO UPDATE SET
-                    first_seen = MIN(attendance.first_seen, excluded.first_seen),
-                    last_seen = MAX(attendance.last_seen, excluded.last_seen)
-                """, (student_id, student["name"], day, timestamp, timestamp))
-            if valid_if is not None and not valid_if():
-                conn.rollback()
-                return False
-        return True
-
-    def get_attendance_report(self, start: str = "", end: str = "",
-                              search: str = "") -> list[dict]:
-        with self.connect() as conn:
-            rows = conn.execute("""SELECT a.*, s.course, s.year_and_section
-                FROM attendance a LEFT JOIN students s ON s.student_id = a.student_id
-                WHERE (? = '' OR a.attendance_date >= ?)
-                  AND (? = '' OR a.attendance_date <= ?)
-                ORDER BY a.attendance_date DESC, a.student_name, a.student_id
-                """, (start, start, end, end)).fetchall()
-        query = search.strip().casefold()
-        return [dict(r) for r in rows if not query or any(
-            query in str(r[k] or "").casefold()
-            for k in ("student_name", "student_id", "course", "year_and_section"))]
 
     def insert_system_report(
         self,

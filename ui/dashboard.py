@@ -39,6 +39,8 @@ from ui.notifications_panel import NotificationsPanel
 from ui.settings import SettingsPanel
 from ui.training_panel import TrainingPanel
 from ui.records_panel import RecordsPanel
+from ui.attendance_panel import AttendancePanel
+from core.attendance_writer import writer_status
 from ui.appeals_panel import AppealsPanel
 from ui.suspensions_panel import SuspensionsPanel
 from ui.reports_panel import ReportsPanel
@@ -338,6 +340,7 @@ class CBVMSDashboard(WorkspaceWindow):
         nav_items = [
             ("live",       "📹  Live Monitor"),
             ("enrollment", "👤  Student Management"),
+            ("attendance", "Attendance"),
             ("suspensions", "⏸  Suspensions"),
             ("violations", "⚠  Violation Log"),
             ("appeals",    "⚖  Appeals"),
@@ -486,11 +489,15 @@ class CBVMSDashboard(WorkspaceWindow):
             self._live_frame, text="Loading face detector", anchor="w", justify="left",
             wraplength=1050, font=body_small_font(), text_color=COLOR_TEXT_MUTED)
         self._status_models.grid(row=3, column=0, sticky="ew", padx=PADDING, pady=(4, 8))
-        self._live_frame.bind('<Configure>',lambda e: self._status_models.configure(
+        self._attendance_writer_status = ctk.CTkLabel(self._live_frame, text='', anchor='w',
+            text_color=COLOR_TEXT_MUTED, wraplength=1000)
+        self._attendance_writer_status.grid(row=4,column=0,sticky='ew',padx=PADDING)
+        self._live_frame.bind('<Configure>' ,lambda e: self._status_models.configure(
             wraplength=max(180,e.width-2*PADDING)),add='+')
 
         # Build secondary pages only when first opened, then reuse them.
         self._panel_factories = {
+            "attendance": ("_attendance_panel", lambda: AttendancePanel(self._view_host, database=self._database, username=self.username)),
             "reports": ("_reports_panel", lambda: ReportsPanel(self._view_host, database=self._database)),
             "enrollment": ("_enrollment_panel", lambda: EnrollmentPanel(
             self._view_host,
@@ -689,6 +696,7 @@ class CBVMSDashboard(WorkspaceWindow):
             self._suspensions_panel.on_hide()
 
         titles = {
+            "attendance": "Attendance — Campus Sightings",
             "reports":    "Reports",
             "live":       "Live Monitor",
             "enrollment": "Student Management",
@@ -722,6 +730,8 @@ class CBVMSDashboard(WorkspaceWindow):
                 self._violation_panel.refresh()
             if key == "appeals":
                 self._appeals_panel.on_show()
+            if key == "attendance":
+                self._attendance_panel.refresh()
             if key == "reports":
                 self._reports_panel.refresh()
             if key == "records" and self._records_panel is not None:
@@ -1368,6 +1378,7 @@ class CBVMSDashboard(WorkspaceWindow):
                 if failed != getattr(self, '_model_retry_enabled', None):
                     self._retry_model_btn.configure(state="normal" if failed else "disabled")
                     self._model_retry_enabled = failed
+                self._attendance_writer_status.configure(text=writer_status(self._database))
                 sample = self._latest_monitor_sample()
                 if sample is None or started-sample.captured_at > 1.0:
                     if self._monitor_last_rendered is not None:
@@ -1393,7 +1404,9 @@ class CBVMSDashboard(WorkspaceWindow):
                             FrameContext(self._monitor_generation, sample.frame_id, sample.captured_at),
                             sample.frame, sample.captured_wall_time or time.time()-(started-sample.captured_at), self._monitor_cancel,
                             uniform_enabled=self._checker.check_uniform, earring_enabled=self._checker.check_earring,
-                            camera_generation=self._camera_generation))
+                            camera_generation=self._camera_generation,
+                            source_id=str(self._cam_sources.get(self._cam_source_var.get(), {}).get("id") or f"usb:{self._camera_index_setting}"),
+                            source_label=self._cam_source_var.get()))
                         self._tracking_last_offered = sample.frame_id
                         self._tracking_offer_time = started
                     result = _drain(self._live_worker.results)
@@ -1555,6 +1568,11 @@ def open_dashboard(
     for worker in (app._tracking_worker,app._live_worker):
         worker.done.wait(max(0,deadline-time.monotonic()))
     app._live_worker.writes_done.wait(max(0,deadline-time.monotonic()))
+    if app._live_worker.attendance_writer is not None:
+        writer=app._live_worker.attendance_writer
+        if not writer.done.wait(max(0,deadline-time.monotonic())):
+            event('attendance_shutdown_incomplete',status=writer.status())
+            print('[Attendance] Shutdown deadline reached: '+writer.status())
     app._camera_worker_done.wait(max(0,deadline-time.monotonic()))
     app._readiness.wait(max(0,deadline-time.monotonic()))
     return getattr(app, "_logout_requested", False)

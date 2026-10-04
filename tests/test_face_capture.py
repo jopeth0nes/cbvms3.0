@@ -150,7 +150,12 @@ class SaveFlowTests(unittest.TestCase):
             setattr(panel, method, original if method in ('_ordered_captures', '_init_wizard_preview', '_wizard_feedback') else original.__get__(panel))
         def save_immediately(state,operation,completed):
             state['capturing'] = True
-            result = operation()
+            try:
+                result = operation()
+            except Exception as exc:
+                state['capturing'] = False
+                state['det_status'].configure(text=str(exc))
+                return
             state['capturing'] = False
             state['saved'] = True
             completed(result)
@@ -280,6 +285,10 @@ class SaveFlowTests(unittest.TestCase):
         panel._entries = {key: MagicMock() for key in values}
         for key, value in values.items():
             panel._entries[key].get.return_value = value
+        from core.academics import academic_values, COURSES
+        panel._academics = MagicMock()
+        panel._academics.values.return_value = academic_values(*COURSES['it'], '1', 'A')
+        panel._academics.raw.return_value = (*COURSES['it'], '1st Year', 'A')
         panel._gender_var = MagicMock()
         panel._gender_var.get.return_value = 'Male'
         panel._set_enroll_status = MagicMock()
@@ -294,6 +303,8 @@ class SaveFlowTests(unittest.TestCase):
         self.assertEqual(saved['photo'], capture.photo)
         np.testing.assert_array_equal(pickle.loads(saved['encoding'])[0], capture.embedding)
         panel.recognizer.enrollment_faces.assert_not_called()
+        panel._academics.raw.return_value = (*COURSES['cs'], '1st Year', 'A')
+        self.assertFalse(panel._capture_current(state))
 
     def test_confirm_angle_final_review_and_retake_do_not_save_implicitly(self):
         panel, state, captured = self.panel(MagicMock(), 7, 'S7')
@@ -340,6 +351,11 @@ class RegistrationSaveTests(unittest.TestCase):
             entry = MagicMock()
             entry.get.return_value = value
             setattr(win, '_e_'+key, entry)
+        from core.academics import academic_values, COURSES
+        win._academics = MagicMock()
+        win._academics.values.return_value = academic_values(*COURSES['it'], '1', 'A')
+        win._save_task = MagicMock()
+        win._save_task.run.side_effect = lambda operation, done, error: done(operation())
         win._gender_var = MagicMock()
         win._gender_var.get.return_value = 'Male'
         win._contact_entries = {}

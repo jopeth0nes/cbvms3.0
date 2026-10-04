@@ -1,4 +1,5 @@
 """Additive student-management storage; no changes to historical discipline rules."""
+from core.academics import academic_values
 from core.discipline import utc_now, parse_db_datetime, format_db_datetime
 from core.student_status import STUDENT_STATUSES, CONTACT_FIELDS, validate_contacts
 
@@ -42,7 +43,7 @@ def migrate_student_management(conn):
 
 class StudentManagement:
     def update_student_details(self, student_id, *, student_status, contacts,
-                               changed_by, reason="", verify_registration=False):
+                               changed_by, reason="", verify_registration=False, academics=None):
         if student_status not in STUDENT_STATUSES:
             raise ValueError("Choose Enrolled, Graduate, or Unenrolled.")
         if not changed_by.strip():
@@ -53,6 +54,14 @@ class StudentManagement:
             old = conn.execute("SELECT * FROM students WHERE student_id=?", (student_id,)).fetchone()
             if old is None:
                 raise ValueError("Student not found.")
+            if academics is not None:
+                keys = ('college_department', 'course', 'report_year_level', 'report_section')
+                proposed = {key: academics.get(key, old[key]) for key in keys}
+                if any(proposed[key] != old[key] for key in keys):
+                    validated = academic_values(*(proposed[key] for key in keys))
+                    assignments = ', '.join(f'{key}=?' for key in validated)
+                    conn.execute(f'UPDATE students SET {assignments} WHERE student_id=?',
+                                 (*validated.values(), student_id))
             pending = bool(old["registration_pending"])
             if pending and student_status != "Enrolled":
                 raise ValueError("Verify this registration as Enrolled first.")

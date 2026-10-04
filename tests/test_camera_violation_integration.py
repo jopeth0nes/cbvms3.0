@@ -41,12 +41,13 @@ class CameraViolationIntegrationTests(unittest.TestCase):
             self.assertEqual(record.call_count, 1)
             self.assertEqual(record.call_args.args, ("S-1",))
             # Cooldown expires independently from temporary tracking identity.
-            fixture.processor.attendance_cooldowns = {key: fixture.now-31 for key in fixture.processor.attendance_cooldowns}
+            fixture.processor.attendance_cooldowns = {key: fixture.now-301 for key in fixture.processor.attendance_cooldowns}
             fixture.persist(fixture.analyze(4))
             self.assertEqual(record.call_count, 2)
         report = fixture.database.get_attendance_report()
         self.assertEqual(len(report), 1)
         self.assertEqual(report[0]["student_id"], "S-1")
+        self.assertEqual(report[0]["sighting_count"], 1)  # SQLite still deduplicates after the cache expires.
         self.assertEqual(fixture.database.get_violations_for_student("S-1"), [])
 
     def test_accepted_assessment_persists_pending_review_with_appeal_and_student_notice_without_strike(self):
@@ -141,7 +142,8 @@ class CameraViolationIntegrationTests(unittest.TestCase):
             connection.execute("UPDATE students SET student_status='Graduate' WHERE student_id='S-1'")
         fixture.persist(result)
         self.assertEqual(fixture.database.get_violations_for_student("S-1"), [])
-        self.assertEqual(fixture.database.get_attendance_report(), [])
+        self.assertEqual(fixture.database.query_attendance(view="events")["count"], 1)
+        self.assertEqual(fixture.database.query_attendance(view="events")["rows"][0]["student_status"], "Enrolled")
         self.assertFalse(fixture.processor.cooldowns)
         fixture.notifier.notify.assert_not_called()
 

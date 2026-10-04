@@ -45,9 +45,9 @@ class DisciplineEmailTests(unittest.TestCase):
                                         evidence=picture_evidence())
             self.assertIsNotNone(aid)
             self.assertTrue(self.db.update_appeal_decision(aid, 'rejected',
-                            'Evidence reviewed.', decided_by='admin'))
+                            'Evidence reviewed.', decided_by='admin', decision_category_code='rejection.violation_confirmed'))
             self.assertFalse(self.db.update_appeal_decision(aid, 'rejected',
-                             'Evidence reviewed.', decided_by='admin'))
+                             'Evidence reviewed.', decided_by='admin', decision_category_code='rejection.violation_confirmed'))
             with self.db.connect() as conn:
                 self.assertEqual(conn.execute(
                     "SELECT COUNT(*) FROM strikes WHERE student_id='S1' AND is_active=1"
@@ -72,7 +72,7 @@ class DisciplineEmailTests(unittest.TestCase):
                                     snapshot_jpeg=picture_evidence()[2])
         aid = self.db.insert_appeal(vid, 'S1', 'Please review my uniform evidence.', evidence=picture_evidence())
         self.assertTrue(self.db.update_appeal_decision(
-            aid, 'approved', 'Uniform verified', decided_by='admin'))
+            aid, 'approved', 'Uniform verified', decided_by='admin', decision_category_code='approval.detection_error'))
         self.db.log_violation('S1', 'Student', 'wrong_uniform')
         reopened = CBVMSDatabase(self.db.db_path)
         reopened.initialize(process_deadlines=False)
