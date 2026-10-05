@@ -42,7 +42,7 @@ from ui.records_panel import RecordsPanel
 from ui.attendance_panel import AttendancePanel
 from core.attendance_writer import writer_status
 from ui.appeals_panel import AppealsPanel
-from ui.suspensions_panel import SuspensionsPanel
+from ui.suspension_overview import SuspensionsWorkspace
 from ui.reports_panel import ReportsPanel
 from ui.violation_log import ViolationLogPanel
 from ui.account_manager import AccountManagerPanel
@@ -210,6 +210,12 @@ class CBVMSDashboard(WorkspaceWindow):
             latest_sample=self._latest_monitor_sample,
             state=LiveState(LiveConfig(violation_min_confidence=UNIFORM_VIOLATION_CONF)),
         )
+        self._processor.audio_task_valid = lambda task: (
+            not self._closed.is_set()
+            and task.context.generation == self._monitor_generation
+            and task.camera_generation == self._camera_generation
+            and task.uniform_enabled == self._checker.check_uniform
+            and task.earring_enabled == self._checker.check_earring)
         self._processor.readiness = self._readiness
         self._live_worker = LiveWorker(self._processor, persistence_worker=True)
         self._tracking_worker = LiveWorker(FaceTrackingProcessor(
@@ -225,7 +231,7 @@ class CBVMSDashboard(WorkspaceWindow):
 
         self._enrollment_panel: EnrollmentPanel | None = None
         self._training_panel: TrainingPanel | None = None
-        self._suspensions_panel: SuspensionsPanel | None = None
+        self._suspensions_panel: SuspensionsWorkspace | None = None
         self._reports_panel = None
         self._violation_panel: ViolationLogPanel | None = None
         self._settings_panel: SettingsPanel | None = None
@@ -508,7 +514,7 @@ class CBVMSDashboard(WorkspaceWindow):
             username=self.username,
             on_open_suspensions=self._open_student_suspensions,
         )),
-            "suspensions": ("_suspensions_panel", lambda: SuspensionsPanel(
+            "suspensions": ("_suspensions_panel", lambda: SuspensionsWorkspace(
             self._view_host, database=self._database, username=self.username)),
             "violations": ("_violation_panel", lambda: ViolationLogPanel(self._view_host, database=self._database)),
             "training": ("_training_panel", lambda: TrainingPanel(
@@ -1239,6 +1245,9 @@ class CBVMSDashboard(WorkspaceWindow):
         return camera.get_latest_sample() if camera is not None and camera.is_open else None
 
     def _invalidate_monitor(self):
+        notifier = getattr(self, "_notifier", None)
+        if notifier is not None:
+            notifier.audio.cancel_detection()
         if hasattr(self, "_tracking_worker"):
             _drain(self._tracking_worker.requests)
             _drain(self._tracking_worker.results)
@@ -1521,6 +1530,7 @@ class CBVMSDashboard(WorkspaceWindow):
 
     def _on_close(self) -> None:
         self._closed.set()
+        self._notifier.close()
         self._monitor_cancel.set()
         self._tracking_worker.stop()
         self._live_worker.stop()
@@ -1573,6 +1583,10 @@ def open_dashboard(
         if not writer.done.wait(max(0,deadline-time.monotonic())):
             event('attendance_shutdown_incomplete',status=writer.status())
             print('[Attendance] Shutdown deadline reached: '+writer.status())
+    writer=app._live_worker.processor.security_writer
+    if writer is not None and not writer.done.wait(max(0,deadline-time.monotonic())):
+        event('unknown_sightings_shutdown_incomplete',status=writer.status())
+        print('[Unknown sightings] Shutdown deadline reached: '+writer.status())
     app._camera_worker_done.wait(max(0,deadline-time.monotonic()))
     app._readiness.wait(max(0,deadline-time.monotonic()))
     return getattr(app, "_logout_requested", False)

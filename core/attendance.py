@@ -99,14 +99,19 @@ EVENT_COLUMNS = ('attendance_date', 'student_id', 'student_name', 'observed_at',
                  'report_section', 'semester_name', 'school_year', 'student_status', 'provenance')
 
 
-def export_csv(database, path, *, view='summary', filters=None, selected_ids=None):
+def export_csv(database, path, *, view='summary', filters=None, selected_ids=None, username=None):
     """One DB read snapshot; stream every matching row, never just a visible page."""
     filters = validate_filters(filters)
-    columns = SUMMARY_COLUMNS if view == 'summary' else EVENT_COLUMNS
+    from database.security_events import UNKNOWN_COLUMNS
+    columns = UNKNOWN_COLUMNS if view == 'unknown' else SUMMARY_COLUMNS if view == 'summary' else EVENT_COLUMNS
     metadata = {'report': TITLE, 'view': view, 'scope': 'selected rows' if selected_ids is not None else 'all matching rows',
                 'timezone': 'Asia/Manila (UTC+08:00)', 'filters': filters,
                 'generated_at_utc': datetime.now(timezone.utc).isoformat(),
                 'meaning': 'Count = accepted cooldown-qualified sightings; not absence, lateness, class attendance, duration or checkout.'}
+    if view == 'unknown':
+        metadata['meaning'] = ('Unknown / Unrecognized means no registered identity match; not proof of '
+            'being unregistered or unauthorized. Count = recorded encounters, not unique people. '
+            'Historical rows are preserved; cross-visit or cross-camera identity is not established.')
     def safe(value):
         value = str(value if value is not None else '')
         return "'" + value if value.lstrip().startswith(('=', '+', '-', '@', '\t', '\r')) else value
@@ -124,7 +129,9 @@ def export_csv(database, path, *, view='summary', filters=None, selected_ids=Non
             writer = csv.writer(output)
             writer.writerow(['Report metadata', safe(json.dumps(metadata, ensure_ascii=False, sort_keys=True))])
             writer.writerow([key.replace('_', ' ').title() + (' (Asia/Manila)' if key in ('first_seen','last_seen','observed_at') else '') for key in columns])
-            for row in database.iter_attendance(view=view, filters=filters, selected_ids=selected_ids):
+            rows = (database.iter_unknown_sightings(username=username, filters=filters, selected_ids=selected_ids)
+                    if view == 'unknown' else database.iter_attendance(view=view, filters=filters, selected_ids=selected_ids))
+            for row in rows:
                 writer.writerow([safe(display_time(row,key) if key in ('first_seen','last_seen','observed_at') else row.get(key)) for key in columns])
                 count += 1
             output.flush()

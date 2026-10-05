@@ -2,9 +2,6 @@
 from __future__ import annotations
 
 import queue
-import re
-import sqlite3
-import threading
 import tkinter as tk
 from tkinter import ttk
 
@@ -13,6 +10,7 @@ import customtkinter as ctk
 from core.discipline import parse_db_datetime, utc_now, violation_display_name
 from core.academics import YEAR_LEVELS, legacy_year_section, resolve_pair, NEEDS_REVIEW, display_academics
 from core.student_status import suspension_label
+from core.report_worker import ReportWorker, latest
 from ui.components import (
     COLOR_ACCENT, COLOR_ACCENT_HOVER, COLOR_BG, COLOR_BORDER, COLOR_DANGER,
     COLOR_SURFACE, COLOR_TEXT, COLOR_TEXT_MUTED, COLOR_WARNING, CORNER_RADIUS,
@@ -63,6 +61,25 @@ def suspension_state(row):
     return "Scheduled" if start and start > now else "Active"
 
 
+def configure_table_style():
+    """Use scoped clam elements so macOS native headings remain legible on navy."""
+    style = ttk.Style()
+    for custom, original in (("Suspensions.heading", "Treeheading.cell"),
+                             ("Suspensions.field", "Treeview.field")):
+        if custom not in style.element_names():
+            style.element_create(custom, "from", "clam", original)
+    style.layout("Suspensions.Treeview", [("Suspensions.field", {"sticky": "nswe", "children": [
+        ("Treeview.padding", {"sticky": "nswe", "children": [("Treeview.treearea", {"sticky": "nswe"})]})]})])
+    style.layout("Suspensions.Treeview.Heading", [("Suspensions.heading", {"sticky": "nswe"}),
+        ("Treeheading.padding", {"sticky": "nswe", "children": [("Treeheading.text", {"sticky": "we"})]})])
+    style.configure("Suspensions.Treeview", background=COLOR_BG, foreground=COLOR_TEXT,
+        fieldbackground=COLOR_BG, rowheight=32, bordercolor=COLOR_BORDER,
+        font=("Segoe UI", 11), relief="flat", borderwidth=0)
+    style.configure("Suspensions.Treeview.Heading", background=COLOR_SURFACE,
+        foreground=COLOR_TEXT_MUTED, relief="flat", font=("Segoe UI", 10, "bold"), padding=(10, 8))
+    style.map("Suspensions.Treeview", background=[("selected", COLOR_ACCENT)], foreground=[("selected", COLOR_TEXT)])
+
+
 class SuspensionsPanel(ctk.CTkFrame):
     """Mounted only in the administrator dashboard, like Student Management.
 
@@ -70,8 +87,10 @@ class SuspensionsPanel(ctk.CTkFrame):
     Generation IDs discard old responses when the selection changes or closes.
     """
 
-    def __init__(self, master, *, database, username, **kwargs):
+    def __init__(self, master, *, database, username, embedded=False, **kwargs):
         super().__init__(master, fg_color=COLOR_BG, **kwargs)
+        self.embedded = embedded
+        self._action_loading = False
         self.database = database
         self.username = username
         self.student_id = None
@@ -80,7 +99,8 @@ class SuspensionsPanel(ctk.CTkFrame):
         self._suspensions = {}
         self._term = {}
         self._generation = 0
-        self._results = queue.Queue()
+        self._results = queue.Queue(maxsize=4)
+        self._read_worker = ReportWorker()
         self._poll_job = None
         self._loading = False
         self._ready = False
@@ -134,15 +154,7 @@ class SuspensionsPanel(ctk.CTkFrame):
         return tree
 
     def _build_ui(self):
-        style = ttk.Style()
-        style.configure("Suspensions.Treeview", background=COLOR_BG, foreground=COLOR_TEXT,
-                        fieldbackground=COLOR_BG, rowheight=32, bordercolor=COLOR_BORDER,
-                        font=("Segoe UI", 11), relief="flat", borderwidth=0)
-        style.configure("Suspensions.Treeview.Heading", background=COLOR_SURFACE,
-                        foreground=COLOR_TEXT_MUTED, relief="flat",
-                        font=("Segoe UI", 10, "bold"), padding=(10, 8))
-        style.map("Suspensions.Treeview", background=[("selected", COLOR_ACCENT)],
-                  foreground=[("selected", COLOR_TEXT)])
+        configure_table_style()
         header = ctk.CTkFrame(self, fg_color="transparent")
         header.grid(row=0, column=0, sticky="ew", pady=(0, 8))
         ctk.CTkLabel(header, text="Suspensions", font=heading_font(24),
@@ -150,6 +162,8 @@ class SuspensionsPanel(ctk.CTkFrame):
         ctk.CTkButton(header, text="Refresh records", width=128, height=34,
                       fg_color=COLOR_BORDER, hover_color=COLOR_ACCENT_HOVER,
                       command=self.refresh).pack(side="right")
+        if self.embedded:
+            header.grid_remove()
         search_tools = ctk.CTkFrame(self, fg_color=COLOR_SURFACE,
                                     corner_radius=CORNER_RADIUS, border_width=1, border_color=COLOR_BORDER)
         search_tools.grid(row=1, column=0, sticky="ew", pady=(0, 6))
@@ -287,6 +301,8 @@ class SuspensionsPanel(ctk.CTkFrame):
         self._set_action_state()
 
     def select_student(self, student_id):
+        if self._action_loading:
+            return
         # Student numbers remain strings; tree item IDs are student numbers too.
         sid = str(student_id).strip() if student_id is not None else None
         changed = sid != self.student_id
@@ -297,12 +313,16 @@ class SuspensionsPanel(ctk.CTkFrame):
         self.refresh()
 
     def refresh(self):
+        if self._action_loading:
+            if self._poll_job is None:
+                self._poll_job = self.after(40, self._poll_results)
+            return
         self._generation += 1
         generation, sid = self._generation, self.student_id
         self._loading = True
         self._clear_details()
         self._message.configure(text="Loading student records…", text_color=COLOR_TEXT_MUTED)
-        threading.Thread(target=self._fetch, args=(generation, sid), daemon=True).start()
+        self._read_worker.offer(generation, lambda: self._fetch(generation, sid))
         if self._poll_job is None:
             self._poll_job = self.after(40, self._poll_results)
 
@@ -319,9 +339,15 @@ class SuspensionsPanel(ctk.CTkFrame):
                             violations=self.database.get_discipline_history_for_student(sid),
                             suspensions=self.database.get_suspension_history(sid),
                             active=self.database.get_active_suspension(sid))
-            self._results.put((generation, sid, data, None))
+            self._publish((generation, sid, data, None))
         except Exception as exc:
-            self._results.put((generation, sid, None, str(exc)))
+            self._publish((generation, sid, None, str(exc)))
+
+    def _publish(self, item):
+        try:
+            self._results.put_nowait(item)
+        except queue.Full:
+            latest(self._results, item)
 
     def _poll_results(self):
         self._poll_job = None
@@ -330,13 +356,25 @@ class SuspensionsPanel(ctk.CTkFrame):
                 generation, sid, data, error = self._results.get_nowait()
             except queue.Empty:
                 break
+            if data is not None and data.get("action"):
+                self._action_loading = False
             if generation != self._generation:
+                if data is not None and data.get("action"):
+                    self.refresh()
                 continue
             self._loading = False
             if error:
                 self._clear_details()
                 self._message.configure(text=f"Could not load records: {error} Use Refresh to retry.",
                                         text_color=COLOR_DANGER)
+                continue
+            if "lifted" in data:
+                if data["lifted"]:
+                    self._reset_form()
+                    self.refresh()
+                else:
+                    self._set_action_state()
+                    self._message.configure(text="Suspension already ended. Use Refresh to reload.", text_color=COLOR_WARNING)
                 continue
             self._students = data["students"]
             self._sync_course_options()
@@ -478,16 +516,25 @@ class SuspensionsPanel(ctk.CTkFrame):
         row = self._suspensions.get(selection[0]) if selection else None
         if not self._ready or self._loading or not row or not self.username.strip():
             return
-        try:
-            if not self.database.lift_suspension(row["id"], lifted_by=self.username,
-                                                  reason=self._lift_reason.get()):
-                self._message.configure(text="Suspension already ended. Use Refresh to reload.", text_color=COLOR_WARNING)
-                return
-        except (ValueError, sqlite3.Error) as exc:
-            self._message.configure(text=str(exc), text_color=COLOR_DANGER)
+        reason = self._lift_reason.get()
+        if not reason.strip():
+            self._message.configure(text="Give a reason and administrator identity.", text_color=COLOR_DANGER)
             return
-        self._reset_form()
-        self.refresh()
+        self._generation += 1
+        generation, sid = self._generation, self.student_id
+        self._action_loading = True
+        self._loading = True
+        self._set_action_state()
+        self._message.configure(text="Updating suspension…")
+        def lift():
+            try:
+                result = self.database.lift_suspension(row["id"], lifted_by=self.username, reason=reason)
+                self._publish((generation, sid, {"lifted": result, "action": True}, None))
+            except Exception as exc:
+                self._publish((generation, sid, {"action": True}, str(exc)))
+        self._read_worker.offer(generation, lift)
+        if self._poll_job is None:
+            self._poll_job = self.after(40, self._poll_results)
 
     def on_show(self, student_id=None):
         if student_id is not None:
@@ -505,5 +552,6 @@ class SuspensionsPanel(ctk.CTkFrame):
         self._clear_details()
 
     def destroy(self):
+        self._read_worker.close()
         self.on_hide()
         super().destroy()

@@ -35,7 +35,7 @@ def result_for(frame=None, generation=2, camera_generation=3, state="Uniform com
 
 def dashboard():
     panel = types.SimpleNamespace(
-        _closed=threading.Event(), _monitor_cancel=threading.Event(), _monitor_generation=2,
+        _notifier=MagicMock(), _closed=threading.Event(), _monitor_cancel=threading.Event(), _monitor_generation=2,
         _camera_generation=3, _monitor_result=None, _monitor_projections={},
         _monitor_last_offered=None, _monitor_last_rendered=None, _monitor_card_key=None,
         _monitor_render_key=None,
@@ -90,6 +90,7 @@ class LiveDashboardTests(unittest.TestCase):
         panel._preview_times.append(10)
         panel._analysis_times.append(10)
         panel._invalidate_monitor()
+        panel._notifier.audio.cancel_detection.assert_called_once()
         self.assertTrue(token.is_set())
         self.assertFalse(panel._monitor_cancel.is_set())
         self.assertEqual(panel._monitor_generation, 3)
@@ -107,6 +108,7 @@ class LiveDashboardTests(unittest.TestCase):
         done = threading.Event()
         panel._stop_camera = MagicMock(return_value=done)
         self.assertIs(panel._halt_camera(), done)
+        panel._notifier.audio.cancel_detection.assert_called_once()
         self.assertEqual(panel._camera_generation, 4)
         self.assertEqual(panel._monitor_generation, 3)
         self.assertTrue(token.is_set())
@@ -312,6 +314,7 @@ class LiveDashboardTests(unittest.TestCase):
                 panel.destroy = MagicMock()
                 token = panel._monitor_cancel
                 CBVMSDashboard._on_close(panel)
+                panel._notifier.close.assert_called_once()
                 self.assertTrue(panel._closed.is_set())
                 self.assertTrue(token.is_set())
                 panel._live_worker.stop.assert_called_once()

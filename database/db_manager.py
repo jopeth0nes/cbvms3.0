@@ -30,6 +30,7 @@ from database.models import ALL_TABLES
 from core.appeal_categories import VERSION as CATEGORY_VERSION, validate_category, decision_view
 from database.appeal_category_migration import migrate_appeal_categories
 from database.attendance import AttendanceStore, migrate_attendance
+from database.security_events import SecurityEventStore, migrate_security_events
 from auth.passwords import hash_password, verify_password
 from database.student_credentials import StudentCredentials, migrate_credentials
 from database.student_management import StudentManagement, migrate_student_management
@@ -200,7 +201,7 @@ class _ClosingConnection(sqlite3.Connection):
             self.close()
 
 
-class CBVMSDatabase(StudentManagement, StudentCredentials, AttendanceStore):
+class CBVMSDatabase(StudentManagement, StudentCredentials, AttendanceStore, SecurityEventStore):
     def __init__(self, db_path: Path | str | None = None, *, timeout: float = 30.) -> None:
         if db_path is None:
             root = Path(__file__).resolve().parent.parent
@@ -273,6 +274,7 @@ class CBVMSDatabase(StudentManagement, StudentCredentials, AttendanceStore):
             conn.execute(APPEALS_TABLE)
             migrate_appeal_categories(conn)
             conn.execute(SECURITY_EVENTS_TABLE)
+            migrate_security_events(conn)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_security_events_observed "
                          "ON security_events(observed_at)")
 
@@ -794,6 +796,10 @@ class CBVMSDatabase(StudentManagement, StudentCredentials, AttendanceStore):
         *,
         observed_at: datetime | str | None = None,
         snapshot_jpeg: bytes | None = None,
+        event_key: str | None = None,
+        source_id: str | None = None,
+        source_label: str | None = None,
+        session_id: str | None = None,
         valid_if: Callable[[], bool] | None = None,
     ) -> int | None:
         """Store an unknown person's sighting separately from student discipline.
@@ -801,6 +807,7 @@ class CBVMSDatabase(StudentManagement, StudentCredentials, AttendanceStore):
         The presence ID identifies a tracked visit, never a student. These rows
         cannot generate a review deadline, strike, attendance, or suspension.
         """
+        self._attendance_staff_only()
         presence_id = (presence_id or "").strip()
         if not presence_id:
             raise ValueError("A tracked presence ID is required")
@@ -812,10 +819,14 @@ class CBVMSDatabase(StudentManagement, StudentCredentials, AttendanceStore):
             if valid_if is not None and not valid_if():
                 conn.rollback()
                 return None
+            if event_key:
+                existing = conn.execute('SELECT id FROM security_events WHERE event_key=?', (event_key,)).fetchone()
+                if existing:
+                    return int(existing[0])
             cursor = conn.execute(
-                """INSERT INTO security_events (presence_id, observed_at, snapshot)
-                   VALUES (?, ?, ?)""",
-                (presence_id, format_db_datetime(observed), snapshot_jpeg),
+                """INSERT INTO security_events (presence_id, observed_at, snapshot, event_key, source_id, source_label, session_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (presence_id, format_db_datetime(observed), snapshot_jpeg, event_key, source_id, source_label, session_id),
             )
             event_id = int(cursor.lastrowid)
             if valid_if is not None and not valid_if():

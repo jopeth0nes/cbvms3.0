@@ -33,7 +33,7 @@ class AttendancePipelineTests(unittest.TestCase):
         release=threading.Event();blocked=threading.Event()
         def blocked_discipline(result):
             blocked.set();release.wait(4)
-        self.addCleanup(lambda:(release.set(),worker.stop(),worker.done.wait(3),worker.writes_done.wait(3),worker.attendance_writer.done.wait(3)))
+        self.addCleanup(lambda:(release.set(),worker.stop(),worker.done.wait(3),worker.writes_done.wait(3),worker.attendance_writer.done.wait(3),worker.processor.security_writer.done.wait(3)))
         with patch.object(fx.processor,'persist',side_effect=blocked_discipline), patch('core.live_pipeline.skin_fraction',return_value=0):
             worker.start()
             with self.db.connect() as lock:
@@ -55,6 +55,8 @@ class AttendancePipelineTests(unittest.TestCase):
                 self.assertEqual(self.db.query_attendance()['count'],0)
                 lock.rollback()
             self.until(lambda:worker.attendance_writer.accepted==2)
+            self.until(lambda:worker.processor.security_writer.accepted==1)
+            self.assertEqual(self.db.query_unknown_sightings(username="admin")["count"],1)
             release.set()
         events=self.db.query_attendance(view='events')['rows']
         self.assertEqual({r['student_id'] for r in events},{self.sid,'0002/B'})

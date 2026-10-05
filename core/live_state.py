@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass, field
+from enum import Enum
 import math
 import time
 from typing import Hashable, Mapping, Sequence
@@ -177,6 +178,12 @@ class LiveConfig:
             raise ValueError("Expiry intervals must be positive")
 
 
+class UniformAssessment(Enum):
+    UNASSESSED = "unassessed"
+    CORRECT = "correct"
+    WRONG = "wrong"
+
+
 @dataclass(frozen=True)
 class LiveAssessment:
     context: FrameContext
@@ -201,6 +208,9 @@ class LiveAssessment:
     association_valid: bool
     academic_snapshot: tuple = ()
     term_snapshot: tuple = ()
+    unknown_confirmed: bool = False
+    uniform_assessment: UniformAssessment = UniformAssessment.UNASSESSED
+    active_suspension: bool = False
 
     @property
     def matched(self) -> bool:
@@ -225,6 +235,7 @@ class _Track:
     velocity: tuple[float, float] = (0., 0.)
     candidate_id: str = ""
     identity_hits: int = 0
+    unknown_hits: int = 0
     identity_at: float = 0.
     previously_known: bool = False
     identity_changed: bool = False
@@ -358,6 +369,7 @@ class LiveState:
                 # but an occlusion is a break in validated ownership. Returning
                 # faces must reestablish identity and uniform evidence.
                 track.clear_identity()
+                track.unknown_hits = 0
         claims: dict[str, int] = {}
         for row in rows:
             if row.get("matched") and row.get("student_id"):
@@ -413,6 +425,10 @@ class LiveState:
         if reliable:
             track.previously_known = True
             track.identity_changed = False
+        if not sid and not uncertain and not track.previously_known and _embedding(row) is not None:
+            track.unknown_hits += 1
+        else:
+            track.unknown_hits = 0
         body = _box(row.get("body_box"))
         torso = _box(row.get("torso_box"))
         association_valid = bool(row.get("association_valid") and body is not None)
@@ -510,4 +526,9 @@ class LiveState:
             accepted_categories=tuple(accepted), association_valid=association_valid,
             academic_snapshot=tuple(row.get("academic_snapshot", ())),
             term_snapshot=tuple(row.get("term_snapshot", ())),
+            uniform_assessment=(UniformAssessment.CORRECT if label == "correct_uniform" else
+                                UniformAssessment.WRONG if label == "wrong_uniform" else
+                                UniformAssessment.UNASSESSED),
+            active_suspension=reliable and bool(row.get("active_suspension", False)),
+            unknown_confirmed=state == UNKNOWN_PERSON and track.unknown_hits >= cfg.identity_frames,
         )

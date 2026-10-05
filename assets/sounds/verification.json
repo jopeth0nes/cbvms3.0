@@ -1,0 +1,323 @@
+{
+  "date": "2026-10-05",
+  "platform": "macOS",
+  "execution": "one unittest module per process; native Tk enabled",
+  "regression_summary": {
+    "tests": 560,
+    "modules": 51,
+    "failures": [],
+    "elapsed_seconds": 172.487
+  },
+  "modules": [
+    {
+      "module": "test_academics.py",
+      "tests": 7,
+      "returncode": 0
+    },
+    {
+      "module": "test_academics_ui.py",
+      "tests": 5,
+      "returncode": 0
+    },
+    {
+      "module": "test_appeal_alerts.py",
+      "tests": 7,
+      "returncode": 0
+    },
+    {
+      "module": "test_appeal_categories.py",
+      "tests": 9,
+      "returncode": 0
+    },
+    {
+      "module": "test_appeal_category_web_render.py",
+      "tests": 1,
+      "returncode": 0
+    },
+    {
+      "module": "test_appeal_flow_completion.py",
+      "tests": 11,
+      "returncode": 0
+    },
+    {
+      "module": "test_appeals_workspace_ui.py",
+      "tests": 11,
+      "returncode": 0
+    },
+    {
+      "module": "test_attendance.py",
+      "tests": 8,
+      "returncode": 0
+    },
+    {
+      "module": "test_attendance_pipeline.py",
+      "tests": 5,
+      "returncode": 0
+    },
+    {
+      "module": "test_attendance_ui.py",
+      "tests": 3,
+      "returncode": 0
+    },
+    {
+      "module": "test_attendance_writer.py",
+      "tests": 7,
+      "returncode": 0
+    },
+    {
+      "module": "test_camera_switching.py",
+      "tests": 18,
+      "returncode": 0
+    },
+    {
+      "module": "test_camera_violation_integration.py",
+      "tests": 7,
+      "returncode": 0
+    },
+    {
+      "module": "test_coordinated_monitor.py",
+      "tests": 10,
+      "returncode": 0
+    },
+    {
+      "module": "test_detection_audio.py",
+      "tests": 30,
+      "returncode": 0
+    },
+    {
+      "module": "test_detection_audio_native_ui.py",
+      "tests": 1,
+      "returncode": 0
+    },
+    {
+      "module": "test_discipline_email.py",
+      "tests": 15,
+      "returncode": 0
+    },
+    {
+      "module": "test_enrollment_native_ui.py",
+      "tests": 6,
+      "returncode": 0
+    },
+    {
+      "module": "test_enrollment_preview.py",
+      "tests": 25,
+      "returncode": 0
+    },
+    {
+      "module": "test_enrollment_recovery.py",
+      "tests": 15,
+      "returncode": 0
+    },
+    {
+      "module": "test_evidence_association.py",
+      "tests": 16,
+      "returncode": 0
+    },
+    {
+      "module": "test_face_capture.py",
+      "tests": 23,
+      "returncode": 0
+    },
+    {
+      "module": "test_live_dashboard.py",
+      "tests": 22,
+      "returncode": 0
+    },
+    {
+      "module": "test_live_model_safety.py",
+      "tests": 6,
+      "returncode": 0
+    },
+    {
+      "module": "test_live_monitor_native_ui.py",
+      "tests": 3,
+      "returncode": 0
+    },
+    {
+      "module": "test_live_monitor_ui.py",
+      "tests": 22,
+      "returncode": 0
+    },
+    {
+      "module": "test_live_notifications.py",
+      "tests": 5,
+      "returncode": 0
+    },
+    {
+      "module": "test_live_persistence.py",
+      "tests": 9,
+      "returncode": 0
+    },
+    {
+      "module": "test_live_pipeline.py",
+      "tests": 26,
+      "returncode": 0
+    },
+    {
+      "module": "test_live_state.py",
+      "tests": 28,
+      "returncode": 0
+    },
+    {
+      "module": "test_password_setup.py",
+      "tests": 14,
+      "returncode": 0
+    },
+    {
+      "module": "test_password_setup_native.py",
+      "tests": 11,
+      "returncode": 0
+    },
+    {
+      "module": "test_password_setup_web.py",
+      "tests": 12,
+      "returncode": 0
+    },
+    {
+      "module": "test_portal_requests.py",
+      "tests": 10,
+      "returncode": 0
+    },
+    {
+      "module": "test_profile_photo.py",
+      "tests": 3,
+      "returncode": 0
+    },
+    {
+      "module": "test_recognizer_identity.py",
+      "tests": 17,
+      "returncode": 0
+    },
+    {
+      "module": "test_records_ui.py",
+      "tests": 1,
+      "returncode": 0
+    },
+    {
+      "module": "test_registration_preview.py",
+      "tests": 16,
+      "returncode": 0
+    },
+    {
+      "module": "test_report_csv.py",
+      "tests": 4,
+      "returncode": 0
+    },
+    {
+      "module": "test_reports.py",
+      "tests": 3,
+      "returncode": 0
+    },
+    {
+      "module": "test_startup_portal.py",
+      "tests": 14,
+      "returncode": 0
+    },
+    {
+      "module": "test_student_management.py",
+      "tests": 15,
+      "returncode": 0
+    },
+    {
+      "module": "test_student_management_ui.py",
+      "tests": 2,
+      "returncode": 0
+    },
+    {
+      "module": "test_student_portal_native_ui.py",
+      "tests": 9,
+      "returncode": 0
+    },
+    {
+      "module": "test_suspensions.py",
+      "tests": 5,
+      "returncode": 0
+    },
+    {
+      "module": "test_suspensions_ui.py",
+      "tests": 11,
+      "returncode": 0
+    },
+    {
+      "module": "test_torso_region.py",
+      "tests": 12,
+      "returncode": 0
+    },
+    {
+      "module": "test_unknown_sightings.py",
+      "tests": 9,
+      "returncode": 0
+    },
+    {
+      "module": "test_unknown_sightings_ui.py",
+      "tests": 2,
+      "returncode": 0
+    },
+    {
+      "module": "test_violation_workflow.py",
+      "tests": 22,
+      "returncode": 0
+    },
+    {
+      "module": "test_web_portal.py",
+      "tests": 7,
+      "returncode": 0
+    }
+  ],
+  "preview_benchmark": [
+    {
+      "version": "after",
+      "people": 5,
+      "mode": "controlled_analysis",
+      "elapsed_seconds": 5.01,
+      "source_fps": 30.03,
+      "preview_unique_fps": 27.75,
+      "preview_gap_p95_ms": 35.574,
+      "render_tick_p95_ms": 23.35,
+      "frame_age_p95_ms": 39.397,
+      "completed_analysis_hz": 4.59,
+      "max_analysis_inflight": 1,
+      "max_analysis_queued": 1,
+      "worker_stopped": true,
+      "audio": "muted",
+      "simulated_playback_ms": 1000,
+      "preview_submission_p95_ms": 0.034,
+      "audio_calls": 0,
+      "max_audio_inflight": 0,
+      "max_audio_pending": 0,
+      "native_tk": true,
+      "physical_camera": false,
+      "real_audio": false,
+      "audio_worker_stopped": true
+    },
+    {
+      "version": "after",
+      "people": 5,
+      "mode": "controlled_analysis",
+      "elapsed_seconds": 5.01,
+      "source_fps": 29.99,
+      "preview_unique_fps": 27.34,
+      "preview_gap_p95_ms": 35.624,
+      "render_tick_p95_ms": 25.383,
+      "frame_age_p95_ms": 38.002,
+      "completed_analysis_hz": 4.59,
+      "max_analysis_inflight": 1,
+      "max_analysis_queued": 1,
+      "worker_stopped": true,
+      "audio": "slow_mock",
+      "simulated_playback_ms": 1000,
+      "preview_submission_p95_ms": 0.039,
+      "audio_calls": 6,
+      "max_audio_inflight": 1,
+      "max_audio_pending": 3,
+      "native_tk": true,
+      "physical_camera": false,
+      "real_audio": false,
+      "audio_worker_stopped": true
+    }
+  ],
+  "physical_camera_tested": false,
+  "real_audio_listening_tested": false,
+  "windows_linux_devices_tested": false
+}

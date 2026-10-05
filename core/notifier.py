@@ -1,12 +1,12 @@
 """Lightweight notification broker for CBVMS."""
 from __future__ import annotations
 
-import subprocess
-import sys
 import threading
 import time
 from dataclasses import dataclass, field
 from typing import Callable
+
+from core.detection_audio import AudioDispatcher
 
 
 @dataclass
@@ -20,43 +20,48 @@ class Notification:
     category: str = "violations"
 
 
+_compat_audio = AudioDispatcher()
+_audio_lock = threading.Lock()
+
+
+def _default_audio() -> AudioDispatcher:
+    """Share the application master/worker with legacy audio-only callers."""
+    global _compat_audio
+    with _audio_lock:
+        if _compat_audio.closed:
+            _compat_audio = AudioDispatcher()
+        return _compat_audio
+
+
 def play_alert() -> None:
-    """Play a short alert sound (cross-platform, no extra deps). Silent on failure."""
-    try:
-        if sys.platform == "darwin":
-            subprocess.Popen(
-                ["afplay", "/System/Library/Sounds/Glass.aiff"],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            )
-            return
-        try:
-            import winsound  # Windows only
-            winsound.Beep(880, 220)
-            return
-        except ImportError:
-            pass
-        # Linux fallback
-        subprocess.Popen(
-            ["paplay", "/usr/share/sounds/freedesktop/stereo/bell.oga"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
-    except Exception:
-        pass  # Silent fallback — never let a missing audio backend crash the app.
+    """Compatibility audio-only entry point, using a bounded dispatcher."""
+    _default_audio().generic()
 
 
 class Notifier:
-    def __init__(self) -> None:
+    def __init__(self, *, audio=None) -> None:
         self._listeners: list[Callable[[Notification], None]] = []
         self._log: list[Notification] = []
         self._lock = threading.Lock()
         self._counter = 0
-        self.sound_enabled: bool = True
+        self.audio = audio if audio is not None else _default_audio()
         self.toast_enabled: bool = True
+
+    @property
+    def sound_enabled(self) -> bool:
+        return self.audio.enabled
+
+    @sound_enabled.setter
+    def sound_enabled(self, value) -> None:
+        self.audio.enabled = value
+
+    def close(self) -> None:
+        self.audio.close()
 
     def subscribe(self, fn: Callable[[Notification], None]) -> None:
         self._listeners.append(fn)
 
-    def notify(self, student_name: str, violation: str, *, valid_if=None, observed_at=None) -> Notification | None:
+    def notify(self, student_name: str, violation: str, *, valid_if=None, observed_at=None, play_sound=True) -> Notification | None:
         if valid_if is not None and not valid_if():
             return None
         with self._lock:
@@ -72,11 +77,8 @@ class Notifier:
                 fn(notif)
             except Exception:
                 pass
-        if self.sound_enabled:
-            def guarded_sound():
-                if valid_if is None or valid_if():
-                    play_alert()
-            threading.Thread(target=guarded_sound, daemon=True).start()
+        if play_sound:
+            self.audio.generic(valid_if=valid_if)
         return notif
 
     def acknowledge(self, notif_id: int) -> None:

@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 import customtkinter as ctk
 
 from core.trainer import MODULES
+from core.detection_audio import LABELS
 
 if TYPE_CHECKING:
     from core.notifier import Notifier
@@ -482,7 +483,29 @@ class SettingsPanel(ctk.CTkFrame):
             )
             sw.grid(row=i, column=0, sticky="w", pady=4)
 
+        self._sound_types = {}
+        for i, (kind, label) in enumerate(LABELS.items(), start=2):
+            var = ctk.BooleanVar(value=self.notifier.audio.kind_enabled(kind) if self.notifier else True)
+            self._sound_types[kind] = var
+            ctk.CTkSwitch(
+                switches, text=label, variable=var, onvalue=True, offvalue=False,
+                command=lambda k=kind, v=var: self.notifier.audio.set_kind_enabled(k, v.get())
+                if self.notifier else None,
+            ).grid(row=i, column=0, sticky="w", pady=4)
+            ctk.CTkButton(
+                switches, text="Preview", width=90,
+                command=lambda k=kind: self._preview_sound(k),
+            ).grid(row=i, column=1, padx=(12, 0), pady=4)
+        ctk.CTkLabel(
+            card, text="Previews respect master sound and individual switches. Settings apply to this session.",
+            font=body_small_font(), text_color=COLOR_TEXT_MUTED, wraplength=520, justify="left",
+        ).pack(anchor="w", padx=PADDING, pady=(0, PADDING))
+
         return row + 1
+
+    def _preview_sound(self, kind) -> None:
+        if self.notifier is not None:
+            self.notifier.audio.preview(kind)
 
     def _apply_notification_toggles(self, _changed: str | None) -> None:
         for attr, var in [

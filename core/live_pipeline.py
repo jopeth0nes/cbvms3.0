@@ -10,6 +10,8 @@ import queue
 import threading
 import time
 import weakref
+import uuid
+import hashlib
 
 import cv2
 import numpy as np
@@ -167,6 +169,9 @@ class LiveProcessor:
         self.cooldowns={}
         self.attendance_cooldowns={}
         self.attendance_writer=None
+        self.security_writer=None
+        self.security_session=uuid.uuid4().hex
+        self.unknown_cooldowns={}
         self.read_database=None
         self.suspension_cooldowns={}
         self.write_count=0
@@ -175,6 +180,7 @@ class LiveProcessor:
         self.publish_identity = None
         self.identity_state = LiveState(self.state.config)
         self._assessment_cursor = 0
+        self.audio_task_valid = lambda task: True
 
     def analyze(self,task):
         if not task.valid():
@@ -211,7 +217,7 @@ class LiveProcessor:
         if not isinstance(term, dict):
             term = {}
         for row in rows:
-            row.update(student_status="Unknown person",discipline_eligible=False,suspension_tag="")
+            row.update(student_status="Unknown person",discipline_eligible=False,suspension_tag="",active_suspension=False)
             if row.get('matched'):
                 student=read_database.get_student_by_student_id(row.get('student_id'))
                 if student is None:
@@ -224,6 +230,7 @@ class LiveProcessor:
                 row['student_status']=standing_label(student)
                 row['discipline_eligible']=(student['student_status']=='Enrolled' and not student['registration_pending'])
                 suspension=read_database.get_active_suspension(student['student_id'])
+                row['active_suspension'] = bool(suspension)
                 row['suspension_tag']=suspension_label(suspension) if suspension else ''
         if task.observations is None and self.publish_identity is not None and task.valid():
             identities = self.identity_state.update(task.context, rows, now=time.monotonic())
@@ -345,15 +352,43 @@ class LiveProcessor:
               valid_torsos=sum(bool(r.get('torso_valid')) for r in rows),
               accepted_assessments=sum(bool(a.accepted_categories) for a in assessments),
               assessment_elapsed=time.monotonic()-started)
+        self.submit_detection_audio(MonitorResult(task, assessments, time.monotonic()))
         return MonitorResult(task,assessments,time.monotonic(),
                              "No faces detected" if not rows else
                              "Face detected · Identity uncertain" if not any(a.reliable_identity for a in assessments) else
                              "Uniform not assessed" if not any(r.get('uniform_available') for r in rows) else "")
 
+    def submit_detection_audio(self, result):
+        """Audio-only consumer of accepted results, independent of persistence cooldowns."""
+        audio = getattr(self.notifier, 'audio', None)
+        if audio is None or not result.task.valid():
+            return
+        task = result.task
+        def guard(assessment):
+            if not task.valid() or not self.audio_task_valid(task):
+                return False
+            current = self.latest_sample()
+            if (current is None or current.frame_id[0] != task.context.frame_id[0]
+                    or not 0 <= time.monotonic() - current.captured_at <= 1):
+                return False
+            return True
+        def relevance(assessment):
+            current = self.latest_sample()
+            return current is not None and (current.frame_id == task.context.frame_id or
+                    MotionProjection(task.frame, assessment.face_box).advance(current.frame) is not None)
+        database = self.read_database or self.database
+        audio.observe_batch([
+            (a, lambda a=a: guard(a),
+             lambda sid=a.student_id: database.get_active_suspension(sid),
+             lambda a=a: relevance(a))
+            for a in result.assessments if a.context == task.context
+        ], scope=(task.context.generation, task.camera_generation, task.context.frame_id[0]))
+
     def assessment_failed(self, task):
         """An unobserved frame breaks evidence without recycling presence IDs."""
         if task.valid():
             self.state.update(task.context, (), now=time.monotonic())
+            self.submit_detection_audio(MonitorResult(task, (), time.monotonic()))
 
     def submit_attendance(self,result):
         """Freeze a qualified identity before replaceable discipline queues or DB latency.
@@ -402,6 +437,59 @@ class LiveProcessor:
                 except Exception as exc:
                     event('attendance_write_failed',error=str(exc))
 
+    def submit_unknowns(self, result):
+        """Qualify once using existing identity, tracking, freshness and cancellation gates."""
+        from core.security_writer import UnknownEncounter
+        task = result.task
+        latest = self.latest_sample()
+        if (not task.valid() or latest is None or latest.frame_id[0] != task.context.frame_id[0]
+                or not 0 <= time.monotonic()-latest.captured_at <= 1):
+            return
+        now = time.monotonic()
+        for assessment in result.assessments:
+            if (assessment.context != task.context or not assessment.unknown_confirmed
+                    or assessment.state != 'Unknown person' or assessment.reliable_identity or not task.valid()):
+                continue
+            key = hashlib.sha256(json.dumps([self.security_session, task.source_id,
+                str(task.context.frame_id[0]), task.camera_generation, task.context.generation,
+                assessment.presence_id]).encode()).hexdigest()
+            if now-self.unknown_cooldowns.get(key, -300) < 300:
+                continue
+            def guard():
+                current = self.latest_sample()
+                return (task.valid() and current is not None and current.frame_id[0] == task.context.frame_id[0]
+                    and 0 <= time.monotonic()-current.captured_at <= 1
+                    and (current.frame_id == task.context.frame_id
+                         or MotionProjection(task.frame, assessment.face_box).advance(current.frame) is not None))
+            if not guard():
+                continue
+            x1,y1,x2,y2 = assessment.face_box
+            h,w = task.frame.shape[:2]
+            crop = task.frame[max(0,y1):min(h,y2),max(0,x1):min(w,x2)]
+            if not crop.size:
+                continue
+            # Bound queued image memory; decoding remains on the snapshot worker.
+            if max(crop.shape[:2]) > 1024:
+                scale = 1024 / max(crop.shape[:2])
+                crop = cv2.resize(crop, (max(1,int(crop.shape[1]*scale)),max(1,int(crop.shape[0]*scale))))
+            ok,jpeg = cv2.imencode('.jpg',crop,[cv2.IMWRITE_JPEG_QUALITY,85])
+            if not guard():
+                continue
+            fact = UnknownEncounter(key, assessment.presence_id,
+                utc_stamp(datetime.fromtimestamp(task.observed_at,timezone.utc)),
+                task.source_id, task.source_label, str(task.context.frame_id[0]),
+                jpeg.tobytes() if ok and jpeg.nbytes <= 2_000_000 else None)
+            try:
+                accepted = (self.security_writer.offer(fact,task.cancelled) if self.security_writer is not None
+                            else fact.write(self.database,guard) is not None)
+                if accepted:
+                    self.unknown_cooldowns[key] = now
+                    # SQLite's unique event key remains authoritative after cache pruning.
+                    if len(self.unknown_cooldowns) > 4096:
+                        self.unknown_cooldowns.pop(next(iter(self.unknown_cooldowns)))
+            except Exception as exc:
+                event('unknown_write_failed', error=str(exc))
+
     def persist(self,result):
         """Side effects consume the very same accepted assessment as the UI.
 
@@ -409,6 +497,8 @@ class LiveProcessor:
         notifications. Failed writes do not consume cooldowns.
         """
         task=result.task
+        if self.security_writer is None:
+            self.submit_unknowns(result)
         if self.attendance_writer is None:
             self.submit_attendance(result)
         if not task.valid():
@@ -454,12 +544,10 @@ class LiveProcessor:
                 tag=assessment.suspension_tag
                 suspension_key=(sid,tag)
                 if tag and guard() and now-self.suspension_cooldowns.get(suspension_key,-30)>=30:
-                    notification = self.notifier.notify(assessment.name, tag, valid_if=guard, observed_at=task.observed_at)
+                    notification = self.notifier.notify(assessment.name, tag, valid_if=guard, observed_at=task.observed_at, play_sound=False)
                     if notification is not None:
                         self.suspension_cooldowns[suspension_key]=now
             categories=assessment.accepted_categories
-            if assessment.state=='Unknown person':
-                categories=('unknown_person',)
             for code in categories:
                 if not guard():
                     event('database_write_withheld', presence_id=assessment.presence_id,
@@ -468,7 +556,7 @@ class LiveProcessor:
                 key=(sid if assessment.reliable_identity else assessment.presence_id,code)
                 if now-self.cooldowns.get(key,-300)<300:
                     continue
-                if code!='unknown_person' and not (assessment.reliable_identity and assessment.discipline_eligible):
+                if code not in ('wrong_uniform', 'earring') or not (assessment.reliable_identity and assessment.discipline_eligible):
                     continue
                 box=assessment.body_box if code=='wrong_uniform' else assessment.face_box
                 x1,y1,x2,y2=map(int,box or assessment.face_box)
@@ -480,27 +568,23 @@ class LiveProcessor:
                 if not ok:
                     continue
                 display=('Suspected uniform violation' if code=='wrong_uniform' else
-                         'Earring detected' if code=='earring' else 'Unknown person')
+                         'Earring detected')
                 try:
-                    if code=='unknown_person':
-                        written=self.database.log_security_event(assessment.presence_id,
-                            observed_at=observed,snapshot_jpeg=jpeg.tobytes(),valid_if=guard)
-                    else:
-                        written=self.database.log_violation(student_id=sid,student_name=assessment.name,
-                            violation_type=display,violation_code=code,snapshot_jpeg=jpeg.tobytes(),
-                            detected_at=observed,status='pending_review',valid_if=guard,
-                            evidence_provenance=dict(
-                                captured_at=observed.isoformat(),
-                                camera_session=str(task.context.frame_id[0]),
-                                frame_id=list(task.context.frame_id),
-                                monitor_generation=task.context.generation,
-                                camera_generation=task.camera_generation,
-                                presence_id=assessment.presence_id, track_id=assessment.track_id,
-                                face_box=list(assessment.face_box),
-                                body_box=list(assessment.body_box) if assessment.body_box else None,
-                                torso_box=list(assessment.torso_box) if assessment.torso_box else None,
-                                crop_box=[max(0,x1),max(0,y1),min(w,x2),min(h,y2)],
-                                frame_size=[w,h]))
+                    written=self.database.log_violation(student_id=sid,student_name=assessment.name,
+                        violation_type=display,violation_code=code,snapshot_jpeg=jpeg.tobytes(),
+                        detected_at=observed,status='pending_review',valid_if=guard,
+                        evidence_provenance=dict(
+                            captured_at=observed.isoformat(),
+                            camera_session=str(task.context.frame_id[0]),
+                            frame_id=list(task.context.frame_id),
+                            monitor_generation=task.context.generation,
+                            camera_generation=task.camera_generation,
+                            presence_id=assessment.presence_id, track_id=assessment.track_id,
+                            face_box=list(assessment.face_box),
+                            body_box=list(assessment.body_box) if assessment.body_box else None,
+                            torso_box=list(assessment.torso_box) if assessment.torso_box else None,
+                            crop_box=[max(0,x1),max(0,y1),min(w,x2),min(h,y2)],
+                            frame_size=[w,h]))
                     if written is None:
                         event("database_write_rejected", category=code, student_id=sid)
                         continue
@@ -511,7 +595,7 @@ class LiveProcessor:
                 self.cooldowns[key]=now
                 self.write_count+=1
                 if guard():
-                    self.notifier.notify(assessment.name, display, valid_if=guard, observed_at=task.observed_at)
+                    self.notifier.notify(assessment.name, display, valid_if=guard, observed_at=task.observed_at, play_sound=False)
 
 
 class FaceTrackingProcessor:
@@ -583,6 +667,8 @@ class LiveWorker:
         if persistence_worker and isinstance(processor,LiveProcessor):
             from core.attendance_writer import AttendanceWriter
             self.attendance_writer = processor.attendance_writer = AttendanceWriter(processor.database)
+            from core.security_writer import SecurityWriter
+            processor.security_writer = SecurityWriter(processor.database)
             from copy import copy
             processor.read_database = copy(processor.database)
             processor.read_database.timeout = .1
@@ -611,6 +697,7 @@ class LiveWorker:
     def start(self):
         if self.attendance_writer is not None:
             self.attendance_writer.start()
+            self.processor.security_writer.start()
         self.thread.start()
         if self.persistence_worker:
             threading.Thread(target=self._persist, daemon=True, name="live-monitor-database").start()
@@ -642,8 +729,13 @@ class LiveWorker:
 
     def stop(self):
         self.stop_event.set()
+        if isinstance(self.processor, LiveProcessor):
+            audio = getattr(self.processor.notifier, 'audio', None)
+            if audio is not None:
+                audio.cancel_detection()
         if self.attendance_writer is not None:
             self.attendance_writer.stop()
+            self.processor.security_writer.stop()
         if self.active_task is not None:
             self.active_task.cancelled.set()
         if self.active_write is not None:
@@ -674,6 +766,7 @@ class LiveWorker:
                         if self.persistence_worker:
                             if self.attendance_writer is not None:
                                 self.processor.submit_attendance(result)
+                                self.processor.submit_unknowns(result)
                             put_latest(self.writes, result)
                         else:
                             self.processor.persist(result)
