@@ -1,11 +1,14 @@
 """Dedicated asynchronous appeal inbox and case review workspace."""
 import queue
+import json
+import io
 from concurrent.futures import ThreadPoolExecutor
 from tkinter import messagebox
 import customtkinter as ctk
+from PIL import Image, ImageOps
 from core.appeal_categories import CATEGORIES, BY_CODE, BY_OPTION, SELECT_CATEGORY, category_display, validate_category
 from core.discipline import display_local_datetime as ts
-from core.evidence_integrity import original_evidence, supporting_evidence, INTEGRITY_HELP
+from core.evidence_integrity import digest, original_evidence, supporting_evidence, INTEGRITY_HELP
 from ui.components import COLOR_BG, COLOR_SURFACE, COLOR_TEXT, COLOR_ACCENT, COLOR_DANGER
 
 MUTED = '#9EB3C4'
@@ -16,6 +19,46 @@ STATUS_COLORS = {
     'approved': ('#6DE0BC', '#193D38'),
     'rejected': ('#FFA0A8', '#402D3A'),
 }
+
+
+def _forensic_previews(data, report):
+    """Prepare bounded, oriented display images on the background reader."""
+    try:
+        source=Image.open(io.BytesIO(data))
+        source_orientation=int(source.getexif().get(274,1) or 1)
+        source=ImageOps.exif_transpose(source).convert('RGB')
+        source.load()
+    except Exception:
+        return {}
+    source.thumbnail((700,340),Image.Resampling.LANCZOS)
+    modes={'Original':source.copy()}
+    model=report.get('model') or {}
+    orientation=int(model.get('orientation') or source_orientation)
+    coordinates=model.get('map_coordinates','encoded_pixels_before_exif_orientation')
+    def oriented_map(blob):
+        if not blob or coordinates!='encoded_pixels_before_exif_orientation':return None
+        try:
+            with Image.open(io.BytesIO(blob)) as candidate:
+                if candidate.format != 'PNG' or max(candidate.size)>1024:
+                    return None
+                image=candidate.convert('L')
+        except Exception:
+            return None
+        transposes={2:Image.Transpose.FLIP_LEFT_RIGHT,3:Image.Transpose.ROTATE_180,
+            4:Image.Transpose.FLIP_TOP_BOTTOM,5:Image.Transpose.TRANSPOSE,
+            6:Image.Transpose.ROTATE_270,7:Image.Transpose.TRANSVERSE,
+            8:Image.Transpose.ROTATE_90}
+        if orientation in transposes:image=image.transpose(transposes[orientation])
+        return image.resize(source.size,Image.Resampling.BILINEAR)
+    local=oriented_map(report.get('localization_png'))
+    reliable=oriented_map(report.get('reliability_png'))
+    if local is not None:
+        colorized=ImageOps.colorize(local,black='#062237',white='#ff654d')
+        modes['Map']=colorized
+        modes['Overlay']=Image.blend(source,colorized,.42)
+    if reliable is not None:
+        modes['Reliability']=ImageOps.colorize(reliable,black='#25214b',white='#65d7bd')
+    return modes
 
 
 class DecisionCategoryMenu(ctk.CTkOptionMenu):
@@ -39,6 +82,8 @@ class AppealsPanel(ctk.CTkFrame):
         self.closed = False
         self.drafts = {}
         self.case = {}
+        self._forensic_frame = None
+        self._forensic_poll_job = None
         self.violation_id = None
         self._case_windows = []
         self.inbox_scroll = 0.
@@ -137,7 +182,11 @@ class AppealsPanel(ctk.CTkFrame):
         self._poll_job = self.after(50, self._poll)
 
     def _clear(self):
+        if self._forensic_poll_job is not None:
+            self.after_cancel(self._forensic_poll_job)
+            self._forensic_poll_job = None
         self.case = {}
+        self._forensic_frame = None
         self.violation_id = None
         for window in self._case_windows:
             if window.winfo_exists():
@@ -290,6 +339,13 @@ class AppealsPanel(ctk.CTkFrame):
             case['integrity_blocked'] = any(e['blocked'] for e in [case['original'], *case['supporting']])
             case['images'] = [case['original']['image'],
                               case['supporting'][0]['image'] if case['supporting'] else None]
+            case['forensics'] = []
+            for item in case['evidence']:
+                try:
+                    case['forensics'].append((item['id'], self.database.get_evidence_forensics_history(
+                        item['id'], username=self.username)))
+                except Exception:
+                    case['forensics'].append((item['id'], []))
             case['_request'] = (generation, appeal_id, case['violation_id'])
             return case
         self._request(load, self._case_loaded)
@@ -343,16 +399,20 @@ class AppealsPanel(ctk.CTkFrame):
                 warning.pack(fill='x')
                 box.bind('<Configure>', lambda e, text=warning: text.configure(
                     wraplength=max(120, int(self._reverse_widget_scaling(e.width))-12)), add='+')
+        forensic_row = ctk.CTkFrame(content, fg_color='#20384A', corner_radius=10)
+        forensic_row.grid(row=2, column=0, columnspan=2, sticky='ew', padx=10, pady=(10, 4))
+        self._forensic_frame = forensic_row
+        self._render_forensics(forensic_row, case)
         ctk.CTkLabel(content,text='Student explanation',anchor='w',
-            font=ctk.CTkFont(size=15, weight='bold')).grid(row=2,column=0,sticky='w',padx=18,pady=(14,4))
+            font=ctk.CTkFont(size=15, weight='bold')).grid(row=3,column=0,sticky='w',padx=18,pady=(14,4))
         ctk.CTkButton(content,text='Read full explanation',height=26,width=160,
-            command=lambda:self._full_text(case['reason'])).grid(row=2,column=1,sticky='e',padx=8)
+            command=lambda:self._full_text(case['reason'])).grid(row=3,column=1,sticky='e',padx=8)
         explanation=ctk.CTkTextbox(content,height=90,wrap='word', fg_color=COLOR_BG,
             corner_radius=10, border_width=1, border_color=BORDER)
-        explanation.grid(row=3,column=0,columnspan=2,sticky='ew',padx=8,pady=4)
+        explanation.grid(row=4,column=0,columnspan=2,sticky='ew',padx=8,pady=4)
         explanation.insert('1.0',case['reason']); explanation.configure(state='disabled')
         if case['ai_recommendation']:
-            ctk.CTkLabel(content,text=f"AI advisory only: {case['ai_recommendation']}",anchor='w').grid(row=4,column=0,columnspan=2,sticky='w',padx=8)
+            ctk.CTkLabel(content,text=f"AI advisory only: {case['ai_recommendation']}",anchor='w').grid(row=5,column=0,columnspan=2,sticky='w',padx=8)
         if case['lifecycle_origin']=='reconciliation_required':
             self.status.configure(text='Historical strike conflict: reconciliation required. Existing history has been preserved.')
         self.footer.grid_columnconfigure(0,weight=1)
@@ -393,6 +453,170 @@ class AppealsPanel(ctk.CTkFrame):
             self._enable_decisions(False)
             self.reason.configure(state='disabled')
             self.status.configure(text=f"{case['status'].title()} by {case['decided_by']} · {ts(case['decided_at'])}")
+        if any(r.get('status') in ('pending','analyzing') for _, history in case.get('forensics', []) for r in history):
+            self._schedule_forensics_poll(case['id'])
+
+    def _render_forensics(self, frame, case):
+        for child in frame.winfo_children():
+            child.destroy()
+        ctk.CTkLabel(frame, text='Evidence Integrity Analysis', anchor='w',
+                     font=ctk.CTkFont(size=15, weight='bold')).pack(fill='x', padx=12, pady=(8, 2))
+        ctk.CTkLabel(frame, text='Forensic analysis is advisory. Review the original evidence, supporting image and appeal explanation before making a decision.',
+                     anchor='w', justify='left', wraplength=680, text_color=MUTED).pack(fill='x', padx=12, pady=(0, 6))
+        for evidence_id, runs in case.get('forensics', []):
+            latest = runs[0] if runs else None
+            if not latest:
+                summary = 'Analysis unavailable · manual evidence review remains available'
+            elif latest['status'] == 'pending':
+                summary = 'Queued for analysis'
+            elif latest['status'] == 'analyzing':
+                summary = 'Analysis running'
+            elif latest['status'] == 'error':
+                summary = f"Analysis failed ({latest.get('error_code') or 'worker error'})"
+            else:
+                summary = latest['classification'].replace('_', ' ').title()
+            if latest:
+                provenance = latest.get('provenance', {})
+                c2pa_status = provenance.get('c2pa', {}).get('status', 'unavailable')
+                c2pa_label = {
+                    'absent':'no signed manifest','valid':'signature and trust verified',
+                    'invalid':'credential verification anomaly','untrusted':'signature valid; signer trust unknown',
+                    'unavailable':'verification unavailable','error':'verification failed'
+                }.get(c2pa_status,'verification status unknown')
+                model = latest.get('model', {})
+                model_status = model.get('status', 'not_configured')
+                model_label = {'not_configured':'not configured','experimental':'experimental, uncalibrated',
+                    'error':'model check failed'}.get(model_status,'model status unknown')
+                model_name = model.get('name') or model.get('model_name') or 'Model'
+                model_version = model.get('version') or latest.get('analyzer_version') or 'unknown version'
+                checked_at = latest.get('completed_at') or latest.get('created_at') or 'date unavailable'
+                hash_state = latest.get('hash_status', 'mismatch').replace('_', ' ')
+                hash_label = latest.get('sha256') or 'unavailable'
+                summary += f" · C2PA {c2pa_label} · {model_name} {model_version} ({model_label}) · SHA-256 {hash_state}: {hash_label[:16]} · {checked_at}"
+                if latest.get('model_raw_score') is not None:
+                    summary += ' · raw model score (uncalibrated)'
+                if latest.get('reliability') not in (None, {}, ''):
+                    summary += ' · reliability details available'
+            row = ctk.CTkFrame(frame, fg_color='transparent')
+            row.pack(fill='x', padx=8, pady=2)
+            row.grid_columnconfigure(0, weight=1)
+            label = ctk.CTkLabel(row, text=f'Evidence #{evidence_id} · {summary}', anchor='w', justify='left', wraplength=560)
+            label.grid(row=0, column=0, sticky='ew', padx=4, pady=3)
+            if latest:
+                ctk.CTkButton(row, text='View details', width=100, height=28,
+                    command=lambda eid=evidence_id,rid=latest['id']: self._forensics_details(eid,rid)).grid(row=0,column=1,padx=3)
+            if len(runs) > 1:
+                ctk.CTkButton(row, text=f'History ({len(runs)})', width=100, height=28,
+                    command=lambda eid=evidence_id: self._forensics_history(eid)).grid(row=0,column=2,padx=3)
+            if case.get('status') == 'pending' and (not latest or latest['status'] in ('complete','error')):
+                ctk.CTkButton(row, text='Re-run', width=76, height=28,
+                    command=lambda eid=evidence_id: self._retry_forensics(eid)).grid(row=0,column=3,padx=3)
+
+    def _schedule_forensics_poll(self, appeal_id):
+        if self._forensic_poll_job is not None:
+            self.after_cancel(self._forensic_poll_job)
+        self._forensic_poll_job = self.after(2500, lambda: self._poll_forensics(appeal_id))
+
+    def _poll_forensics(self, appeal_id):
+        if self._forensic_poll_job is not None:
+            self.after_cancel(self._forensic_poll_job)
+            self._forensic_poll_job = None
+        if not self.closed and self.case_id == appeal_id and not self.busy:
+            generation = self.generation
+            evidence_ids = [item['id'] for item in self.case.get('evidence', [])]
+            def load():
+                refreshed=[]
+                for evidence_id in evidence_ids:
+                    try:
+                        refreshed.append((evidence_id,self.database.get_evidence_forensics_history(
+                            evidence_id,username=self.username)))
+                    except Exception:
+                        refreshed.append((evidence_id,[]))
+                return refreshed
+            def loaded(refreshed):
+                if self.case_id != appeal_id or generation != self.generation or not self._forensic_frame:
+                    return
+                self.case['forensics']=refreshed
+                self._render_forensics(self._forensic_frame,self.case)
+                if any(r.get('status') in ('pending','analyzing') for _, history in refreshed for r in history):
+                    self._schedule_forensics_poll(appeal_id)
+            self._request(load,loaded)
+
+    def _retry_forensics(self, evidence_id):
+        self._remember_reason()
+        aid = self.case_id
+        self._request(lambda: self.database.retry_evidence_forensics(evidence_id, username=self.username),
+                      lambda _run: self.open_case(aid))
+
+    def _forensics_history(self, evidence_id):
+        self._request(lambda: self.database.get_evidence_forensics_history(evidence_id, username=self.username),
+                      lambda runs: self._show_forensics_history(evidence_id, runs))
+
+    def _show_forensics_history(self, evidence_id, runs):
+        window=ctk.CTkToplevel(self)
+        window.title(f'Evidence analysis history · #{evidence_id}')
+        window.geometry('520x360')
+        self._case_windows.append(window)
+        listing=ctk.CTkScrollableFrame(window,fg_color=COLOR_BG)
+        listing.pack(fill='both',expand=True,padx=12,pady=12)
+        for index, report in enumerate(runs):
+            ctk.CTkButton(listing,text=f"{report['status']} · {report.get('classification','inconclusive')} · {report.get('created_at','date unavailable')}",
+                anchor='w',command=lambda rid=report['id']:self._forensics_details(evidence_id,rid)).pack(fill='x',pady=3)
+
+    def _forensics_details(self, evidence_id, run_id):
+        appeal_id=self.case_id
+        def load():
+            report=self.database.get_evidence_forensics_report(run_id,username=self.username)
+            item=next((e for e in self.case.get('evidence',[]) if e.get('id')==evidence_id),None)
+            if (not report or not item or report.get('evidence_id')!=evidence_id
+                    or report.get('appeal_id')!=appeal_id):
+                return report,None
+            data=item.get('file_data')
+            if (not report.get('valid') or not data
+                    or digest(data)!=report.get('sha256')):
+                return report,None
+            return report,_forensic_previews(bytes(data),report)
+        self._request(load,lambda result:self._show_forensics_details(result,evidence_id,run_id,appeal_id))
+
+    def _show_forensics_details(self, result, evidence_id, run_id, appeal_id):
+        if self.closed or self.case_id!=appeal_id:
+            return
+        report,modes=result
+        window = ctk.CTkToplevel(self)
+        window.title(f"Evidence analysis · #{evidence_id}")
+        window.geometry('760x640')
+        self._case_windows.append(window)
+        if not report or not modes:
+            ctk.CTkLabel(window,text='Evidence hash is unavailable or no longer matches this analysis. Technical signals and maps are withheld.',
+                justify='left',wraplength=680).pack(fill='x',padx=16,pady=16)
+            return
+        summary={key:report.get(key) for key in ('status','classification','hash_status','sha256',
+            'analyzer_version','created_at','completed_at','provenance','model','model_raw_score',
+            'model_calibrated','reliability','facts','signals','risk','error_code')}
+        advisory=ctk.CTkLabel(window,text='Forensic analysis is advisory. Review the original evidence, supporting image and appeal explanation before making a decision.',
+            justify='left',wraplength=700,text_color=MUTED)
+        advisory.pack(fill='x',padx=14,pady=(12,6))
+        summary_box=ctk.CTkTextbox(window,height=125,wrap='word')
+        summary_box.pack(fill='x',padx=14,pady=(0,8))
+        summary_box.insert('1.0',json.dumps(summary,indent=2,ensure_ascii=False))
+        summary_box.configure(state='disabled')
+        display=ctk.CTkLabel(window,text='');display.pack(fill='both',expand=True,padx=12,pady=8)
+        current={'image':None}
+        def show_mode(name):
+            picture=modes[name]
+            ref=ctk.CTkImage(picture,size=picture.size)
+            display.configure(image=ref,text='');display.image_ref=ref
+            current['image']=name
+            legend=('Model indication, not proof. Higher map intensity marks stronger model response; raw output is uncalibrated.'
+                    if name in ('Map','Overlay','Reliability') else 'Original supporting image, oriented using its EXIF display transform.')
+            legend_label.configure(text=legend)
+        toggles=ctk.CTkFrame(window,fg_color='transparent');toggles.pack(fill='x',padx=12)
+        legend_label=ctk.CTkLabel(window,text='',wraplength=700,text_color=MUTED)
+        legend_label.pack(fill='x',padx=14,pady=(4,10))
+        for name in ('Original','Overlay','Map','Reliability'):
+            if name in modes:
+                ctk.CTkButton(toggles,text=name,width=100,command=lambda selected=name:show_mode(selected)).pack(side='left',padx=4)
+        show_mode('Original')
 
     def _enable_decisions(self, enabled):
         allowed = enabled and not self.busy and self.case.get('status') == 'pending'
@@ -469,5 +693,8 @@ class AppealsPanel(ctk.CTkFrame):
         self.closed=True
         self.generation+=1
         self.after_cancel(self._poll_job)
+        if self._forensic_poll_job is not None:
+            self.after_cancel(self._forensic_poll_job)
+            self._forensic_poll_job = None
         self.executor.shutdown(wait=False,cancel_futures=True)
         super().destroy()

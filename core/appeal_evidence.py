@@ -7,6 +7,8 @@ from pathlib import Path
 from PIL import Image
 
 MAX_EVIDENCE_BYTES = 10 * 1024 * 1024
+MAX_EVIDENCE_PIXELS = 20_000_000
+MAX_EVIDENCE_SIDE = 10_000
 
 
 def validate_evidence(filename: str, file_type: str, data: bytes) -> None:
@@ -22,6 +24,10 @@ def validate_evidence(filename: str, file_type: str, data: bytes) -> None:
             with Image.open(io.BytesIO(data)) as picture:
                 if picture.format not in {"JPEG", "PNG", "BMP"}:
                     raise ValueError("Unsupported picture format.")
+                width, height = picture.size
+                if (width <= 0 or height <= 0 or width > MAX_EVIDENCE_SIDE
+                        or height > MAX_EVIDENCE_SIDE or width * height > MAX_EVIDENCE_PIXELS):
+                    raise ValueError("The picture dimensions are too large.")
                 picture.verify()
             with Image.open(io.BytesIO(data)) as picture:
                 picture.load()

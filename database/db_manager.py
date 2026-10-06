@@ -39,6 +39,8 @@ from core.academics import academic_values, resolve_pair, legacy_year_section
 from database.academic_migration import migrate_academics
 from core.appeal_evidence import validate_evidence
 from core.evidence_integrity import digest, original_evidence, supporting_evidence, INTEGRITY_HELP
+from database.evidence_forensics_migration import migrate_evidence_forensics
+from database import evidence_forensics as forensics_store
 
 DEFAULT_ADMIN_USERNAME = "admin"
 DEFAULT_ADMIN_PASSWORD = "admin123"
@@ -272,6 +274,7 @@ class CBVMSDatabase(StudentManagement, StudentCredentials, AttendanceStore, Secu
             conn.execute(EVIDENCE_FILES_TABLE)
             conn.execute(DECISION_HISTORY_TABLE)
             conn.execute(APPEALS_TABLE)
+            migrate_evidence_forensics(conn)
             migrate_appeal_categories(conn)
             conn.execute(SECURITY_EVENTS_TABLE)
             migrate_security_events(conn)
@@ -384,6 +387,11 @@ class CBVMSDatabase(StudentManagement, StudentCredentials, AttendanceStore, Secu
             conn.commit()
         self._seed_default_admin()
         self._seed_default_superadmin()
+        if process_deadlines and forensics_store.autostart_enabled():
+            try:
+                forensics_store.ForensicsCoordinator.for_db(self).wake()
+            except Exception:
+                pass
         # Normal startup processing makes persisted deadlines reliable even after the
         # app was closed.  Migration/diagnostic tools may explicitly suppress this
         # workflow mutation while still applying the repeat-safe schema migration.
@@ -1819,18 +1827,22 @@ class CBVMSDatabase(StudentManagement, StudentCredentials, AttendanceStore, Secu
                     (violation_id, sid, safe_reason, submitted_text),
                 )
                 appeal_id = _inserted_row_id(cursor)
+                forensic_evidence_id = None
                 if evidence is not None:
                     filename, file_type, file_data = evidence
                     if not filename or not file_data:
                         conn.rollback()
                         return None
-                    conn.execute(
+                    evidence_cursor = conn.execute(
                         """INSERT INTO evidence_files
                            (appeal_id, student_id, filename, file_type, file_data, uploaded_at, file_sha256)
                            VALUES (?, ?, ?, ?, ?, ?, ?)""",
                         (appeal_id, sid, filename, file_type, file_data, submitted_text, digest(file_data)),
                     )
+                    forensic_evidence_id = _inserted_row_id(evidence_cursor)
                 conn.commit()
+                if forensic_evidence_id is not None:
+                    forensics_store.schedule(self, forensic_evidence_id)
                 return appeal_id
         except sqlite3.Error:
             return None
@@ -1916,7 +1928,9 @@ class CBVMSDatabase(StudentManagement, StudentCredentials, AttendanceStore, Secu
                      (filename or "").strip(), (file_type or "image").strip(), file_data, digest(file_data)),
                 )
                 conn.commit()
-                return _inserted_row_id(cursor)
+                evidence_id = _inserted_row_id(cursor)
+                forensics_store.schedule(self, evidence_id)
+                return evidence_id
         except Exception as exc:
             print(f"[DB] insert_evidence_file error: {exc}")
             return None
@@ -1935,6 +1949,18 @@ class CBVMSDatabase(StudentManagement, StudentCredentials, AttendanceStore, Secu
                 "SELECT * FROM evidence_files WHERE id = ?", (evidence_id,)
             ).fetchone()
         return dict(row) if row else None
+
+    def get_evidence_forensics_history(self, evidence_id: int, *, username: str) -> list[dict]:
+        return forensics_store.get_history(self, evidence_id, username)
+
+    def get_evidence_forensics_report(self, run_id: int, *, username: str) -> dict | None:
+        return forensics_store.get_report(self, run_id, username)
+
+    def retry_evidence_forensics(self, evidence_id: int, *, username: str) -> int | None:
+        run_id = forensics_store.retry(self, evidence_id, username)
+        if run_id is not None and forensics_store.autostart_enabled():
+            forensics_store.ForensicsCoordinator.for_db(self).wake()
+        return run_id
 
     # ------------------------------------------------------------------
     # Decision history helpers
