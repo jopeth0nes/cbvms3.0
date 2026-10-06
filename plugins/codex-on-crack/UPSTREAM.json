@@ -1,0 +1,108 @@
+{
+  "source": "https://github.com/ethanplusai/codex-on-crack",
+  "commit": "9dee6ca9aaa73e0008123eff872871e88b94a12a",
+  "inspected": "2026-10-05",
+  "files": {
+    ".codex-plugin/plugin.json": {
+      "upstream_sha256": "a95a14c7c82a907322c2d2586cf4c7b9a42444cc4b50c4aca85fd2b7189e32a6",
+      "installed_sha256": "4c74cdaf23e7765369057316144af0562911a22272288ad4ce9664820c0fac7e"
+    },
+    "skills/crack/scripts/doctor.mjs": {
+      "upstream_sha256": "3da997bad052e841b214bf07030be2ba4a4a1cb885ce4ea96132d2230c51a334",
+      "installed_sha256": "3da997bad052e841b214bf07030be2ba4a4a1cb885ce4ea96132d2230c51a334"
+    },
+    "skills/crack/scripts/setup.mjs": {
+      "upstream_sha256": "423dfda07b112d098109b8943bb6364bde9907994a49b81b5b70c8a56fd5bece",
+      "installed_sha256": "423dfda07b112d098109b8943bb6364bde9907994a49b81b5b70c8a56fd5bece"
+    },
+    "skills/crack/scripts/select.mjs": {
+      "upstream_sha256": "9ba3eff890c4f6a435653766846dee839dbc3e35dfd21b585a19ab0d3b96b0d0",
+      "installed_sha256": "9ba3eff890c4f6a435653766846dee839dbc3e35dfd21b585a19ab0d3b96b0d0"
+    },
+    "skills/crack-plan/scripts/plan.mjs": {
+      "upstream_sha256": "93c0024a57139e903fcff804b65fea6037ee150d045e087e0ab0d45cc40a9956",
+      "installed_sha256": "d673c94d1ad716c8b5a7546c81d02eaf044ab9aae878c775f52f5e5e4fdb0a62"
+    },
+    "skills/crack/references/worker-contract.md": {
+      "upstream_sha256": "f56854ef0ea23a6bb3623a22db0ff955969e1743ee0fc80730b76096dd4abdae",
+      "installed_sha256": "f56854ef0ea23a6bb3623a22db0ff955969e1743ee0fc80730b76096dd4abdae"
+    },
+    "skills/crack/scripts/lib/catalog.mjs": {
+      "upstream_sha256": "c625cceb9f491574d7114b30ab41cbf152534b8b0b6fbd3cc23e3eb12e960cbf",
+      "installed_sha256": "c625cceb9f491574d7114b30ab41cbf152534b8b0b6fbd3cc23e3eb12e960cbf"
+    },
+    "skills/crack/scripts/lib/changes.mjs": {
+      "upstream_sha256": "9301fc3997b8782fe9a6cc03e2d25a91288c21f1b6885a8416109507f0507ba3",
+      "installed_sha256": "9301fc3997b8782fe9a6cc03e2d25a91288c21f1b6885a8416109507f0507ba3"
+    },
+    "skills/crack/scripts/lib/config.mjs": {
+      "upstream_sha256": "e62db028a970a2711fff9a76b3f6dc96a74d42ee833e0df7da588ab81d7b990c",
+      "installed_sha256": "e62db028a970a2711fff9a76b3f6dc96a74d42ee833e0df7da588ab81d7b990c"
+    },
+    "skills/crack/scripts/lib/io.mjs": {
+      "upstream_sha256": "2bdc06d38d199d66098b15e534a4070b715dc00705958c0c0993cf2ec762b1a8",
+      "installed_sha256": "2bdc06d38d199d66098b15e534a4070b715dc00705958c0c0993cf2ec762b1a8"
+    },
+    "skills/crack/scripts/lib/plan.mjs": {
+      "upstream_sha256": "cdab3040452513700ec6804589c48db96afea17e6ee6c50ab25380b5cbb14dfa",
+      "installed_sha256": "cdab3040452513700ec6804589c48db96afea17e6ee6c50ab25380b5cbb14dfa"
+    },
+    "skills/crack/scripts/lib/readiness.mjs": {
+      "upstream_sha256": "6c4346d8b7614a5125411d54ebc7a09faf70df6b7e84598d4fd9655cf4d1636e",
+      "installed_sha256": "6c4346d8b7614a5125411d54ebc7a09faf70df6b7e84598d4fd9655cf4d1636e"
+    },
+    "skills/crack/scripts/lib/roles.mjs": {
+      "upstream_sha256": "1c3076cb8a23b4af1137bd037ce1038fb926abbf127711818faeaa39d142e4b4",
+      "installed_sha256": "1c3076cb8a23b4af1137bd037ce1038fb926abbf127711818faeaa39d142e4b4"
+    },
+    "skills/crack/scripts/lib/routing.mjs": {
+      "upstream_sha256": "8e3201b4d0a13a48c0df6a22e8c2b68e4600dbdfa56d4f25063af79af7b31c61",
+      "installed_sha256": "8e3201b4d0a13a48c0df6a22e8c2b68e4600dbdfa56d4f25063af79af7b31c61"
+    },
+    "skills/crack/scripts/lib/toml.mjs": {
+      "upstream_sha256": "ae2ee9f893cd115bfa299471a2c4bf631a2d7c9488160f37d1ea152e438720f1",
+      "installed_sha256": "ae2ee9f893cd115bfa299471a2c4bf631a2d7c9488160f37d1ea152e438720f1"
+    },
+    "skills/crack/scripts/lib/vendor/smol-toml/stringify.js": {
+      "upstream_sha256": "a96ec2fa840067eff015a38a18849f1e3b2ff2e9cb9ad52cd9266497ad12b3de",
+      "installed_sha256": "a96ec2fa840067eff015a38a18849f1e3b2ff2e9cb9ad52cd9266497ad12b3de"
+    },
+    "skills/crack/scripts/lib/vendor/smol-toml/util.js": {
+      "upstream_sha256": "332fda936c5d81a493d1a7dfa574221d27d585657b337e5db466cc26aec26302",
+      "installed_sha256": "332fda936c5d81a493d1a7dfa574221d27d585657b337e5db466cc26aec26302"
+    },
+    "skills/crack/scripts/lib/vendor/smol-toml/LICENSE": {
+      "upstream_sha256": "fa5659948374d4f555594f47f6da073b40dc503e921aeeece30df4362b3051a5",
+      "installed_sha256": "fa5659948374d4f555594f47f6da073b40dc503e921aeeece30df4362b3051a5"
+    },
+    "skills/crack/scripts/lib/vendor/smol-toml/index.js": {
+      "upstream_sha256": "ded3ee91f3ce1ef746f6b57459b0c68475658eacb8e88fd18336a5408de009a1",
+      "installed_sha256": "ded3ee91f3ce1ef746f6b57459b0c68475658eacb8e88fd18336a5408de009a1"
+    },
+    "skills/crack/scripts/lib/vendor/smol-toml/error.js": {
+      "upstream_sha256": "28dbfc2871c0707f97cebb5a8be7e343a9cee58250b5814813d748b90d9e0d3b",
+      "installed_sha256": "28dbfc2871c0707f97cebb5a8be7e343a9cee58250b5814813d748b90d9e0d3b"
+    },
+    "skills/crack/scripts/lib/vendor/smol-toml/parse.js": {
+      "upstream_sha256": "92d512a52a44f72b3258e817e4cf3e6d576ffc5059666b9fe27341e7871ecead",
+      "installed_sha256": "92d512a52a44f72b3258e817e4cf3e6d576ffc5059666b9fe27341e7871ecead"
+    },
+    "skills/crack/scripts/lib/vendor/smol-toml/struct.js": {
+      "upstream_sha256": "dbd94692ef8225459b29232f23e82fd67ad84002349e67458456a09695f063b0",
+      "installed_sha256": "dbd94692ef8225459b29232f23e82fd67ad84002349e67458456a09695f063b0"
+    },
+    "skills/crack/scripts/lib/vendor/smol-toml/extract.js": {
+      "upstream_sha256": "851ddbb4ae8571fda887a03511a6688d9b168c49deceda34243ad77d6f2a39ec",
+      "installed_sha256": "851ddbb4ae8571fda887a03511a6688d9b168c49deceda34243ad77d6f2a39ec"
+    },
+    "skills/crack/scripts/lib/vendor/smol-toml/date.js": {
+      "upstream_sha256": "fcc8fcce1a3e8660ac572fb827c20e49d269ad50686c085bb72c3c50771323d5",
+      "installed_sha256": "fcc8fcce1a3e8660ac572fb827c20e49d269ad50686c085bb72c3c50771323d5"
+    },
+    "skills/crack/scripts/lib/vendor/smol-toml/primitive.js": {
+      "upstream_sha256": "64418c1b056c86d24053caee06ec44bd48187c061b7ff09c21159f2e0e5dd8f5",
+      "installed_sha256": "64418c1b056c86d24053caee06ec44bd48187c061b7ff09c21159f2e0e5dd8f5"
+    }
+  },
+  "adaptation": "Native dependency closure only; concise project skill policies and manifest; planner external-lead option removed. No viewer, external execution adapter, panel, MCP or hooks."
+}

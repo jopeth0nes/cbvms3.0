@@ -39,3 +39,6 @@ models/*.pth
 
 # Metadata-only attendance retry journals (may contain student identifiers)
 *.attendance-pending/
+
+# Local Codex on Crack setup receipts (keep locally for undo)
+.codex/crack-backups/

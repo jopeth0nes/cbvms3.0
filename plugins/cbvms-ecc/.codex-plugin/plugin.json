@@ -1,0 +1,22 @@
+{
+  "name": "cbvms-ecc",
+  "version": "0.1.0",
+  "description": "Ten targeted CBVMS engineering skills adapted from ECC; no agents or orchestration.",
+  "author": {
+    "name": "CBVMS contributors"
+  },
+  "license": "MIT",
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "CBVMS Engineering",
+    "shortDescription": "Targeted CBVMS engineering guidance.",
+    "developerName": "CBVMS contributors",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": "Review this CBVMS change using only the relevant engineering skill.",
+    "longDescription": "Ten targeted CBVMS engineering skills adapted from ECC; no agents or orchestration."
+  }
+}

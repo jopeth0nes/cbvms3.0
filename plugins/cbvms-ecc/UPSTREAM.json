@@ -1,0 +1,22 @@
+{
+  "source": "https://github.com/affaan-m/ECC",
+  "commit": "ef648e01899ba3e8dc6371642deaaf64b4477775",
+  "inspected": "2026-10-05",
+  "reference_fork": {
+    "source": "https://github.com/worldflowai/everything-claude-code",
+    "commit": "432485ba6b92c14fb357276a98957f348bcff9ee"
+  },
+  "skill_sources": {
+    "cbvms-verify": "verification-loop",
+    "cbvms-security-review": "security-review",
+    "cbvms-regression-first": "tdd-workflow",
+    "cbvms-api-design": "api-design",
+    "cbvms-db-migrations": "database-migrations",
+    "cbvms-postgres": "postgres-patterns",
+    "cbvms-deploy": "deployment-patterns",
+    "cbvms-portal-e2e": "e2e-testing",
+    "cbvms-vision-eval": "eval-harness",
+    "cbvms-portal-design": "frontend-design-direction"
+  },
+  "adaptation": "Engineering concepts rewritten for inspected CBVMS paths; no upstream agents, MCPs, hooks, framework recipes or blanket TDD/coverage rules."
+}

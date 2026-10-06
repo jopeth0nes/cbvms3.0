@@ -1,0 +1,36 @@
+{
+  "name": "codex-on-crack",
+  "version": "2.2.2+cbvms.1",
+  "description": "CBVMS native-only Codex on Crack: Astra lead, one bounded implementation worker.",
+  "author": {
+    "name": "Ethan Rogers"
+  },
+  "homepage": "https://github.com/ethanplusai/codex-on-crack",
+  "license": "MIT",
+  "keywords": [
+    "orchestration",
+    "subagents",
+    "multi-model",
+    "codex-router",
+    "planning",
+    "code-review",
+    "debugging",
+    "verification"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Codex on Crack",
+    "shortDescription": "Your models, working together in Codex.",
+    "longDescription": "CBVMS native-only Codex on Crack: Astra lead, one bounded implementation worker.",
+    "developerName": "Ethan Rogers",
+    "category": "Developer Tools",
+    "defaultPrompt": [
+      "Plan a substantial CBVMS implementation with one worker and Astra review"
+    ],
+    "brandColor": "#E11D48",
+    "capabilities": [
+      "Read",
+      "Write"
+    ]
+  }
+}
