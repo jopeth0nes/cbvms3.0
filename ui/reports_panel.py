@@ -1,5 +1,7 @@
 """Shared admin and superadmin CSV reporting workspace."""
 import json
+from datetime import date
+from core.discipline import parse_db_datetime
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import customtkinter as ctk
@@ -18,6 +20,10 @@ class ReportsPanel(ctk.CTkFrame):
         self.task = BackgroundTask(self)
         self.rows = []
         self.filtered = []
+        self.sort_key = 'name'
+        self.sort_reverse = False
+        self.date_from = tk.StringVar()
+        self.date_to = tk.StringVar()
         self.kind = tk.StringVar(value='Roster')
         self.source = tk.StringVar(value='Live database')
         self.grid_columnconfigure(0, weight=1)
@@ -46,6 +52,16 @@ class ReportsPanel(ctk.CTkFrame):
             menu = ctk.CTkOptionMenu(tools, variable=var, values=['All'], command=lambda _: self.filter_rows())
             menu.grid(row=2, column=column, sticky='ew', padx=10, pady=(4, 10))
             self.filters[key], self.menus[key] = var, menu
+        for column, (title, variable) in enumerate((('From date (YYYY-MM-DD)', self.date_from),
+                                                   ('To date (YYYY-MM-DD)', self.date_to))):
+            ctk.CTkLabel(tools, text=title, anchor='w').grid(row=3, column=column, sticky='ew', padx=10)
+            ctk.CTkEntry(tools, textvariable=variable).grid(row=4, column=column, sticky='ew', padx=10, pady=8)
+        actions = ctk.CTkFrame(tools, fg_color='transparent')
+        actions.grid(row=4, column=2, sticky='ew', padx=10)
+        ctk.CTkButton(actions, text='Apply dates', width=90, command=self.filter_rows).pack(side='left', padx=4)
+        ctk.CTkButton(actions, text='Clear filters', width=90, command=self.clear_filters).pack(side='left', padx=4)
+        self.quickstats = ctk.CTkLabel(tools, text='', anchor='w', wraplength=900)
+        self.quickstats.grid(row=5, column=0, columnspan=3, sticky='ew', padx=10, pady=8)
         self.count = ctk.CTkLabel(self, text='', anchor='w', text_color=COLOR_TEXT_MUTED)
         self.count.grid(row=2, column=0, sticky='ew', pady=8)
         table = ctk.CTkFrame(self, fg_color=COLOR_SURFACE)
@@ -101,20 +117,58 @@ class ReportsPanel(ctk.CTkFrame):
         self.menus['course'].configure(values=['All', *courses])
         if self.filters['course'].get() not in courses:
             self.filters['course'].set('All')
+        try:
+            start = date.fromisoformat(self.date_from.get().strip()) if self.date_from.get().strip() else None
+            end = date.fromisoformat(self.date_to.get().strip()) if self.date_to.get().strip() else None
+            if start and end and start > end:
+                raise ValueError('From date must be on or before To date.')
+        except ValueError as exc:
+            self.message.configure(text=f'Invalid date range: {exc}. Use YYYY-MM-DD.')
+            return False
+        if self.kind.get() == 'Roster' and (start or end):
+            self.message.configure(text='Date filters apply to Discipline reports. Select Discipline or clear the dates.')
+            return False
         self.filtered = [r for r in self.rows if all(var.get() == 'All' or
                          (r[key] or 'Unspecified') == var.get() for key, var in self.filters.items())]
+        if start or end:
+            def in_range(row):
+                stamp = parse_db_datetime(row.get('date'))
+                day = stamp.astimezone().date() if stamp else None
+                return day is not None and (not start or day >= start) and (not end or day <= end)
+            self.filtered = [r for r in self.filtered if in_range(r)]
+        self.filtered.sort(key=lambda r: str(r.get(self.sort_key) or '').casefold(), reverse=self.sort_reverse)
         columns = ROSTER if self.kind.get() == 'Roster' else DISCIPLINE
         self.tree.delete(*self.tree.get_children())
         self.tree.configure(columns=columns)
         for key in columns:
-            self.tree.heading(key, text=key.replace('_', ' ').title())
+            self.tree.heading(key, text=key.replace('_', ' ').title(), command=lambda key=key: self.sort_by(key))
             self.tree.column(key, width=160 if key in ('name', 'college_department', 'reason') else 120,
                              minwidth=100, stretch=False)
         for index, row in enumerate(self.filtered):
             self.tree.insert('', 'end', iid=str(index), values=[row.get(key, '') for key in columns])
         self.count.configure(text=f'{len(self.filtered)} of {len(self.rows)} records · {self.kind.get()} · {self.source.get()}')
+        students = len({r['student_id'] for r in self.filtered if r.get('student_id')})
+        violations = sum(r.get('record_type') == 'Violation' for r in self.filtered)
+        suspensions = sum(r.get('record_type') == 'Suspension' for r in self.filtered)
+        self.quickstats.configure(text=f'Students: {students}  |  Violations: {violations}  |  Suspensions: {suspensions}')
+        self.message.configure(text='Quick stats and CSV export use the filtered table. Click a column heading to sort. Dates use local time.')
+        return True
+
+    def sort_by(self, key):
+        self.sort_reverse = not self.sort_reverse if self.sort_key == key else False
+        self.sort_key = key
+        self.filter_rows()
+
+    def clear_filters(self):
+        for variable in self.filters.values():
+            variable.set('All')
+        self.date_from.set('')
+        self.date_to.set('')
+        self.filter_rows()
 
     def export_csv(self):
+        if not self.filter_rows():
+            return
         path = filedialog.asksaveasfilename(parent=self, defaultextension='.csv',
             initialfile=f'{self.kind.get().lower()}_report.csv', filetypes=[('CSV files', '*.csv')])
         if not path:

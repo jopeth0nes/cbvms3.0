@@ -43,6 +43,7 @@ from ui.attendance_panel import AttendancePanel
 from core.attendance_writer import writer_status
 from ui.appeals_panel import AppealsPanel
 from ui.suspension_overview import SuspensionsWorkspace
+from ui.suspensions_panel import SuspensionsPanel
 from ui.reports_panel import ReportsPanel
 from ui.violation_log import ViolationLogPanel
 from ui.account_manager import AccountManagerPanel
@@ -232,6 +233,7 @@ class CBVMSDashboard(WorkspaceWindow):
         self._enrollment_panel: EnrollmentPanel | None = None
         self._training_panel: TrainingPanel | None = None
         self._suspensions_panel: SuspensionsWorkspace | None = None
+        self._violation_history_panel: SuspensionsPanel | None = None
         self._reports_panel = None
         self._violation_panel: ViolationLogPanel | None = None
         self._settings_panel: SettingsPanel | None = None
@@ -262,7 +264,7 @@ class CBVMSDashboard(WorkspaceWindow):
         self._tick_clock()
         self._schedule_feed_update()
         self.after(80, self._deferred_start_camera)   # start the camera ASAP after the UI maps
-        self.after_idle(self.reveal_when_ready)
+        self.after(16, self.reveal_when_ready)
 
     # ------------------------------------------------------------------
     # UI construction
@@ -348,10 +350,11 @@ class CBVMSDashboard(WorkspaceWindow):
             ("enrollment", "👤  Student Management"),
             ("attendance", "Attendance"),
             ("suspensions", "⏸  Suspensions"),
+            ("violation_history", "📋  Violation History"),
             ("violations", "⚠  Violation Log"),
             ("appeals",    "⚖  Appeals"),
             ("records",    "🗄  Records"),
-            ("reports",    "Reports"),
+            ("reports",    "📊  Reports"),
             ("training",   "🎓  Training"),
             ("accounts",   "🔑  Account Manager"),
             ("settings",   "⚙  Settings"),
@@ -514,9 +517,11 @@ class CBVMSDashboard(WorkspaceWindow):
             username=self.username,
             on_open_suspensions=self._open_student_suspensions,
         )),
+            "violation_history": ("_violation_history_panel", lambda: SuspensionsPanel(
+                self._view_host, database=self._database, username=self.username, history_view="violations")),
             "suspensions": ("_suspensions_panel", lambda: SuspensionsWorkspace(
             self._view_host, database=self._database, username=self.username)),
-            "violations": ("_violation_panel", lambda: ViolationLogPanel(self._view_host, database=self._database)),
+            "violations": ("_violation_panel", lambda: ViolationLogPanel(self._view_host, database=self._database, username=self.username)),
             "training": ("_training_panel", lambda: TrainingPanel(
             self._view_host,
             trainer=self._trainer,
@@ -698,8 +703,10 @@ class CBVMSDashboard(WorkspaceWindow):
             self._training_panel.on_hide()
         if previous_nav == "settings" and self._settings_panel is not None:
             self._settings_panel.on_hide()
-        if previous_nav == "suspensions":
-            self._suspensions_panel.on_hide()
+        history_panels = {"suspensions": self._suspensions_panel,
+                          "violation_history": self._violation_history_panel}
+        if previous_nav in history_panels and history_panels[previous_nav] is not None:
+            history_panels[previous_nav].on_hide()
 
         titles = {
             "attendance": "Attendance — Campus Sightings",
@@ -707,6 +714,7 @@ class CBVMSDashboard(WorkspaceWindow):
             "live":       "Live Monitor",
             "enrollment": "Student Management",
             "suspensions": "Suspensions",
+            "violation_history": "Violation History",
             "violations": "Violation Log",
             "records":    "Database & Record Management",
             "training":   "Training",
@@ -715,7 +723,7 @@ class CBVMSDashboard(WorkspaceWindow):
             "alerts":     "Notifications",
         }
         self._center_title.configure(text=titles.get(key, "CBVMS"))
-        if key == "suspensions":
+        if key in {"suspensions", "violation_history"}:
             self._center_title.pack_forget()
         else:
             self._center_title.pack(side="left")
@@ -727,7 +735,12 @@ class CBVMSDashboard(WorkspaceWindow):
             self._view_host.tkraise()
             if key == "enrollment" and self._enrollment_panel is not None:
                 self._enrollment_panel.on_show()
+            if key == "violation_history":
+                selected = self._suspensions_panel.records.student_id if self._suspensions_panel and self._suspensions_panel.records else None
+                self._violation_history_panel.on_show(selected)
             if key == "suspensions":
+                if self._suspension_student_id is None and previous_nav == "violation_history":
+                    self._suspension_student_id = self._violation_history_panel.student_id
                 self._suspensions_panel.on_show(self._suspension_student_id)
                 self._suspension_student_id = None
             if key == "training" and self._training_panel is not None:

@@ -6,7 +6,7 @@ import csv
 import io
 import tkinter as tk
 from datetime import date, datetime, timedelta
-from tkinter import filedialog, ttk
+from tkinter import filedialog, ttk, simpledialog
 
 import customtkinter as ctk
 from PIL import Image, ImageTk
@@ -102,7 +102,8 @@ def _violation_badge_color(value: str) -> str:
 
 
 class ViolationLogPanel(CBVMSCard):
-    def __init__(self, master, *, database: CBVMSDatabase, **kwargs) -> None:
+    def __init__(self, master, *, database: CBVMSDatabase, username="admin", **kwargs) -> None:
+        self.username = username
         super().__init__(master, **kwargs)
         self.database = database
 
@@ -615,7 +616,7 @@ class ViolationLogPanel(CBVMSCard):
         self._toggle_btn.grid(row=0, column=0, sticky="ew", padx=(0, 4))
 
         self._dismiss_btn = ctk.CTkButton(
-            btn_row, text="Dismiss", height=34,
+            btn_row, text="Manual Dismiss", height=34,
             corner_radius=CORNER_RADIUS, fg_color=COLOR_WARNING, hover_color="#D97706",
             command=self._dismiss_selected, state="disabled",
         )
@@ -966,6 +967,8 @@ class ViolationLogPanel(CBVMSCard):
         else:
             self._toggle_btn.configure(state="disabled", text="Confirm Now")
             self._dismiss_btn.configure(state="disabled")
+        self._dismiss_btn.configure(state="normal" if appeal_row is None and status in
+            (PENDING_REVIEW, CONFIRMED, AUTO_CONFIRMED, "unreviewed", "reviewed") else "disabled")
         # Preserve the old delete feature only for pre-workflow legacy rows; new
         # workflow records remain auditable and use Dismiss instead.
         self._delete_one_btn.configure(
@@ -1088,14 +1091,20 @@ class ViolationLogPanel(CBVMSCard):
         if self._selected_violation_row is None:
             return
         vid = int(self._selected_violation_row["id"])
-        if self.database.dismiss_violation(
-            vid,
-            decided_by="admin",
-            reason="False detection dismissed during administrative review",
-        ):
+        reason = simpledialog.askstring("Manual Appeal / Dismissal",
+            "Reason for removing this violation's active strike (required):", parent=self)
+        if reason is None:
+            return
+        try:
+            dismissed = self.database.dismiss_violation(vid, decided_by=self.username,
+                reason=reason, manual=True)
+        except (ValueError, PermissionError) as exc:
+            self._set_status(str(exc), "warning")
+            return
+        if dismissed:
             self._set_status("Violation dismissed; no strike is active and no new appeal is allowed.", "success")
         else:
-            self._set_status("Only pending-review violations can be dismissed.", "warning")
+            self._set_status("Record changed or has an appeal. Refresh or use appeal review.", "warning")
         self.refresh()
 
     def _delete_current(self) -> None:

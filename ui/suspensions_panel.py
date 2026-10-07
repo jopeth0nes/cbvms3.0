@@ -11,6 +11,7 @@ from core.discipline import parse_db_datetime, utc_now, violation_display_name
 from core.academics import YEAR_LEVELS, legacy_year_section, resolve_pair, NEEDS_REVIEW, display_academics
 from core.student_status import suspension_label
 from core.report_worker import ReportWorker, latest
+from core.reports import open_print_preview
 from ui.components import (
     COLOR_ACCENT, COLOR_ACCENT_HOVER, COLOR_BG, COLOR_BORDER, COLOR_DANGER,
     COLOR_SURFACE, COLOR_TEXT, COLOR_TEXT_MUTED, COLOR_WARNING, CORNER_RADIUS,
@@ -87,8 +88,13 @@ class SuspensionsPanel(ctk.CTkFrame):
     Generation IDs discard old responses when the selection changes or closes.
     """
 
-    def __init__(self, master, *, database, username, embedded=False, **kwargs):
+    def __init__(self, master, *, database, username, history_view=None, embedded=False, **kwargs):
         super().__init__(master, fg_color=COLOR_BG, **kwargs)
+        if history_view is None:
+            history_view = "violations" if embedded else "suspensions"
+        if history_view not in {"suspensions", "violations"}:
+            raise ValueError("Unknown history view")
+        self.history_view = history_view
         self.embedded = embedded
         self._action_loading = False
         self.database = database
@@ -135,8 +141,9 @@ class SuspensionsPanel(ctk.CTkFrame):
         parent.bind("<Configure>", resize, add="+")
 
     def _table(self, parent, columns, *, height=3):
-        frame = ctk.CTkFrame(parent, fg_color=COLOR_BG)
+        frame = ctk.CTkFrame(parent, fg_color=COLOR_BG, height=height * 32 + 58)
         frame.pack(fill="both", expand=True)
+        frame.grid_propagate(False)
         frame.grid_columnconfigure(0, weight=1)
         frame.grid_rowconfigure(0, weight=1)
         tree = ttk.Treeview(frame, columns=[c[0] for c in columns], show="headings",
@@ -157,13 +164,16 @@ class SuspensionsPanel(ctk.CTkFrame):
         configure_table_style()
         header = ctk.CTkFrame(self, fg_color="transparent")
         header.grid(row=0, column=0, sticky="ew", pady=(0, 8))
-        ctk.CTkLabel(header, text="Suspensions", font=heading_font(24),
+        ctk.CTkLabel(header, text="Violation History" if self.history_view == "violations" else "Suspensions", font=heading_font(24),
                      text_color=COLOR_TEXT).pack(side="left")
         ctk.CTkButton(header, text="Refresh records", width=128, height=34,
                       fg_color=COLOR_BORDER, hover_color=COLOR_ACCENT_HOVER,
                       command=self.refresh).pack(side="right")
-        if self.embedded:
-            header.grid_remove()
+        if self.history_view == "suspensions" or self.embedded:
+            self._print_btn = ctk.CTkButton(header, text="Print Table", width=110, height=34,
+                fg_color=COLOR_ACCENT, hover_color=COLOR_ACCENT_HOVER,
+                command=self._print_table)
+            self._print_btn.pack(side="right", padx=(0, 8))
         search_tools = ctk.CTkFrame(self, fg_color=COLOR_SURFACE,
                                     corner_radius=CORNER_RADIUS, border_width=1, border_color=COLOR_BORDER)
         search_tools.grid(row=1, column=0, sticky="ew", pady=(0, 6))
@@ -210,7 +220,7 @@ class SuspensionsPanel(ctk.CTkFrame):
         inner.pack(fill="x", padx=PADDING, pady=8)
         self._identity = self._label(inner, text_color=COLOR_TEXT)
         self._identity.configure(font=heading_font(16))
-        metrics = ctk.CTkFrame(inner, fg_color="transparent", height=92)
+        metrics = ctk.CTkFrame(inner, fg_color="transparent", height=110)
         metrics.pack(fill="x", pady=(6, 4))
         metrics.grid_propagate(False)
         metrics.grid_rowconfigure(0, weight=1)
@@ -229,14 +239,24 @@ class SuspensionsPanel(ctk.CTkFrame):
                 self._suspension_status = value
         self._explanation = self._label(inner, text_color=COLOR_TEXT_MUTED)
 
-        self._tabs = ctk.CTkTabview(self, fg_color=COLOR_SURFACE, corner_radius=CORNER_RADIUS,
-            segmented_button_fg_color=COLOR_BG, segmented_button_selected_color=COLOR_ACCENT,
-            segmented_button_selected_hover_color=COLOR_ACCENT_HOVER,
-            segmented_button_unselected_color=COLOR_BG,
-            segmented_button_unselected_hover_color=COLOR_BORDER)
-        self._tabs.grid(row=4, column=0, sticky="nsew")
-        violations, history = (self._tabs.add(name) for name in
-                               ("Violation History", "Suspension History"))
+        # Suspensions is a summary page. History and lifting belong together
+        # on Violation History, where staff can select the suspension to lift.
+        history_frame = ctk.CTkScrollableFrame if self.history_view == "violations" else ctk.CTkFrame
+        self._history_area = history_frame(self, fg_color=COLOR_SURFACE,
+                                        corner_radius=CORNER_RADIUS)
+        if self.history_view == "violations":
+            self._history_area.grid(row=4, column=0, sticky="nsew")
+        self._history_area.grid_columnconfigure(0, weight=1)
+        # Keep both tables at their requested height; scroll the section when
+        # the viewport cannot fit the records and the lifting controls.
+        violations = ctk.CTkFrame(self._history_area, fg_color="transparent", height=260)
+        history = ctk.CTkFrame(self._history_area, fg_color="transparent", height=340)
+        violations.pack_propagate(False)
+        history.pack_propagate(False)
+        self._violation_page, self._suspension_page = violations, history
+        if self.history_view == "violations":
+            violations.grid(row=0, column=0, sticky="nsew", padx=12, pady=(10, 4))
+            history.grid(row=1, column=0, sticky="nsew", padx=12, pady=(4, 10))
         self._violation_empty = self._label(violations, text_color=COLOR_TEXT_MUTED)
         # Reserve the detail/action footers before the expanding tables, so the
         # filter toolbar cannot push those controls below a short window's edge.
@@ -285,7 +305,8 @@ class SuspensionsPanel(ctk.CTkFrame):
         self._violations = {}
         self._suspensions = {}
         self._term = {}
-        self._identity.configure(text=SELECT_STUDENT)
+        self._identity.configure(text=("Select a student to view violation history."
+                                       if self.history_view == "violations" else SELECT_STUDENT))
         for label in (self._strike_summary, self._suspension_status, self._explanation,
                       self._violation_detail, self._history_detail):
             label.configure(text="")
@@ -445,6 +466,24 @@ class SuspensionsPanel(ctk.CTkFrame):
         elif not self.student_id and not self._loading:
             self._message.configure(text=SELECT_STUDENT, text_color=COLOR_TEXT_MUTED)
 
+    def _print_table(self):
+        if self._loading:
+            self._message.configure(text="Please wait for records to finish loading before printing.",
+                                    text_color=COLOR_TEXT_MUTED)
+            return
+        tree = self._student_tree
+        headers = [tree.heading(column, "text") for column in tree["columns"]]
+        rows = [tree.item(item, "values") for item in tree.get_children()]
+        description = (f"Search: {self._search_var.get().strip() or 'All students'} | "
+                       f"Year Level: {self._year_var.get()} | Course: {self._course_var.get()}")
+        try:
+            open_print_preview("Suspensions - Student Table", headers, rows, description)
+        except OSError as exc:
+            self._message.configure(text=f"Could not open print preview: {exc}", text_color=COLOR_DANGER)
+            return
+        self._message.configure(text="Print preview opened. Use Print / Save as PDF in your browser.",
+                                text_color=COLOR_TEXT_MUTED)
+
     def _on_student_select(self, _event=None):
         selection = self._student_tree.selection()
         if selection and selection[0] != self.student_id:
@@ -466,7 +505,7 @@ class SuspensionsPanel(ctk.CTkFrame):
         if any(s["violation_code"] == "wrong_uniform" and s["active_count"] >= 7 for s in data["strikes"]):
             explanation += " PARENT CALL REQUIRED: Contact this student's parents."
         if scheduled:
-            explanation += " A suspension is scheduled; see Suspension History."
+            explanation += " A suspension is scheduled; see Violation History for suspension records."
         if not data["suspensions"]:
             explanation += " No suspension has been assigned."
         self._explanation.configure(text=explanation, text_color=COLOR_WARNING if required else COLOR_TEXT_MUTED)

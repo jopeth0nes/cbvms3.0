@@ -417,6 +417,9 @@ class CBVMSLoginWindow(WorkspaceWindow):
             progress.set(min(1, elapsed / .65))
             self._welcome_job = self.after(16, animate)
 
+        # Finish independently of animation draws: a failed frame must not
+        # leave a successfully authenticated user trapped on the greeting.
+        self.after(800, self.destroy)
         animate()
 
     def _open_registration(self) -> None:

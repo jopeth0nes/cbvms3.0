@@ -58,7 +58,8 @@ def main() -> None:
 
     # Pick up any students who registered via the login screen's self-registration
     # window (the recognizer was created before login, so new enrollments are stale).
-    recognizer.load_known_faces()
+    threading.Thread(target=recognizer.load_known_faces, daemon=True,
+                     name="post-login-face-refresh").start()
 
     logged_out = open_dashboard(
         username=username,

@@ -1148,8 +1148,12 @@ class CBVMSDatabase(StudentManagement, StudentCredentials, AttendanceStore, Secu
         decided_by: str = "admin",
         reason: str = "",
         decided_at: datetime | str | None = None,
+        manual: bool = False,
     ) -> bool:
-        """Dismiss a pending false detection while preserving its audit record."""
+        """Dismiss a detection; manual admin review also removes finalized strikes."""
+
+        if manual and not (reason or "").strip():
+            raise ValueError("A reason for manual dismissal is required.")
 
         now_dt = parse_db_datetime(decided_at) if decided_at is not None else utc_now()
         if now_dt is None:
@@ -1157,6 +1161,10 @@ class CBVMSDatabase(StudentManagement, StudentCredentials, AttendanceStore, Secu
         now_text = format_db_datetime(now_dt)
         with self.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            if manual:
+                actor = conn.execute("SELECT role FROM users WHERE username=?", (decided_by,)).fetchone()
+                if not actor or actor[0] not in ("admin", "superadmin"):
+                    raise PermissionError("An authenticated administrator is required.")
             row = conn.execute(
                 "SELECT * FROM violations WHERE id = ?", (violation_id,)
             ).fetchone()
@@ -1167,9 +1175,9 @@ class CBVMSDatabase(StudentManagement, StudentCredentials, AttendanceStore, Secu
             if status == DISMISSED:
                 conn.commit()
                 return True
-            # Do not route pre-feature ``unreviewed`` history through the new
-            # decision workflow; doing so could create retroactive student effects.
-            if status != PENDING_REVIEW:
+            # Historical and finalized records require explicit manual admin review.
+            if status != PENDING_REVIEW and not (manual and status in
+                    (CONFIRMED, AUTO_CONFIRMED, "unreviewed", "reviewed")):
                 conn.rollback()
                 return False
             if conn.execute("SELECT 1 FROM appeals WHERE violation_id=?", (violation_id,)).fetchone():

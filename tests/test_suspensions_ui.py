@@ -108,7 +108,10 @@ class SuspensionsUITests(unittest.TestCase):
 
     def test_automatic_policy_replaces_manage_tab(self):
         self.select(self.SID)
-        self.assertNotIn('Manage Suspension', self.panel._tabs._tab_dict)
+        self.assertEqual(self.panel.history_view, 'suspensions')
+        self.assertFalse(self.panel._history_area.grid_info())
+        self.assertFalse(self.panel._suspension_page.grid_info())
+        self.assertFalse(self.panel._violation_page.grid_info())
         self.assertIn('3 strikes = 2 days', self.panel._explanation.cget('text'))
         for _ in range(6):
             self.db.log_violation(self.SID, 'First Student', 'wrong_uniform', status='confirmed')
@@ -117,6 +120,24 @@ class SuspensionsUITests(unittest.TestCase):
         self.wait_loaded()
         self.assertEqual(len(self.panel._history_tree.get_children()), 3)
         self.assertIn('PARENT CALL REQUIRED', self.panel._explanation.cget('text'))
+
+    def test_violation_history_page_has_its_own_table_and_selection(self):
+        panel = SuspensionsPanel(self.root, database=self.db, username="osa.tester",
+                                 history_view="violations")
+        self.addCleanup(panel.destroy)
+        self.assertEqual(panel._violation_page.grid_info()['row'], 0)
+        self.assertEqual(panel._suspension_page.grid_info()['row'], 1)
+        original = self.panel
+        self.panel = panel
+        try:
+            self.select(self.SID)
+            self.assertEqual(len(panel._violation_tree.get_children()), 1)
+            self.assertIn(self.SID, panel._identity.cget('text'))
+            panel._violation_tree.selection_set(str(self.vid))
+            panel._on_violation_select()
+            self.assertIn('Counts this semester', panel._violation_detail.cget('text'))
+        finally:
+            self.panel = original
 
 
     def test_student_record_shortcut_carries_string_id_and_details_are_separate(self):
@@ -145,6 +166,8 @@ class SuspensionsUITests(unittest.TestCase):
         # Build the real sidebar and navigation using a lightweight Tk host.
         root = self.root
         root.username = "osa.tester"
+        root._is_superadmin = False
+        root._violation_history_panel = None
         root._active_nav = "live"
         root._invalidate_monitor = MagicMock()
         root._open_alerts_from_bell = lambda: None
@@ -169,7 +192,27 @@ class SuspensionsUITests(unittest.TestCase):
         self.assertEqual(self.panel.student_id, self.SID)
         self.assertIn(self.SID, self.panel._identity.cget("text"))
 
+    def test_history_sidebar_entries_are_available_to_both_admin_roles(self):
+        root = self.root
+        root.username = "osa.tester"
+        root._active_nav = "live"
+        root._open_alerts_from_bell = lambda: None
+        root._logout = lambda: None
+        root._on_nav_select = MagicMock()
+        for is_superadmin in (False, True):
+            with self.subTest(is_superadmin=is_superadmin):
+                root._is_superadmin = is_superadmin
+                CBVMSDashboard._build_left_sidebar(root)
+                for key, title in (("suspensions", "Suspensions"),
+                                   ("violation_history", "Violation History")):
+                    self.assertIn(title, root._nav_buttons[key].cget("text"))
+                    root._nav_buttons[key].invoke()
+                    root._on_nav_select.assert_called_with(key)
+
     def test_visible_layout_resizes_and_keeps_actions_reachable(self):
+        self.panel = SuspensionsPanel(self.root, database=self.db, username="osa.tester",
+                                     history_view="violations")
+        self.addCleanup(self.panel.destroy)
         def settle():
             # CTkTabview.set schedules old-tab removal after 100 ms. Let that
             # transition finish before checking mapping or scrolling geometry.
@@ -193,17 +236,21 @@ class SuspensionsUITests(unittest.TestCase):
                                  self.root.winfo_rootx() + self.root.winfo_width())
             self.assertLessEqual(controls[0].winfo_rooty() + controls[0].winfo_height(),
                                  self.panel._student_tree.winfo_rooty())
-            for tab in ("Violation History", "Suspension History"):
-                self.panel._tabs.set(tab)
-                settle()
-                self.assertLessEqual(self.panel._message.winfo_rooty() + self.panel._message.winfo_height(),
-                                     self.root.winfo_rooty() + self.root.winfo_height())
-                footer = {"Violation History": self.panel._violation_detail,
-                          "Suspension History": self.panel._lift_btn}.get(tab)
-                if footer is not None:
-                    self.assertTrue(footer.winfo_ismapped())
-                    self.assertLessEqual(footer.winfo_rooty() + footer.winfo_height(),
-                                         self.panel._tabs.winfo_rooty() + self.panel._tabs.winfo_height())
+            settle()
+            self.assertLessEqual(self.panel._message.winfo_rooty() + self.panel._message.winfo_height(),
+                                 self.root.winfo_rooty() + self.root.winfo_height())
+            footer = self.panel._lift_btn
+            self.assertTrue(footer.winfo_ismapped())
+            for tree in (self.panel._violation_tree, self.panel._history_tree):
+                self.assertGreaterEqual(tree.winfo_height(), 3 * 32 + 40)
+                self.assertTrue(tree.bbox(tree.get_children()[0]) if tree.get_children() else True)
+            # Short windows scroll the history instead of collapsing its rows.
+            canvas = self.panel._history_area._parent_canvas
+            canvas.yview_moveto(1)
+            settle()
+            self.assertLessEqual(footer.winfo_rooty() + footer.winfo_height(),
+                                 canvas.winfo_rooty() + canvas.winfo_height())
+            canvas.yview_moveto(0)
         self.assertEqual(self.errors, [])
 
     def seed_filter_students(self):

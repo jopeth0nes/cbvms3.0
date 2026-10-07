@@ -193,7 +193,7 @@ class StudentPortal(WorkspaceWindow):
         self._show("dashboard")
         self.bind("<FocusIn>", lambda event: self._reload_workflow_data() if event.widget is self and time.monotonic()-self._last_workflow_refresh >= 4 else None)
         self._poll_job = self.after(50, self._poll_ai_updates)
-        self.after_idle(self.reveal_when_ready)
+        self.after(16, self.reveal_when_ready)
 
     # ------------------------------------------------------------------
     # Activity log + toast

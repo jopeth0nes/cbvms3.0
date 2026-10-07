@@ -24,7 +24,10 @@ class WorkspaceWindow(ctk.CTk):
             self.quit()
 
     def reveal_when_ready(self):
-        """Map a fully laid-out workspace instead of exposing construction frames."""
-        self.update_idletasks()
+        """Map the workspace without recursively draining layout callbacks.
+
+        Tk completes pending layout in its normal event loop. A synchronous
+        idle drain can starve the handoff when configure handlers keep resizing.
+        """
         self.deiconify()
         self.lift()
