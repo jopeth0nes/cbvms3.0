@@ -1,0 +1,24 @@
+{
+  "format": 1,
+  "kind": "codex-on-crack",
+  "status": "applied",
+  "operation_seq": 1,
+  "files": [
+    {
+      "path": "/Users/jopethones/Documents/GitHub/cbvms3.0/.codex/crack/crack.toml",
+      "action": "create",
+      "before_file": null,
+      "before_hash": null,
+      "after_hash": "3d7eba28a87223bd70338724f87896bf049b90902a733f244504b25dd5b7700b",
+      "mode": 384
+    },
+    {
+      "path": "/Users/jopethones/Documents/GitHub/cbvms3.0/.codex/agents/crack_builder.toml",
+      "action": "create",
+      "before_file": null,
+      "before_hash": null,
+      "after_hash": "d1e0a367d71852983a618781f2850770949988f567242bcac4a98306ddebbbc9",
+      "mode": 384
+    }
+  ]
+}
