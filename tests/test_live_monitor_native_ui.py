@@ -133,6 +133,8 @@ class DashboardNativeLifecycleTests(unittest.TestCase):
                     self.assertIsNone(app._training_panel)
                     frame = np.zeros((720, 1280, 3), np.uint8)
                     sequence = count()
+                    app._camera_state = 'STREAMING'
+                    app._camera_active_source = dict(id='synthetic', label='Synthetic')
                     app._camera = SimpleNamespace(is_open=True, get_latest_sample=lambda:
                         CameraSample(frame, ('synthetic', next(sequence)), time.monotonic()))
                     deadline = time.monotonic() + 2

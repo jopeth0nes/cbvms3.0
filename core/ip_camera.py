@@ -184,36 +184,15 @@ def open_stream(
     open_timeout_ms: int = 6000,
     read_timeout_ms: int = 6000,
     transport: str = "tcp",
+    cancel_event=None,
 ) -> cv2.VideoCapture | None:
-    """Open a network stream via FFMPEG with TCP transport + hard timeouts.
-
-    Without these, OpenCV can block for 30s+ on an unreachable RTSP host. The FFMPEG
-    options must be set in the environment before the capture is created.
-    """
-    # nobuffer + low_delay tell FFMPEG not to pre-buffer packets, so frames reach the
-    # reader as soon as they decode (lower live latency). The reader thread then keeps
-    # the stream drained so no backlog builds up.
-    os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = (
-        f"rtsp_transport;{transport}|stimeout;{read_timeout_ms * 1000}"
-        f"|fflags;nobuffer|flags;low_delay"
-    )
-    params: list[int] = []
-    if hasattr(cv2, "CAP_PROP_OPEN_TIMEOUT_MSEC"):
-        params += [int(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC), int(open_timeout_ms)]
-    if hasattr(cv2, "CAP_PROP_READ_TIMEOUT_MSEC"):
-        params += [int(cv2.CAP_PROP_READ_TIMEOUT_MSEC), int(read_timeout_ms)]
-    try:
-        if params:
-            cap = cv2.VideoCapture(url, cv2.CAP_FFMPEG, params)
-        else:
-            cap = cv2.VideoCapture(url, cv2.CAP_FFMPEG)
-    except Exception:
-        return None
-    if cap is None or not cap.isOpened():
-        if cap is not None:
-            cap.release()
-        return None
-    return cap
+    """Open an isolated decoder; native timeouts are backed by process cancellation."""
+    from core.network_capture import NetworkStream
+    cap = NetworkStream(url, open_timeout_ms=open_timeout_ms,
+                        read_timeout_ms=read_timeout_ms, transport=transport,
+                        cancel_event=cancel_event,
+                        first_frame_timeout=open_timeout_ms / 1000 + 2)
+    return cap if cap.open() else None
 
 
 def _grab_one(cap: cv2.VideoCapture, budget_s: float = 3.0) -> bool:

@@ -15,6 +15,21 @@ from ui.camera_configuration import CameraConfigurationSection
 from ui.dashboard import CBVMSDashboard
 
 
+class CameraHarness(types.SimpleNamespace):
+    """Tk-free lifecycle fixture with the same initial state as the dashboard."""
+    def __init__(self, **values):
+        defaults = dict(_camera_retry_job=None, _camera_start_job=None, _camera_switch_job=None,
+            _camera_open_deadline=None, _camera_active_source=None, _camera_established=False,
+            _camera_retry_count=0, _camera_state='STREAMING', _camera_message='Connecting…',
+            _camera_requested_source=dict(id='usb_0', type='usb', index=0, label='MacBook Camera'),
+            _camera_spinner=MagicMock(), _status_camera=MagicMock(), after_cancel=MagicMock(),
+            _camera_reader_stop=None, _camera_worker_done=threading.Event())
+        defaults.update(values)
+        super().__init__(**defaults)
+        for name in ('_cancel_camera_retry', '_set_camera_state', '_schedule_camera_reconnect'):
+            setattr(self, name, types.MethodType(getattr(CBVMSDashboard, name), self))
+
+
 class _FakeCapture:
     instances: list["_FakeCapture"] = []
 
@@ -112,7 +127,7 @@ class CameraManagerRegressionTests(unittest.TestCase):
 class DashboardSwitchRegressionTests(unittest.TestCase):
     @staticmethod
     def _switch_harness(*, current_index: int = 0, healthy: bool = True):
-        harness = types.SimpleNamespace()
+        harness = CameraHarness()
         harness._cam_sources = {
             "USB Camera 0": {"id": "usb_0", "type": "usb", "index": 0},
             "USB Camera 1": {"id": "usb_1", "type": "usb", "index": 1},
@@ -173,7 +188,7 @@ class DashboardSwitchRegressionTests(unittest.TestCase):
     def test_discovered_usb_camera_is_added_to_quick_switcher(self) -> None:
         configured = {}
         selected = []
-        harness = types.SimpleNamespace(
+        harness = CameraHarness(
             _discovered_usb_sources=[
                 {
                     "id": "usb_2",
@@ -199,7 +214,7 @@ class DashboardSwitchRegressionTests(unittest.TestCase):
         self.assertEqual(selected[-1], "Document Camera")
 
     def test_stopping_camera_only_signals_worker_and_never_joins_ui_thread(self) -> None:
-        harness = types.SimpleNamespace()
+        harness = CameraHarness()
         stop = threading.Event()
         done = threading.Event()
         harness._camera = object()
@@ -227,7 +242,7 @@ class DashboardSwitchRegressionTests(unittest.TestCase):
                 time.sleep(0.25)
 
         stale = BlockingRelease()
-        harness = types.SimpleNamespace(_camera_generation=2, _camera=object())
+        harness = CameraHarness(_camera_generation=2, _camera=object())
 
         started = time.perf_counter()
         CBVMSDashboard._on_camera_opened(harness, stale, True, 1)
@@ -238,7 +253,7 @@ class DashboardSwitchRegressionTests(unittest.TestCase):
 
     def test_new_open_waits_for_previous_worker_without_blocking_ui(self) -> None:
         previous_done = threading.Event()
-        harness = types.SimpleNamespace()
+        harness = CameraHarness()
         harness._camera_generation = 0
         harness._last_frame_request = 0.0
         harness._face_frame_counter = 99
@@ -276,7 +291,7 @@ class DashboardSwitchRegressionTests(unittest.TestCase):
 
     def test_intentional_halt_invalidates_pending_start_and_retry(self) -> None:
         previous_done = threading.Event()
-        harness = types.SimpleNamespace()
+        harness = CameraHarness()
         harness._camera_generation = 0
         harness._last_frame_request = 0.0
         harness._face_frame_counter = 0
@@ -331,13 +346,14 @@ class DashboardSwitchRegressionTests(unittest.TestCase):
         def _release():
             calls["release"] = threading.get_ident()
 
+        fake.get_latest_sample = lambda: object()
         fake.open = _open
         fake.read = _read
         fake.get_settings = _settings
         fake.release = _release
         capture_cls.return_value = fake
 
-        harness = types.SimpleNamespace(
+        harness = CameraHarness(
             _camera_generation=3,
             _camera_source_url=None,
             _camera_index_setting=0,
@@ -370,6 +386,7 @@ class DashboardSwitchRegressionTests(unittest.TestCase):
     def test_settings_readback_failure_does_not_fail_opening_or_reading(self, capture_cls) -> None:
         read_calls = []
         fake = types.SimpleNamespace(is_open=True, last_error=None)
+        fake.get_latest_sample = lambda: object()
         fake.open = lambda: True
         fake.get_settings = lambda: (_ for _ in ()).throw(RuntimeError("unsupported property"))
 
@@ -381,7 +398,7 @@ class DashboardSwitchRegressionTests(unittest.TestCase):
         fake.read = _read
         fake.release = lambda: None
         capture_cls.return_value = fake
-        harness = types.SimpleNamespace(
+        harness = CameraHarness(
             _camera_generation=3,
             _camera_source_url=None,
             _camera_index_setting=0,
@@ -408,7 +425,7 @@ class DashboardSwitchRegressionTests(unittest.TestCase):
         fake.read = lambda: None
         fake.release = lambda: (_ for _ in ()).throw(RuntimeError("release failed"))
         capture_cls.return_value = fake
-        harness = types.SimpleNamespace(
+        harness = CameraHarness(
             _camera_generation=4,
             _camera_source_url=None,
             _camera_index_setting=0,
@@ -435,7 +452,7 @@ class DashboardSwitchRegressionTests(unittest.TestCase):
         fake.read = lambda: None
         fake.release = lambda: None
         capture_cls.return_value = fake
-        harness = types.SimpleNamespace(
+        harness = CameraHarness(
             _camera_generation=7,
             _camera_source_url=None,
             _camera_index_setting=0,
@@ -470,7 +487,7 @@ class DashboardSwitchRegressionTests(unittest.TestCase):
             def get_latest_frame(self):
                 return sentinel
 
-        harness = types.SimpleNamespace(
+        harness = CameraHarness(
             _last_frame_request=0.0,
             _camera=Capture(),
             _acquire_camera=lambda: None,
@@ -488,7 +505,7 @@ class DashboardSwitchRegressionTests(unittest.TestCase):
                 return None
 
         placeholders = []
-        harness = types.SimpleNamespace(
+        harness = CameraHarness(
             _closed=threading.Event(),
             _drain_camera_events=lambda: None,
             _notification_out=queue.Queue(),

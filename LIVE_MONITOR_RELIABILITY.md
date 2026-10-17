@@ -86,3 +86,157 @@ On a test database with consenting test participants:
 5. Regression-check registration capture, retake, student switching, and submission; the earlier frozen capture behavior must remain unchanged.
 
 Review any questionable historical records manually against their saved evidence. Dismiss or resolve disciplinary records through the existing review workflow. Verify a student's identity before recapturing their enrollment face; do not automatically reassign old identities. Legacy unknown-person violation rows remain untouched; only new events use the separate security table. A dedicated historical security-event browsing screen is outside this change.
+
+## Camera-switch continuation and current network — 2026-10-18
+
+Work resumed on clean `main` at `d1fd606fd381cf85b2240c268120b6b0614f4ae0`,
+matching GitHub main at inspection. The older camera implementation was found in
+`stash@{0}` on Ecc-Coc, not merged into main. Only its reviewed decoder process,
+frame metadata handling, and focused process tests were adapted. The stash and
+unrelated work remain untouched. No commit or push was made. The local ECC/Crack
+configuration was absent apart from a historical backup receipt; it was not
+reinstalled. An independent Astra review checked concurrency and hardware evidence.
+
+### Observed defects and scope of the conclusion
+
+The saved front-gate entry has a `secret_ref` from the earlier Keychain workflow.
+Main ignored that reference and opened the credential-free URL. Actual initial
+attempts failed in approximately 0.21 seconds and retried repeatedly. Resolving
+that existing reference in memory, without changing credentials or stream profile,
+restored actual 1920×1080 Dahua video at approximately 20 FPS. This is a confirmed
+configuration-compatibility defect, not proof of a native Tk deadlock.
+
+The original switch path was `_on_switch_camera` → `after(1)` →
+`_commit_camera_switch` → `show_toast`/layout → `_on_camera_source_connected` →
+dropdown reconstruction → `_deferred_start_camera`. The measured commit callback
+reached 298.49 ms. The resolved baseline switched successfully but had switching
+heartbeat gaps up to 350.76 ms. Its whole-run maximum, 407.00 ms, occurred during
+startup. No permanently blocked Tk stack was observed in those automated runs.
+
+A real local RTSP endpoint deliberately accepting TCP without responding showed
+another defect: native open remained blocked for 6.06 seconds after stop was
+requested. A stop flag cannot interrupt that native call. The decoder process now
+allows cancellation without calling native release from another thread. The
+real-decoder regression measured approximately 20 ms cancellation and verified
+process reaping; a separate EOF test verifies cleanup if the GUI exits abruptly.
+
+### Implementation
+
+- `core/camera_secrets.py` and `api/camera_store.py` resolve existing Keychain
+  references on the camera worker with cancellation and an eight-second deadline.
+  Resolved credentials never enter verified-source preference files or API metadata.
+- `core/network_capture.py` / `core/network_camera_worker.py` isolate IP decoding,
+  keep bounded latest-only frames, preserve acquisition timestamps, classify native
+  errors without forwarding credentials, and keep FFmpeg environment changes inside
+  the child. Parent EOF ends an orphaned decoder. Normal cleanup terminates/reaps it.
+- `core/camera.py` retains a usable first frame. Native local capture still has one
+  owner for open/read/release; only network capture uses a decoder process.
+- `ui/dashboard.py` separates requested and active sources. Activation/persistence
+  follows a valid current-generation frame; inference provenance uses the active
+  source instead of the dropdown text. Existing analysis cancellation remains in use.
+  Switching no longer creates a toast or rebuilds menu entries. Tk only signals
+  stop; it does not join a camera owner or wait for its lock.
+- USB locking remains exclusive. IP workers/probes do not take the USB lock.
+  Device-lease and previous-owner waits end after three seconds. A stalled local
+  native owner is contained with a visible error; it is never released unsafely from
+  Tk. First-frame deadlines are ten seconds for USB and eighteen for IP (including
+  credential resolution). Superseded events/timers cannot activate an old source.
+- A failed manual attempt does not retry automatically. An established source gets
+  at most three reconnect attempts with 1/2/4-second backoff; a new choice, navigation
+  or shutdown cancels pending timers. Errors expose Retry, Return to MacBook Camera,
+  and Camera Settings. The feed does not overwrite connection errors with a generic
+  endless reconnect message.
+- Settings retains unreachable saved cameras when credential lookup fails, and
+  scanning can be cancelled. No network address, firmware, camera profile, recognition
+  threshold, model, enrollment record or production database was changed.
+
+### Reproduction and outstanding acceptance
+
+Close other camera readers, then run:
+
+```sh
+.venv/bin/python scripts/verify_camera_switch.py
+# Physical native-popup interaction, with a disposable database:
+.venv/bin/python scripts/verify_camera_switch.py --manual
+```
+
+The script uses installed models and empty temporary student data, preserves saved
+preferences, retains timing-only JSONL and watchdog stacks, and saves no frames.
+CPU measurements are parent-process CPU, can exceed 100% across cores, and exclude
+child decoder CPU. Automatic checks invoke the actual menu callback; they do not
+simulate a physical click in the macOS native popup. The manual mode closes after
+two minutes; a heartbeat stall over eight seconds records stacks and exits.
+
+Automated actual-camera switching has succeeded repeatedly, with normal tracking
+and analysis resuming. **Physical native-popup click acceptance is still pending.**
+The originally reported permanent dropdown freeze was not reproduced, so this work
+must not be described as proof that every native macOS menu freeze is fixed.
+A human should select front gate, switch back, select it again during analysis,
+and navigate while it is connecting in manual diagnostic mode. Report any freeze
+with that run's timing/stack files. No participant recognition-accuracy claim is
+made from empty-gallery hardware runs.
+
+### Verified network after the Wi-Fi change
+
+Read-only checks on October 18 confirmed:
+
+| Connection/device | IPv4 | Role |
+| --- | --- | --- |
+| Mac Wi-Fi (`en0`) | `192.168.100.74/24` | Internet via `192.168.100.1` |
+| Mac USB Ethernet (`en5`) | `192.168.1.10/24` | Camera LAN |
+| Saved front gate | `192.168.1.108` | HTTP 80 and RTSP 554 responding through `en5` |
+
+`192.168.1.10` is the Mac's Ethernet address, not the verified camera address.
+A fresh saved-stream probe returned 1920×1080 frames, first frame in 2.025 seconds,
+19.98 FPS over the following three seconds, and successful release. Changing the
+Wi-Fi connection did not require a camera IP change. Keep the current direct-camera
+Ethernet settings and the saved front-gate entry. Moving the camera cable to the
+router would be a different topology and requires verifying the router's assigned
+camera address before changing CBVMS; do not guess a new address.
+
+### Final verification results
+
+The final 68-second hardware scenario used the current saved configuration, installed
+models and disposable data. It produced three front-gate activations and four USB
+sessions, including rapid supersession and navigation during connection. The rapid
+request was cancelled before the IP owner started; cancellation *inside* native open
+is established separately by the loopback decoder test, not by that hardware step.
+
+| Measurement | Observed |
+| --- | --- |
+| Gate selection to usable frame | 2.401 / 2.513 / 2.471 s |
+| Return to USB | 1.105 / 1.112 s; rapid return 0.943 s |
+| Maximum heartbeat gap during transition/navigation windows | 122.77 ms |
+| Whole-run heartbeat maximum (startup) | 525.40 ms |
+| Dropdown callback / switch commit maximum | 0.154 / 1.102 ms |
+| Native/capture release maximum | 127.49 ms |
+| Window close callback | 38.16 ms; owner completion confirmed |
+| MacBook source rate | 29.29–29.98 FPS (startup included) |
+| Front-gate source rate | 19.96–20.05 FPS |
+| MacBook settled preview / tracking / analysis session medians | 19.37–20.60 FPS / 3.94–5.04 per s / 1.42–1.69 per s |
+| Gate settled preview / tracking / analysis session medians | 19.55–20.01 FPS / 7.09–7.22 per s / 1.74–1.78 per s |
+| Settled parent CPU session medians | USB 342–652%; gate 192–195%; excludes decoder child |
+| Callback errors / watchdog hangs | 0 / 0 |
+
+These are scene-dependent throughput measurements, not face/uniform accuracy scores.
+MacBook source capture stayed approximately 30 FPS; baseline preview/model rates
+vary with scene content and startup, so no universal preview-speed claim is made.
+
+Verification exercised 202 distinct focused backend/camera/CV/enrollment tests. An
+initial run found one timestamp regression against a native-capture fake; native USB
+reads now use local acquisition timestamps explicitly. The affected 81-test rerun
+passed; the other 121 focused tests passed in the prior run. Twelve distinct native
+Tk/enrollment/loopback tests passed across the two native runs (the MJPEG test was
+run in both). Astra independently reran 36 activation/process/switching tests and
+approved the scoped concurrency changes after its two findings were corrected.
+Python compilation and `git diff --check` passed. No credentials appeared in diagnostic
+output; sentinel-secret tests cover decoder errors, API metadata and preferences.
+
+Timing evidence is retained locally at `/private/tmp/cbvms-switch-audit/`:
+`resolved-baseline.jsonl`, `updated.jsonl`, and `final/timings.jsonl`. Re-run the checked-in
+script to regenerate evidence if temporary files are cleared. Hardware probing was
+sequential, with each camera reader released before the next test.
+
+The working tree has 11 modified tracked files and 8 new camera/diagnostic/test files;
+changes are uncommitted. No unrelated work was discarded. The unresolved acceptance
+item is the physical native-popup interaction described above, not network access.

@@ -36,6 +36,11 @@ def result_for(frame=None, generation=2, camera_generation=3, state="Uniform com
 def dashboard():
     panel = types.SimpleNamespace(
         _notifier=MagicMock(), _closed=threading.Event(), _monitor_cancel=threading.Event(), _monitor_generation=2,
+        _suspensions_panel=None, _violation_history_panel=None,
+        _camera_retry_job=None, _camera_start_job=None, _camera_switch_job=None,
+        _camera_open_deadline=None, _camera_active_source=dict(id='usb_0',label='MacBook Camera'),
+        _camera_requested_source=dict(id='usb_0',type='usb',index=0,label='MacBook Camera'),
+        _camera_state='STREAMING', _camera_message='Camera: Active', _camera_established=False,
         _camera_generation=3, _monitor_result=None, _monitor_projections={},
         _monitor_last_offered=None, _monitor_last_rendered=None, _monitor_card_key=None,
         _monitor_render_key=None,
@@ -65,7 +70,7 @@ def dashboard():
     panel.camera_feed.render.return_value = True
     panel.camera_feed.winfo_width.return_value = 640
     panel.camera_feed.winfo_height.return_value = 480
-    for name in ("_invalidate_monitor", "_monitor_rows", "_project_rows", "_update_feed", "_clear_alerts", "_halt_camera"):
+    for name in ("_invalidate_monitor", "_monitor_rows", "_project_rows", "_update_feed", "_clear_alerts", "_halt_camera", "_cancel_camera_retry", "_set_camera_state", "_schedule_camera_reconnect"):
         setattr(panel, name, getattr(CBVMSDashboard, name).__get__(panel))
     panel._measured_rate = CBVMSDashboard._measured_rate
     return panel
@@ -225,7 +230,7 @@ class LiveDashboardTests(unittest.TestCase):
         self.assertEqual(len(panel._preview_times), 1)
         self.assertIsNone(panel._monitor_result)
 
-    def test_failed_open_and_stopped_event_schedule_only_one_retry(self):
+    def test_failed_initial_open_and_stopped_event_do_not_retry(self):
         panel = dashboard()
         panel._camera_events = queue.Queue()
         panel._camera_spinner = MagicMock()
@@ -234,8 +239,8 @@ class LiveDashboardTests(unittest.TestCase):
         panel._camera_events.put(('opened', 3, panel._camera, False))
         panel._camera_events.put(('stopped', 3, panel._camera, False))
         CBVMSDashboard._drain_camera_events(panel)
-        panel.after.assert_called_once()
-        self.assertEqual(panel.after.call_args.args[0], 2000)
+        panel.after.assert_not_called()
+        self.assertEqual(panel._camera_state, 'ERROR')
 
     def test_reconnect_invalidates_status_cache_before_new_active_status(self):
         panel = dashboard()

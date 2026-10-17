@@ -11,8 +11,7 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
-# USB/AVFoundation and RTSP probes must not open a device while the live dashboard
-# owns it.  Long operations acquire this only on worker threads, never on Tk.
+# Local USB/AVFoundation exclusivity only. Remote streams never take this lock.
 CAMERA_DEVICE_LOCK = threading.Lock()
 
 
@@ -38,9 +37,13 @@ class CameraCapture:
         width: int = 1280,
         height: int = 720,
         fps_cap: int | None = None,
+        cancel_event: threading.Event | None = None,
+        transport: str = 'tcp',
     ) -> None:
         self._preferred_index = camera_index
         self._source_url = source_url.strip() if source_url else None
+        self.cancel_event = cancel_event or threading.Event()
+        self.transport = transport
         self._preferred_width = int(width)
         self._preferred_height = int(height)
         self._preferred_fps_cap = int(fps_cap) if fps_cap is not None else None
@@ -84,8 +87,12 @@ class CameraCapture:
 
         warmed = False
         for _ in range(40):
+            if self.cancel_event.is_set():
+                cap.release()
+                return None
             ok, frame = cap.read()
             if ok and frame is not None and frame.size > 0:
+                self._remember(frame)
                 warmed = True
                 break
             time.sleep(0.03)
@@ -99,30 +106,26 @@ class CameraCapture:
     def _try_open_url(self, url: str) -> cv2.VideoCapture | None:
         # Open via FFMPEG with TCP transport + timeouts so an unreachable network
         # stream fails in seconds instead of blocking the UI for 30s+.
-        from core.ip_camera import open_stream
-
-        cap = open_stream(url)
-        if cap is None:
+        from core.network_capture import NetworkStream
+        cap = NetworkStream(url, cancel_event=self.cancel_event, transport=self.transport)
+        if not cap.open():
+            self.last_error = cap.last_error
             return None
-
-        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-        warmed = False
-        for _ in range(40):
-            ok, frame = cap.read()
-            if ok and frame is not None and frame.size > 0:
-                warmed = True
-                break
-            time.sleep(0.03)
-
-        if not warmed:
+        ok, frame = cap.read()
+        if not ok:
+            self.last_error = cap.last_error or 'Stream opened but no video frames arrived.'
             cap.release()
             return None
+        self._remember(frame, cap.captured_at, cap.captured_wall_time)
         return cap
 
     def open(self) -> bool:
         self.release()
         self._source_token = uuid.uuid4().hex
         self._frame_sequence = 0
+        if self.cancel_event.is_set():
+            self.last_error = 'Connection cancelled.'
+            return False
         if self._source_url:
             cap = self._try_open_url(self._source_url)
             if cap is not None:
@@ -131,7 +134,7 @@ class CameraCapture:
                 self.last_error = None
                 return True
             self.is_open = False
-            self.last_error = f"Could not open stream: {self._source_url}"
+            self.last_error = self.last_error or 'Camera stream unavailable.'
             return False
 
         # A dropdown selection is an explicit device request: never silently show a
@@ -159,16 +162,26 @@ class CameraCapture:
             return None
         ok, frame = self._cap.read()
         if not ok or frame is None or frame.size == 0:
+            if self._source_url and not self._cap.isOpened():
+                self.is_open = False
+                self.last_error = self._cap.last_error or 'The camera stopped delivering frames.'
             return None
+        self._remember(frame, self._cap.captured_at if self._source_url else None,
+                       self._cap.captured_wall_time if self._source_url else None)
+        return frame
+
+    def _remember(self, frame, captured_at=None, wall_time=None):
         with self._lock:
             self._latest_frame = frame
             self._frame_sequence += 1
-            self._frame_time = time.monotonic()
-            self._frame_wall_time = time.time()
+            self._frame_time = captured_at or time.monotonic()
+            self._frame_wall_time = wall_time or time.time()
             if self._frame_sequence == 1 or self._frame_sequence % 30 == 0:
                 from core.diagnostics import event
                 event("frames_captured", source=str(self._source_token), count=self._frame_sequence)
-        return frame
+
+    def cancel(self):
+        self.cancel_event.set()
 
     def get_latest_sample(self) -> CameraSample | None:
         """Atomic pixels + freshness metadata for enrollment consumers."""
@@ -186,6 +199,8 @@ class CameraCapture:
         """
         if self._cap is None:
             return {}
+        if self._source_url:
+            return self._cap.get_settings()
         return {
             "backend": self._cap.getBackendName(),
             "width": self._cap.get(cv2.CAP_PROP_FRAME_WIDTH),

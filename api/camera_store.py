@@ -77,4 +77,24 @@ def get_camera_preference() -> dict[str, Any] | None:
 
 
 def save_camera_preference(preference: dict[str, Any]) -> None:
-    _write_json(_PREFERENCE_PATH, preference)
+    # Keep saved stream configuration separate from the verified active source.
+    # In particular, a resolved Keychain URL must never reach this file.
+    safe = {k: v for k, v in preference.items() if k in ('id', 'type', 'index', 'label')}
+    _write_json(_PREFERENCE_PATH, safe)
+
+
+def resolve_camera_source(preference: dict[str, Any], *, cancel_event=None) -> dict[str, Any]:
+    """Worker-only lookup of a saved source, including legacy Keychain references."""
+    source = dict(preference)
+    if source.get('type') not in ('rj45', 'ip'):
+        return source
+    camera_id = str(source.get('id', '')).removeprefix('ip_')
+    saved = next((c for c in get_saved_ip_cameras() if str(c['id']) == camera_id), None)
+    if saved is not None:
+        source.update(saved, id=preference['id'], type='rj45')
+    if source.get('secret_ref'):
+        from core.camera_secrets import get_secret
+        source['url'] = get_secret(source['secret_ref'], cancel_event=cancel_event)
+    if not source.get('url'):
+        raise ValueError('Saved camera unavailable. Open Camera Settings.')
+    return source

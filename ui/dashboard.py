@@ -144,6 +144,14 @@ class CBVMSDashboard(WorkspaceWindow):
         self._camera_resolution_setting = (1280, 720)
         self._fps_cap_setting = 30
         self._camera_retry_count = 0
+        self._camera_retry_job = None
+        self._camera_start_job = None
+        self._camera_open_deadline = None
+        self._camera_state = 'IDLE'
+        self._camera_message = 'Camera: Starting…'
+        self._camera_established = False
+        self._camera_requested_source = dict(id='usb_0', type='usb', index=0, label='MacBook Camera')
+        self._camera_active_source = None
         # Power saver: the camera is released when no consumer (Live view, enroll
         # wizard, or training capture modal) has asked for a frame recently.
         self._last_frame_request = 0.0  # time.monotonic() of the last camera need
@@ -494,6 +502,15 @@ class CBVMSDashboard(WorkspaceWindow):
         self._status_fps.grid(row=1, column=0, columnspan=2, sticky='w', padx=PADDING, pady=(0,8))
         status_bar.bind('<Configure>', lambda e: self._status_camera.configure(
             wraplength=max(150,e.width-300)))
+        self._camera_actions = ctk.CTkFrame(self._live_frame, fg_color='transparent')
+        self._camera_actions.grid(row=5, column=0, sticky='w', padx=PADDING, pady=4)
+        for text, command in (
+            ('Retry camera', self._retry_selected_camera),
+            ('Return to MacBook Camera', lambda: self._on_switch_camera('MacBook Camera')),
+            ('Camera Settings', lambda: self._on_nav_select('settings')),
+        ):
+            ctk.CTkButton(self._camera_actions, text=text, command=command, height=28).pack(side='left', padx=(0, 8))
+        self._camera_actions.grid_remove()
         self._status_models = ctk.CTkLabel(
             self._live_frame, text="Loading face detector", anchor="w", justify="left",
             wraplength=1050, font=body_small_font(), text_color=COLOR_TEXT_MUTED)
@@ -841,6 +858,13 @@ class CBVMSDashboard(WorkspaceWindow):
             pref = None
         if not pref:
             return
+        if pref.get('type') in ('ip', 'rj45'):
+            from api.camera_store import get_saved_ip_cameras
+            saved = next((c for c in get_saved_ip_cameras()
+                          if str(c['id']) == str(pref.get('id', '')).removeprefix('ip_')), None)
+            if saved:
+                pref = dict(saved, id=pref['id'], type='rj45')
+        self._camera_requested_source = dict(pref)
         cam_type = str(pref.get("type", "")).lower()
         if cam_type == "usb":
             self._camera_index_setting = int(pref.get("index", 0))
@@ -850,6 +874,7 @@ class CBVMSDashboard(WorkspaceWindow):
             self._camera_source_url = url or None
 
     def _on_camera_source_connected(self, pref: dict) -> None:
+        self._camera_requested_source = dict(pref)
         cam_type = str(pref.get("type", "")).lower()
         if cam_type == "usb":
             self._camera_index_setting = int(pref.get("index", 0))
@@ -857,7 +882,9 @@ class CBVMSDashboard(WorkspaceWindow):
         elif cam_type in ("rj45", "ip"):
             self._camera_source_url = str(pref.get("url", "")).strip() or None
         self._camera_retry_count = 0
-        self._refresh_camera_switcher()
+        self._camera_established = False
+        self._cam_source_var.set(str(pref.get('label', 'Camera')))
+        self._cancel_camera_retry()
         if self._active_nav == "live":
             self._deferred_start_camera()
         else:
@@ -958,13 +985,15 @@ class CBVMSDashboard(WorkspaceWindow):
         )
         same_ip = pref["type"] == "rj45" and pref.get("url") == self._camera_source_url
         healthy = self._camera is not None and self._camera.is_open
-        if (same_usb or same_ip) and healthy:
+        if (same_usb or same_ip) and healthy and self._camera_switch_job is None:
             return
         if self._camera_switch_job is not None:
             try:
                 self.after_cancel(self._camera_switch_job)
             except Exception:
                 pass
+        if hasattr(self, '_monitor_cancel'):
+            self._monitor_cancel.set()
         # Reconfiguring CTkOptionMenu or laying out a toast while its native popup is
         # executing can wedge Tk on macOS.  Run all real work after that callback exits.
         self._camera_switch_job = self.after(
@@ -973,12 +1002,6 @@ class CBVMSDashboard(WorkspaceWindow):
 
     def _commit_camera_switch(self, choice: str, pref: dict) -> None:
         self._camera_switch_job = None
-        try:
-            from api.camera_store import save_camera_preference
-            save_camera_preference(pref)
-        except Exception:
-            pass
-        show_toast(self, f"Switching to {choice}…", type="info", duration=1500)
         self._on_camera_source_connected(pref)
 
     def _apply_camera_settings(
@@ -986,6 +1009,8 @@ class CBVMSDashboard(WorkspaceWindow):
     ) -> None:
         if self._camera_source_url is None:
             self._camera_index_setting = int(camera_index)
+            self._camera_requested_source = dict(id=f'usb_{camera_index}', type='usb',
+                index=int(camera_index), label='MacBook Camera' if int(camera_index) == 0 else f'USB Camera {camera_index}')
         self._camera_resolution_setting = (int(resolution[0]), int(resolution[1]))
         self._fps_cap_setting = max(10, min(60, int(fps_cap)))
         self._feed_interval_ms = max(16, 1000 // self._fps_cap_setting)
@@ -1011,161 +1036,222 @@ class CBVMSDashboard(WorkspaceWindow):
 
     def _acquire_camera(self) -> None:
         """Start the camera if it's currently off (no-op if open/opening)."""
+        if self._camera_state in ('STOPPING', 'CONNECTING', 'WAITING_FOR_FIRST_FRAME', 'ERROR', 'RECONNECTING'):
+            return
         if self._camera is None:
             self._camera_retry_count = 0
             self._deferred_start_camera()
 
+    def _cancel_camera_retry(self) -> None:
+        if self._camera_retry_job is not None:
+            self.after_cancel(self._camera_retry_job)
+            self._camera_retry_job = None
+
+    def _set_camera_state(self, state: str, message: str) -> None:
+        self._camera_state = state
+        self._camera_message = message
+        color = COLOR_SAFE if state == 'STREAMING' else COLOR_DANGER if state == 'ERROR' else COLOR_TEXT_MUTED
+        self._status_camera.configure(text=message, text_color=color)
+        busy = state in ('STOPPING', 'CONNECTING', 'WAITING_FOR_FIRST_FRAME')
+        if busy:
+            self._camera_spinner.pack(side='right', padx=(0, 10), pady=14)
+            self._camera_spinner.start()
+        else:
+            self._camera_spinner.stop()
+            self._camera_spinner.pack_forget()
+        if hasattr(self, '_camera_actions'):
+            if state in ('ERROR', 'RECONNECTING'):
+                self._camera_actions.grid()
+            else:
+                self._camera_actions.grid_remove()
+        if os.environ.get('CBVMS_CAMERA_DIAGNOSTICS') == '1':
+            event('camera_state', state=state, generation=self._camera_generation,
+                  monotonic=time.monotonic())
+
     def _deferred_start_camera(self) -> None:
-        # Invalidate earlier opens/retries and stop the old owner without waiting on Tk.
+        self._cancel_camera_retry()
+        if self._camera_start_job is not None:
+            self.after_cancel(self._camera_start_job)
+            self._camera_start_job = None
         self._camera_generation += 1
         generation = self._camera_generation
-        self._last_frame_request = time.monotonic()  # grace window for explicit starts
-        if hasattr(self, "_monitor_cancel"):
+        self._last_frame_request = time.monotonic()
+        if hasattr(self, '_monitor_cancel'):
             self._invalidate_monitor()
         previous_done = self._stop_camera()
-        try:
-            self._camera_spinner.pack(side="right", padx=(0, 10), pady=14)
-            self._camera_spinner.start()
-        except Exception:
-            pass
-        self._status_camera.configure(
-            text="Camera: Switching…" if not previous_done.is_set() else "Camera: Starting…",
-            text_color=COLOR_TEXT_MUTED,
-        )
+        self._camera_active_source = None
+        self._camera_open_deadline = None
+        label = self._camera_requested_source.get('label', 'camera')
+        self._set_camera_state('STOPPING' if not previous_done.is_set() else 'CONNECTING',
+                               f'Connecting to {label}…')
+        waiting_since = time.monotonic()
 
-        def _wait_for_previous() -> None:
+        def wait_for_previous():
+            self._camera_start_job = None
             if generation != self._camera_generation:
                 return
             if not previous_done.is_set():
-                self.after(40, _wait_for_previous)
+                if time.monotonic() - waiting_since >= 3:
+                    self._set_camera_state('ERROR', f'{label} unavailable · Previous camera is still stopping. Retry after it releases.')
+                    return
+                self._camera_start_job = self.after(40, wait_for_previous)
                 return
             self._start_camera_worker(generation)
 
-        self.after(0, _wait_for_previous)
+        self._camera_start_job = self.after(0, wait_for_previous)
 
     def _start_camera_worker(self, generation: int) -> None:
-        """Start one thread that exclusively owns open/read/release for this source."""
+        """USB owns its native capture; IP owns a cancellable decoder process."""
         if generation != self._camera_generation:
             return
-
-        requested_width, requested_height = self._camera_resolution_setting
-        requested_fps = self._fps_cap_setting
-        if self._camera_source_url:
-            cap = CameraCapture(
-                source_url=self._camera_source_url,
-                width=self._camera_resolution_setting[0],
-                height=self._camera_resolution_setting[1],
-                fps_cap=self._fps_cap_setting,
-            )
-        else:
-            cap = CameraCapture(
-                camera_index=self._camera_index_setting,
-                width=self._camera_resolution_setting[0],
-                height=self._camera_resolution_setting[1],
-                fps_cap=self._fps_cap_setting,
-            )
+        source = dict(self._camera_requested_source)
+        is_ip = source.get('type') in ('rj45', 'ip')
+        stop, done = threading.Event(), threading.Event()
+        width, height = self._camera_resolution_setting
+        cap = CameraCapture(camera_index=int(source.get('index', 0)), width=width,
+                            height=height, fps_cap=self._fps_cap_setting, cancel_event=stop)
         self._camera = cap
-        stop = threading.Event()
-        done = threading.Event()
         self._camera_reader_stop = stop
         self._camera_worker_done = done
+        self._camera_open_deadline = time.monotonic() + (18 if is_ip else 10)
+        self._set_camera_state('WAITING_FOR_FIRST_FRAME', f"Connecting to {source.get('label', 'camera')}…")
 
-        def _worker() -> None:
-            ok = False
-            with CAMERA_DEVICE_LOCK:
-                try:
-                    # This worker may have waited behind a scan or an older stream.
-                    # If it was superseded meanwhile, do not open a stale source at all.
-                    if stop.is_set():
+        def worker():
+            acquired = False
+            activated = False
+            try:
+                if is_ip:
+                    from api.camera_store import resolve_camera_source
+                    resolved = resolve_camera_source(source, cancel_event=stop)
+                    cap._source_url = cap.source_url = resolved['url']
+                    cap.transport = resolved.get('transport', 'tcp')
+                else:
+                    deadline = time.monotonic() + 3
+                    while not stop.is_set() and time.monotonic() < deadline:
+                        acquired = CAMERA_DEVICE_LOCK.acquire(timeout=.05)
+                        if acquired:
+                            break
+                    if not acquired:
+                        cap.last_error = 'Camera device is busy. Finish camera scanning and retry.'
+                        if not stop.is_set():
+                            self._camera_events.put(('opened', generation, cap, False))
                         return
-                    ok = cap.open()
-                    if ok:
-                        # Query the negotiated settings on the device owner thread;
-                        # unsupported backend readback must not interrupt the stream.
-                        try:
-                            settings = cap.get_settings()
-                        except Exception:
-                            settings = {"reported_settings": "unavailable"}
-                        if os.environ.get("CBVMS_CAMERA_DIAGNOSTICS") == "1":
-                            print(f"[Dashboard camera] requested {requested_width}x{requested_height} "
-                                  f"@ {requested_fps} FPS; reported {settings}")
-                    self._camera_events.put(("opened", generation, cap, ok))
-                    last_received = time.monotonic()
-                    while ok and not stop.is_set():
-                        frame = cap.read()
-                        if frame is None:
-                            if not cap.is_open or time.monotonic()-last_received > 3:
-                                event("camera_stalled", generation=generation)
-                                break
-                            time.sleep(0.005)
-                        else:
-                            last_received = time.monotonic()
-                except Exception as exc:
-                    cap.last_error = str(exc)
-                    self._camera_events.put(("opened", generation, cap, False))
-                finally:
-                    # The same worker that opened and read the capture also releases it.
-                    # This avoids cross-thread AVFoundation operations on macOS.
+                if stop.is_set():
+                    return
+                if os.environ.get('CBVMS_CAMERA_DIAGNOSTICS') == '1':
+                    event('camera_open_started', generation=generation, monotonic=time.monotonic())
+                ok = cap.open()
+                # Native open alone is not activation. Require a valid cached frame.
+                ok = ok and cap.get_latest_sample() is not None
+                if ok:
                     try:
-                        cap.release()
-                    except Exception as exc:
-                        cap.last_error = f"Camera release failed: {exc}"
-                        self._camera_events.put(("release_error", generation, cap, False))
-                    finally:
-                        # A backend teardown error must never make all future switches
-                        # wait forever for this owner to finish.
-                        done.set()
-                        self._camera_events.put(("stopped", generation, cap, ok))
+                        settings = cap.get_settings()
+                    except Exception:
+                        settings = {'reported_settings': 'unavailable'}
+                    if os.environ.get('CBVMS_CAMERA_DIAGNOSTICS') == '1':
+                        print(f'[Dashboard camera] requested {width}x{height} '
+                              f'@ {self._fps_cap_setting} FPS; reported {settings}')
+                if not stop.is_set():
+                    self._camera_events.put(('opened', generation, cap, ok))
+                activated = ok
+                last_received = time.monotonic()
+                while ok and not stop.is_set():
+                    frame = cap.read()
+                    if frame is None:
+                        if not cap.is_open or time.monotonic() - last_received > 3:
+                            break
+                        stop.wait(.005)
+                    else:
+                        last_received = time.monotonic()
+            except Exception:
+                # Exceptions from native/credential code may contain complete URLs.
+                cap.last_error = ('Camera connection failed. Check saved credentials and stream settings.'
+                                  if is_ip else 'Local camera failed. Check permissions and retry.')
+                if not stop.is_set():
+                    self._camera_events.put(('opened', generation, cap, False))
+            finally:
+                try:
+                    cap.release()
+                except Exception:
+                    cap.last_error = 'Camera release failed.'
+                    self._camera_events.put(('release_error', generation, cap, False))
+                finally:
+                    if acquired:
+                        CAMERA_DEVICE_LOCK.release()
+                    done.set()
+                    self._camera_events.put(('stopped', generation, cap, activated))
+                    if os.environ.get('CBVMS_CAMERA_DIAGNOSTICS') == '1':
+                        event('camera_owner_stopped', generation=generation, monotonic=time.monotonic())
 
-        worker = threading.Thread(target=_worker, daemon=True, name=f"camera-{generation}")
-        self._camera_reader = worker
-        worker.start()
+        self._camera_reader = threading.Thread(target=worker, daemon=True, name=f'camera-{generation}')
+        self._camera_reader.start()
 
     def _drain_camera_events(self) -> None:
+        deadline = self._camera_open_deadline
+        if deadline is not None and time.monotonic() >= deadline:
+            self._camera_open_deadline = None
+            self._camera_generation += 1
+            self._stop_camera()
+            self._set_camera_state('ERROR', f"{self._camera_requested_source.get('label', 'Camera')} unavailable · Timed out waiting for a frame. Retry or select another source.")
         while True:
             try:
-                event, generation, cap, ok = self._camera_events.get_nowait()
+                kind, generation, cap, ok = self._camera_events.get_nowait()
             except queue.Empty:
                 return
-            if event == "opened":
+            if generation != self._camera_generation or self._camera is not cap:
+                continue
+            if kind == 'opened':
                 self._on_camera_opened(cap, ok, generation)
-            elif event == "stopped" and ok and generation == self._camera_generation and self._camera is cap:
+            elif kind == 'release_error':
+                self._set_camera_state('ERROR', 'Camera release failed. Retry after it releases.')
+            elif kind == 'stopped' and self._camera_state == 'STREAMING':
                 self._invalidate_monitor()
-                self._status_camera.configure(text="Camera: Reconnecting…", text_color=COLOR_WARNING)
-                self.after(1500, lambda g=generation: self._retry_camera(g))
+                self._camera_active_source = None
+                self._schedule_camera_reconnect(generation)
+
+    def _schedule_camera_reconnect(self, generation: int) -> None:
+        label = self._camera_requested_source.get('label', 'Camera')
+        if self._camera_established and self._camera_retry_count < 3 and self._camera_needed():
+            delay = (1, 2, 4)[self._camera_retry_count]
+            self._camera_retry_count += 1
+            self._set_camera_state('RECONNECTING', f'Reconnecting to {label}…')
+            self._cancel_camera_retry()
+            self._camera_retry_job = self.after(delay * 1000, lambda: self._retry_camera(generation))
+        else:
+            self._set_camera_state('ERROR', f'{label} unavailable · Retry or select another source.')
 
     def _on_camera_opened(self, cap: CameraCapture, ok: bool, generation: int) -> None:
-        # Stale workers own and release their own capture.  Never call release() here:
-        # OpenCV teardown may block and this method always runs on Tk's UI thread.
         if generation != self._camera_generation or self._camera is not cap:
             return
-
-        try:
-            self._camera_spinner.stop()
-            self._camera_spinner.pack_forget()
-        except Exception:
-            pass
-
-        if ok:
-            self._camera_retry_count = 0
-            self._status_camera.configure(text="Camera: Active", text_color=COLOR_SAFE)
+        self._camera_open_deadline = None
+        source = dict(self._camera_requested_source)
+        label = source.get('label', 'Camera')
+        if ok and cap.get_latest_sample() is not None:
+            self._camera_active_source = source
+            self._camera_established = True
+            self._set_camera_state('STREAMING', f'Camera: Active · {label}')
+            from api.camera_store import save_camera_preference
+            try:
+                save_camera_preference(source)
+            except OSError:
+                event('camera_preference_save_failed', generation=generation)
+        elif self._camera_established:
+            self._schedule_camera_reconnect(generation)
         else:
-            err = cap.last_error or "Could not open camera"
-            self._status_camera.configure(text=f"Camera: {err}", text_color=COLOR_DANGER)
-            if self._camera_retry_count == 0:
-                show_toast(self, f"Camera error: {err}", type="error", duration=4000)
-            # Only retry while a consumer still needs the camera — don't power-cycle a
-            # camera nobody's watching.
-            if self._camera_retry_count < 8 and self._camera_needed():
-                self._camera_retry_count += 1
-                self.after(2000, lambda g=generation: self._retry_camera(g))
+            self._set_camera_state('ERROR', f'{label} unavailable · {cap.last_error or "No usable frame received. Check camera settings."}')
 
     def _retry_camera(self, generation: int) -> None:
+        self._camera_retry_job = None
         if generation == self._camera_generation and self._camera_needed():
             self._deferred_start_camera()
 
+    def _retry_selected_camera(self) -> None:
+        self._camera_retry_count = 0
+        self._camera_established = False
+        self._deferred_start_camera()
+
     def _stop_camera(self) -> threading.Event:
-        """Signal the camera owner and return immediately with its completion event."""
+        """Signal only. The owner performs all native release/process cleanup."""
         stop = self._camera_reader_stop
         done = self._camera_worker_done
         self._camera = None
@@ -1176,9 +1262,19 @@ class CBVMSDashboard(WorkspaceWindow):
         return done
 
     def _halt_camera(self) -> threading.Event:
-        """Stop intentionally and invalidate every pending start or retry callback."""
+        self._cancel_camera_retry()
+        if self._camera_start_job is not None:
+            self.after_cancel(self._camera_start_job)
+            self._camera_start_job = None
+        if self._camera_switch_job is not None:
+            self.after_cancel(self._camera_switch_job)
+            self._camera_switch_job = None
         self._camera_generation += 1
-        if hasattr(self, "_monitor_cancel"):
+        self._camera_open_deadline = None
+        self._camera_active_source = None
+        self._camera_state = 'CANCELLED'
+        self._camera_message = 'Camera: Disconnected'
+        if hasattr(self, '_monitor_cancel'):
             self._invalidate_monitor()
         return self._stop_camera()
 
@@ -1255,7 +1351,8 @@ class CBVMSDashboard(WorkspaceWindow):
     def _latest_monitor_sample(self):
         """Worker-safe read; never starts devices or touches Tk."""
         camera = self._camera
-        return camera.get_latest_sample() if camera is not None and camera.is_open else None
+        return camera.get_latest_sample() if (camera is not None and camera.is_open
+            and self._camera_state == 'STREAMING') else None
 
     def _invalidate_monitor(self):
         notifier = getattr(self, "_notifier", None)
@@ -1405,10 +1502,11 @@ class CBVMSDashboard(WorkspaceWindow):
                 if sample is None or started-sample.captured_at > 1.0:
                     if self._monitor_last_rendered is not None:
                         self._invalidate_monitor()
-                    message = "Camera: Reconnecting…" if self._camera else "Camera: Disconnected"
+                    message = ('Camera: Reconnecting…' if self._camera_state == 'STREAMING'
+                               else self._camera_message)
                     self._status_camera.configure(text=message, text_color=COLOR_WARNING)
                     self._monitor_status_text = message
-                    self.camera_feed.show_placeholder("Reconnecting camera…" if self._camera else "No camera connected")
+                    self.camera_feed.show_placeholder(message)
                 else:
                     self._last_frame_request = started
                     tracking = _drain(self._tracking_worker.results)
@@ -1427,8 +1525,8 @@ class CBVMSDashboard(WorkspaceWindow):
                             sample.frame, sample.captured_wall_time or time.time()-(started-sample.captured_at), self._monitor_cancel,
                             uniform_enabled=self._checker.check_uniform, earring_enabled=self._checker.check_earring,
                             camera_generation=self._camera_generation,
-                            source_id=str(self._cam_sources.get(self._cam_source_var.get(), {}).get("id") or f"usb:{self._camera_index_setting}"),
-                            source_label=self._cam_source_var.get()))
+                            source_id=str((self._camera_active_source or {}).get('id', '')),
+                            source_label=str((self._camera_active_source or {}).get('label', 'Camera'))))
                         self._tracking_last_offered = sample.frame_id
                         self._tracking_offer_time = started
                     result = _drain(self._live_worker.results)
@@ -1473,7 +1571,7 @@ class CBVMSDashboard(WorkspaceWindow):
                             detail = f"Analysis failed: {worker.last_error}"
                         elif worker.active_task is not None and started-worker.active_since > 3:
                             detail += " · Slow analysis; stale results rejected"
-                    status_text = f"Camera: Active · {detail}"
+                    status_text = f"Camera: Active · {(self._camera_active_source or {}).get('label', 'Camera')} · {detail}"
                     if status_text != getattr(self, '_monitor_status_text', None):
                         self._status_camera.configure(text=status_text, text_color=COLOR_SAFE)
                         self._monitor_status_text = status_text

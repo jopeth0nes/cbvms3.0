@@ -15,7 +15,7 @@ from api.camera_store import (
     delete_ip_camera,
     get_camera_preference,
     get_saved_ip_cameras,
-    save_camera_preference,
+    resolve_camera_source,
 )
 from core.ip_camera import build_candidate_urls, redact
 from ui.components import (
@@ -244,22 +244,28 @@ class CameraConfigurationSection(ctk.CTkFrame):
         if self._scan_cancel.is_set():
           self._scan_results.put((items, error, True))
           return
-        items.extend(scan_usb_cameras())
+        items.extend(scan_usb_cameras(cancel_event=self._scan_cancel))
         for cam in get_saved_ip_cameras():
           if self._scan_cancel.is_set():
             break
-          url = str(cam["url"])
+          source = dict(cam, id=f"ip_{cam['id']}", type='rj45')
+          try:
+            resolved = resolve_camera_source(source, cancel_event=self._scan_cancel)
+            reachable = test_ip_camera(resolved['url'], cancel_event=self._scan_cancel)
+          except (ValueError, RuntimeError):
+            reachable = False
+          url = str(cam['url'])
           items.append(
               {
                   "id": f"ip_{cam['id']}",
                   "type": "rj45",
                   "label": cam.get("label", "IP Camera"),
                   "url": url,
-                  "status": "available" if test_ip_camera(url) else "unreachable",
+                  "status": "available" if reachable else "unreachable",
               }
           )
       except Exception as exc:
-        error = str(exc)
+        error = "Camera scan failed. Check saved camera credentials and settings."
       self._scan_results.put((items, error, self._scan_cancel.is_set()))
 
     threading.Thread(target=_work, daemon=True).start()
@@ -341,10 +347,9 @@ class CameraConfigurationSection(ctk.CTkFrame):
           ).grid(row=0, column=3, padx=(6, 0))
 
   def _connect(self, cam: dict[str, Any]) -> None:
-    """Persist a source and hand it to the dashboard, the sole capture owner."""
+    """Select metadata; the dashboard persists only a verified active stream."""
     try:
       pref = self._preference_for(cam)
-      save_camera_preference(pref)
     except (TypeError, ValueError) as exc:
       show_toast(self, str(exc), type="error")
       return
@@ -385,7 +390,6 @@ class CameraConfigurationSection(ctk.CTkFrame):
         fallback = self._preference_for(
             {"id": "usb_0", "type": "usb", "index": 0, "label": "MacBook Camera"}
         )
-        save_camera_preference(fallback)
         self._active = fallback
         self._on_camera_connected(dict(fallback))
       self._run_scan()
@@ -509,7 +513,6 @@ class CameraConfigurationSection(ctk.CTkFrame):
         pref = self._preference_for(
             {"id": f"ip_{entry['id']}", "type": "rj45", "label": label, "url": url}
         )
-        save_camera_preference(pref)
         self._active = pref
         self._on_camera_connected(dict(pref))
         show_toast(self, f"Switching to {label}  ({redact(url)})", type="info", duration=5000)

@@ -21,39 +21,44 @@ def _backend() -> int | None:
     return None
 
 
-def test_ip_camera(url: str, *, timeout_frames: int = 15) -> bool:
+def test_ip_camera(url: str, *, timeout_frames: int = 15, cancel_event=None) -> bool:
     """Timeout-hardened reachability check for a known stream URL."""
     url = url.strip()
     if not url:
         return False
-    with CAMERA_DEVICE_LOCK:
-        cap = open_stream(url)
-        if cap is None:
-            return False
-        ok = False
-        try:
-            for _ in range(timeout_frames):
-                ret, frame = cap.read()
-                if ret and frame is not None and getattr(frame, "size", 0) > 0:
-                    ok = True
-                    break
-        finally:
-            cap.release()
-        return ok
+    cap = open_stream(url, cancel_event=cancel_event)
+    if cap is None:
+        return False
+    try:
+        ret, frame = cap.read()
+        return bool(ret and frame is not None and frame.size > 0)
+    finally:
+        cap.release()
 
 
 def probe_ip_camera(address: str, username: str = "", password: str = "",
                     *, path: str | None = None, on_progress=None) -> str | None:
     """Auto-detect a working stream URL from IP + credentials (None if not found)."""
-    with CAMERA_DEVICE_LOCK:
-        return probe_camera(address, username, password, path=path, on_progress=on_progress)
+    return probe_camera(address, username, password, path=path, on_progress=on_progress)
 
 
-def scan_usb_cameras() -> list[dict[str, Any]]:
+def scan_usb_cameras(*, cancel_event=None) -> list[dict[str, Any]]:
     cameras: list[dict[str, Any]] = []
     backend = _backend()
-    with CAMERA_DEVICE_LOCK:
+    import time
+    cancelled = cancel_event or threading.Event()
+    deadline = time.monotonic() + 3
+    while not cancelled.is_set():
+        if CAMERA_DEVICE_LOCK.acquire(timeout=.05):
+            break
+        if time.monotonic() >= deadline:
+            return cameras
+    else:
+        return cameras
+    try:
         for index in range(_USB_SCAN_MAX):
+            if cancelled.is_set():
+                break
             cap = (
                 cv2.VideoCapture(index, backend)
                 if backend is not None
@@ -75,6 +80,8 @@ def scan_usb_cameras() -> list[dict[str, Any]]:
                     }
                 )
             cap.release()
+    finally:
+        CAMERA_DEVICE_LOCK.release()
     return cameras
 
 
@@ -99,7 +106,12 @@ class CameraManager:
 
         for cam in get_saved_ip_cameras():
             cam_id = f"ip_{cam['id']}"
-            reachable = test_ip_camera(str(cam["url"]))
+            try:
+                from api.camera_store import resolve_camera_source
+                source = resolve_camera_source(dict(cam, id=cam_id, type='rj45'))
+                reachable = test_ip_camera(source['url'])
+            except (ValueError, RuntimeError):
+                reachable = False
             cameras.append(
                 {
                     "id": cam_id,
@@ -125,11 +137,7 @@ class CameraManager:
     def test_url(self, url: str) -> tuple[bool, str]:
         if test_ip_camera(url):
             return True, "Camera reachable"
-        cap = cv2.VideoCapture(url.strip())
-        if cap.isOpened():
-            cap.release()
-            return False, "Stream opened but no frame"
-        return False, "Cannot connect to camera"
+        return False, "Cannot connect to camera or no usable frames"
 
     def select(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Open and select a source without holding the state lock during I/O.
@@ -158,7 +166,9 @@ class CameraManager:
                 "status": "connected",
             }
         elif cam_type in ("rj45", "ip"):
-            url = str(payload.get("url", "")).strip()
+            from api.camera_store import resolve_camera_source
+            resolved = resolve_camera_source(payload)
+            url = str(resolved.get("url", "")).strip()
             if not url:
                 raise ValueError("URL is required for IP cameras")
             candidate = CameraCapture(source_url=url)
@@ -166,7 +176,7 @@ class CameraManager:
                 "id": cam_id,
                 "type": "rj45",
                 "label": payload.get("label") or "IP Camera",
-                "url": url,
+                "url": str(payload.get('url', '')),
                 "status": "connected",
             }
         else:
@@ -189,7 +199,7 @@ class CameraManager:
                 candidate.release()
                 return {
                     "success": False,
-                    "message": f"Failed to open camera: {exc}",
+                    "message": "Failed to open camera. Check camera settings.",
                     "active": None,
                 }
             if not opened:

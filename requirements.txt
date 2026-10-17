@@ -22,3 +22,6 @@ pillow-heif==0.16.0
 
 # IANA timezone data for explicit Asia/Manila dates on systems without a zone database.
 tzdata>=2024.1
+
+# Resolve camera credentials already stored in macOS Keychain.
+keyring>=25,<26; sys_platform == "darwin"
