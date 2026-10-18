@@ -1,0 +1,18 @@
+Call graph:
+    182 Thread_4516901   DispatchQueue_1: com.apple.main-thread  (serial)
+      182 start  (in dyld) + 6992  [0x182147e00]
+        182 Py_BytesMain  (in Python) + 44  [0x10558e0d8]
+          182 pymain_main  (in Python) + 304  [0x10558e034]
+            182 Py_RunMain  (in Python) + 716  [0x10558db44]
+              182 PyRun_SimpleStringFlags  (in Python) + 64  [0x105569bd8]
+                182 PyRun_StringFlags  (in Python) + 124  [0x105569cac]
+                  182 run_mod  (in Python) + 132  [0x10556a664]
+                    182 run_eval_code_obj  (in Python) + 88  [0x10556c57c]
+                      182 PyEval_EvalCode  (in Python) + 184  [0x10550bad0]
+                        182 _PyEval_EvalFrameDefault  (in Python) + 38760  [0x1055154a0]
+                          182 PyObject_Vectorcall  (in Python) + 88  [0x105422230]
+                            182 cfunction_vectorcall_O  (in Python) + 108  [0x1054729cc]
+                              182 time_sleep  (in Python) + 148  [0x1055eb868]
+                                182 nanosleep  (in libsystem_c.dylib) + 220  [0x1823a1cc0]
+                                  182 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x1824c5308]
+

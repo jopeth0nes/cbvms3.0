@@ -240,3 +240,40 @@ sequential, with each camera reader released before the next test.
 The working tree has 11 modified tracked files and 8 new camera/diagnostic/test files;
 changes are uncommitted. No unrelated work was discarded. The unresolved acceptance
 item is the physical native-popup interaction described above, not network access.
+
+## Native-dropdown investigation resumed — 2026-10-19
+
+The historical working-tree counts above describe the earlier session, not current
+status. This investigation resumed with a clean checkout at `2535189`, matching
+remote HEAD/main. Recovered automated hardware logs have no hang events and empty
+stack files; they do **not** reproduce or resolve the physical dropdown freeze.
+No application behavior fix is justified by that evidence yet.
+
+The diagnostic script now defaults to durable `diagnostics/camera-freeze/<UTC>/`
+output. A separate Python process detects heartbeat stalls even when the GUI holds
+the GIL, signals faulthandler, and requests macOS process samples. Only the native
+call graph is retained (no process header or binary paths); Python dumps omit locals.
+Three captures maximum, at least 15 seconds apart, bound diagnostic capture.
+Manual sessions run for ten minutes while responsive. The supervisor expires after
+15 minutes; it does not kill the application. Native-menu open/button/CTk callback
+entry and return, camera generations, device lease waits, credential resolution,
+open/release, frame/analysis rates and cleanup are traced without source URLs.
+A heartbeat pause while deliberately holding the native menu open is not by itself
+a deadlock: correlate it with selection/return events and recovery after dismissal.
+
+Run from the repository, with other camera readers closed:
+
+```sh
+.venv/bin/python scripts/verify_camera_switch.py --manual
+```
+
+Wait for moving MacBook video and nonzero Analysis, physically open Source, click
+front gate, and leave any freeze untouched for 25 seconds. Then report the printed
+output directory and whether the menu closed, clock stopped, or only video stopped.
+If responsive, select MacBook again. If still frozen after capture, use Force Quit
+on the diagnostic window's Python process. Do not run competing camera readers.
+The disposable database has no enrollment gallery: model inference can run, but
+this cannot verify recognition accuracy against enrolled identities.
+
+See `CAMERA_FREEZE_CHECKPOINT.md` for exact results and the remaining acceptance
+matrix. Current changes improve evidence collection; they do not establish a fix.

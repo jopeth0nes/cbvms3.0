@@ -1,0 +1,2 @@
+Current thread 0x00000001ee685e80 (most recent call first):
+  File "<string>", line 7 in <module>

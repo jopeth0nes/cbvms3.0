@@ -1,0 +1,5 @@
+2026-10-19 resume
+.venv/bin/python -m unittest tests.test_camera_activation tests.test_camera_switching tests.test_network_capture tests.test_live_state -v
+Ran 64 tests in 1.399s: OK
+.venv/bin/python -m unittest tests.test_camera_freeze_watchdog -v
+Ran 2 tests in 0.002s: OK

@@ -1,0 +1,23 @@
+[
+  {
+    "file": "final/timings.jsonl",
+    "events": 1328,
+    "watchdog_hangs": 0,
+    "max_heartbeat_gap_ms": 525.3965829615481,
+    "interaction": "automated callback; not physical native selection"
+  },
+  {
+    "file": "updated.jsonl",
+    "events": 1179,
+    "watchdog_hangs": 0,
+    "max_heartbeat_gap_ms": 426.9309999945108,
+    "interaction": "automated callback; not physical native selection"
+  },
+  {
+    "file": "resolved-baseline.jsonl",
+    "events": 1147,
+    "watchdog_hangs": 0,
+    "max_heartbeat_gap_ms": 407.0045830158051,
+    "interaction": "automated callback; not physical native selection"
+  }
+]
