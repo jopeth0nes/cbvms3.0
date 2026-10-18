@@ -24,8 +24,13 @@ def main():
     os.dup2(sys.stderr.fileno(), sys.stdout.fileno())
     os.environ['OPENCV_FFMPEG_DEBUG'] = '1'
     os.environ['OPENCV_FFMPEG_LOGLEVEL'] = '24'
+    # Preserve normal probing/reference-frame decoding. Dropping compressed input
+    # during startup can strand HEVC decoding without its reference pictures.
+    # Freshness is enforced by the latest-only queue *after* decoding instead.
+    # discardcorrupt rejects packets flagged corrupt; it is not an image-quality
+    # guarantee and OpenCV does not expose a reliable per-frame corruption flag.
     os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = (
-        f"rtsp_transport;{request.get('transport','tcp')}|fflags;nobuffer|flags;low_delay")
+        f"rtsp_transport;{request.get('transport','tcp')}|fflags;discardcorrupt")
     os.environ['OMP_NUM_THREADS'] = '1'
     import cv2
     cv2.setNumThreads(1)

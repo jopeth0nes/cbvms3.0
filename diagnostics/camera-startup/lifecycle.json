@@ -1,0 +1,10 @@
+{
+  "terminated_decoder_frame_rejected": true,
+  "failure_category": "stalled",
+  "fresh_reconnect_opened": true,
+  "fresh_reconnect_frame_read": true,
+  "fresh_reconnect_first_frame_ms": 1549.33,
+  "cancel_ms": 13.490666984580457,
+  "cancel_owner_stopped": true,
+  "cancel_decoder_reaped": true
+}
