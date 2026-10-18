@@ -18,6 +18,7 @@ Three sequential baseline connections followed by three conservative connections
 used the same saved URL/profile/transport, eight seconds of reads per attempt, and
 contact sheets sampled approximately every 0.5 seconds including the first read.
 No GUI, recognition, evidence persistence or production database was involved.
+
 | Attempt | Before first decoded delivery | Before first clean sampled image | After first decoded delivery | After first clean sampled image |
 | --- | --- | --- | --- | --- |
 | 1 | 2.028 s | None through 9.968 s from open | 1.580 s | 1.581 s |
