@@ -21,10 +21,14 @@ class UnknownEncounter:
     session_id: str
     snapshot: bytes | None
 
+    context_snapshot: bytes | None = None
+    evidence_metadata: str | None = None
+
     def write(self, database, valid_if):
         return database.log_security_event(self.presence_id, observed_at=self.observed_at,
             snapshot_jpeg=self.snapshot, event_key=self.event_key, source_id=self.source_id,
-            source_label=self.source_label, session_id=self.session_id, valid_if=valid_if)
+            source_label=self.source_label, session_id=self.session_id, valid_if=valid_if,
+            context_snapshot=self.context_snapshot, evidence_metadata=self.evidence_metadata)
 
 
 class SecurityWriter:
@@ -46,6 +50,10 @@ class SecurityWriter:
         threading.Thread(target=self._run, daemon=True, name='unknown-sightings-writer').start()
 
     def offer(self, fact, cancelled):
+        # At most 64 queued facts plus one active: <=195 MB encoded evidence.
+        if len(fact.snapshot or b'') > 2_000_000 or len(fact.context_snapshot or b'') > 1_000_000:
+            with self._lock: self.overflow += 1
+            return False
         with self._lock:
             if cancelled.is_set() or self.stop_event.is_set() or fact.event_key in self.pending:
                 return False
@@ -67,7 +75,7 @@ class SecurityWriter:
 
     def status(self):
         with self._lock:
-            return (f'Unknown encounters: {self.accepted} saved · {len(self.pending)} queued'
+            return (f'Unknown encounters: {self.accepted} saved this session · {len(self.pending)} pending writes'
                 + (f' · Retry pending: {self.error}' if self.error else '')
                 + (f' · {self.cancelled} cancelled before save' if self.cancelled else '')
                 + (f' · {self.overflow} NOT QUEUED (overflow)' if self.overflow else ''))

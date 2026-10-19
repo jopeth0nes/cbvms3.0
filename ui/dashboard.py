@@ -357,6 +357,7 @@ class CBVMSDashboard(WorkspaceWindow):
             ("live",       "📹  Live Monitor"),
             ("enrollment", "👤  Student Management"),
             ("attendance", "Attendance"),
+            ("unknown", "Unknown Sightings"),
             ("suspensions", "⏸  Suspensions"),
             ("violation_history", "📋  Violation History"),
             ("violations", "⚠  Violation Log"),
@@ -523,6 +524,7 @@ class CBVMSDashboard(WorkspaceWindow):
 
         # Build secondary pages only when first opened, then reuse them.
         self._panel_factories = {
+            "unknown": ("_unknown_panel", lambda: AttendancePanel(self._view_host, database=self._database, username=self.username, unknown=True)),
             "attendance": ("_attendance_panel", lambda: AttendancePanel(self._view_host, database=self._database, username=self.username)),
             "reports": ("_reports_panel", lambda: ReportsPanel(self._view_host, database=self._database)),
             "enrollment": ("_enrollment_panel", lambda: EnrollmentPanel(
@@ -666,6 +668,18 @@ class CBVMSDashboard(WorkspaceWindow):
         self._suspension_student_id = student_id
         self._on_nav_select("suspensions")
 
+    def _sightings_layout(self, active):
+        if self._active_nav == 'appeals': return
+        active = active and self._active_nav in {'attendance','unknown','records'}
+        if active:
+            self._activity_sidebar.grid_remove()
+            self._title_row.grid_remove()
+        else:
+            self._activity_sidebar.grid()
+            self._title_row.grid()
+        self.grid_columnconfigure(2,minsize=0 if active else 280)
+        self._center_panel.grid_configure(columnspan=2 if active else 1)
+
     def _on_nav_select(self, key: str) -> None:
         if key in {"training", "accounts"} and not self._is_superadmin:
             return
@@ -677,6 +691,11 @@ class CBVMSDashboard(WorkspaceWindow):
             panel.grid_remove()
             setattr(self, attribute, panel)
             self._views[key] = panel
+        panel = self._views[key]
+        if isinstance(panel, AttendancePanel):
+            panel.bind("<<SightingsModeChanged>>", lambda e: self._sightings_layout(e.widget.view.get() == "Unknown / Unrecognized") if e.widget.winfo_ismapped() else None)
+        elif key == "records":
+            panel._attendance_frame.bind("<<SightingsModeChanged>>", lambda e: self._sightings_layout(e.widget.view.get() == "Unknown / Unrecognized") if e.widget.winfo_ismapped() else None)
         previous_nav = self._active_nav
         if previous_nav != key:
             self._invalidate_monitor()
@@ -695,6 +714,9 @@ class CBVMSDashboard(WorkspaceWindow):
             self._welcome_banner.grid()
             self.grid_columnconfigure(2, minsize=280)
             self._center_panel.grid_configure(columnspan=1)
+
+        if key != "appeals" and hasattr(self,"_activity_sidebar"):
+            self._sightings_layout(key == "unknown")
 
         # Power saver: entering Live (re)opens the camera if it was released; leaving Live
         # is handled lazily by the idle watchdog in _update_feed (with a grace window).
@@ -726,6 +748,7 @@ class CBVMSDashboard(WorkspaceWindow):
             history_panels[previous_nav].on_hide()
 
         titles = {
+            "unknown": "Unknown Sightings",
             "attendance": "Attendance — Campus Sightings",
             "reports":    "Reports",
             "live":       "Live Monitor",
@@ -766,6 +789,9 @@ class CBVMSDashboard(WorkspaceWindow):
                 self._violation_panel.refresh()
             if key == "appeals":
                 self._appeals_panel.on_show()
+            if key == "unknown":
+                self._unknown_panel.view.set("Unknown / Unrecognized")
+                self._unknown_panel.refresh()
             if key == "attendance":
                 self._attendance_panel.refresh()
             if key == "reports":

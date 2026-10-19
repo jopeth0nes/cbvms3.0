@@ -180,6 +180,7 @@ class SuspensionsWorkspace(ctk.CTkFrame):
             bar.grid(row=0 if vertical else 1,column=1 if vertical else 0,sticky='ns' if vertical else 'ew')
             self.records_canvas.configure(**{'yscrollcommand' if vertical else 'xscrollcommand':bar.set})
         self.records_canvas.bind('<Configure>',self._size_records)
+        self.records_container.bind('<Configure>',self._size_records,add='+')
         self.back=ctk.CTkButton(self.record_host,text='← Back to matching records',command=self._back_to_drill,
                               fg_color=COLOR_BORDER,width=190)
         self.drill_frame=ctk.CTkFrame(self.record_host,fg_color=COLOR_SURFACE)
@@ -450,6 +451,7 @@ class SuspensionsWorkspace(ctk.CTkFrame):
         from ui.suspensions_panel import SuspensionsPanel
         if self.records is None:
             self.records=SuspensionsPanel(self.records_container,database=self.database,username=self.username,embedded=True)
+            self.records._lift_btn.bind('<Configure>',self._size_records,add='+')
         self.drill_frame.grid_remove()
         if self._drill is not None: self.back.grid(row=0,column=0,sticky='w',pady=(0,8))
         else: self.back.grid_remove()
@@ -476,9 +478,14 @@ class SuspensionsWorkspace(ctk.CTkFrame):
     def _size_records(self,event=None):
         scale=self._get_widget_scaling()
         width=max(round(680*scale),self.records_canvas.winfo_width())
-        height=max(round(1000*scale),self.records_canvas.winfo_height())
+        height=max(round(1000*scale),self.records_canvas.winfo_height(),
+                   self.records.winfo_reqheight() if self.records is not None else 0)
         self.records_canvas.itemconfigure(self.records_window,width=width,height=height)
-        self.records_canvas.configure(scrollregion=(0,0,width,height))
+        content_end=0
+        if self.records is not None and self.records._lift_btn.winfo_ismapped():
+            content_end=(self.records._lift_btn.winfo_rooty()-self.records_container.winfo_rooty()
+                         +self.records._lift_btn.winfo_height()+24)
+        self.records_canvas.configure(scrollregion=(0,0,width,max(height,content_end)))
 
     def _directory(self):
         self._drill=None

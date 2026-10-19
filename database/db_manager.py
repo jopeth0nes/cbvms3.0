@@ -796,6 +796,8 @@ class CBVMSDatabase(StudentManagement, StudentCredentials, AttendanceStore, Secu
         *,
         observed_at: datetime | str | None = None,
         snapshot_jpeg: bytes | None = None,
+        context_snapshot: bytes | None = None,
+        evidence_metadata: str | None = None,
         event_key: str | None = None,
         source_id: str | None = None,
         source_label: str | None = None,
@@ -824,9 +826,9 @@ class CBVMSDatabase(StudentManagement, StudentCredentials, AttendanceStore, Secu
                 if existing:
                     return int(existing[0])
             cursor = conn.execute(
-                """INSERT INTO security_events (presence_id, observed_at, snapshot, event_key, source_id, source_label, session_id)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (presence_id, format_db_datetime(observed), snapshot_jpeg, event_key, source_id, source_label, session_id),
+                """INSERT INTO security_events (presence_id, observed_at, snapshot, event_key, source_id, source_label, session_id, context_snapshot, evidence_metadata)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (presence_id, format_db_datetime(observed), snapshot_jpeg, event_key, source_id, source_label, session_id, context_snapshot, evidence_metadata),
             )
             event_id = int(cursor.lastrowid)
             if valid_if is not None and not valid_if():

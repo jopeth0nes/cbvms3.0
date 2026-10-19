@@ -48,9 +48,29 @@ class UnknownSightingsTests(unittest.TestCase):
         self.db.initialize(process_deadlines=False)
         row = self.query()['rows'][0]
         self.assertEqual(row['reference_id'],f'legacy:{legacy}')
-        self.assertIn('historical',row['source_label'])
+        self.assertEqual('Camera not recorded',row['source_label'])
         self.assertEqual(self.db.unknown_snapshot(legacy,username='superadmin'),b'snapshot-original')
         self.assertEqual(self.query(filters={'source_id':'__historical__'})['count'],1)
+
+    def test_context_crop_restart_access_and_retry(self):
+        from io import BytesIO
+        from PIL import Image
+        from database.db_manager import CBVMSDatabase
+        def jpeg(color):
+            stream=BytesIO();Image.new('RGB',(80,60),color).save(stream,format='JPEG');return stream.getvalue()
+        crop,context=jpeg('red'),jpeg('blue')
+        first=self.save('context-a',snapshot_jpeg=crop,context_snapshot=context,evidence_metadata='{"frame_id": ["camera", 3]}')
+        second=self.save('context-b',source_id='yard',snapshot_jpeg=jpeg('green'))
+        self.save('context-a',snapshot_jpeg=b'changed',context_snapshot=b'changed',evidence_metadata='changed')
+        restarted=CBVMSDatabase(self.path);restarted.initialize(process_deadlines=False)
+        self.assertEqual(restarted.unknown_snapshot(first,username='admin'),crop)
+        self.assertEqual(restarted.unknown_snapshot(first,username='admin',kind='context'),context)
+        self.assertIsNone(restarted.unknown_snapshot(second,username='admin',kind='context'))
+        with restarted.connect() as conn:
+            self.assertEqual(conn.execute('SELECT evidence_metadata FROM security_events WHERE id=?',(first,)).fetchone()[0],'{"frame_id": ["camera", 3]}')
+        restarted.student_session_ref=object()
+        for kind in ('crop','context'):
+            with self.assertRaises(PermissionError):restarted.unknown_snapshot(first,username='admin',kind=kind)
 
     def test_retry_key_preserves_original_metadata_and_no_student_side_effects(self):
         first = self.save()
@@ -166,6 +186,28 @@ class UnknownSightingsTests(unittest.TestCase):
         self.assertEqual(self.query()['count'],3)
         self.assertEqual(self.query(filters={'source_id':'yard'})['count'],1)
         self.assertEqual(self.db.get_violations_for_student(self.sid),[])
+
+    def test_context_and_crop_use_qualified_frame_not_newer_live_frame(self):
+        import cv2
+        import numpy as np
+        import json
+        fx=PipelineFixture();fx.processor.database=self.db
+        fx.recognizer.recognize_faces.return_value=[detection('')]
+        result=fx.confirmed()
+        original=result.task.frame
+        newer=np.full_like(original,240)
+        fx.latest=replace(fx.latest,frame=newer,frame_id=('camera',999))
+        with patch('core.live_pipeline.MotionProjection.advance',return_value=[80,20,130,90]):
+            fx.persist(result)
+        row=self.query()['rows'][0]
+        context=cv2.imdecode(np.frombuffer(self.db.unknown_snapshot(row['id'],username='admin',kind='context'),np.uint8),cv2.IMREAD_COLOR)
+        crop=cv2.imdecode(np.frombuffer(self.db.unknown_snapshot(row['id'],username='admin'),np.uint8),cv2.IMREAD_COLOR)
+        self.assertLess(np.abs(context[50,100].astype(int)-original[50,100]).max(),5)
+        self.assertLess(np.abs(crop[20,20].astype(int)-original[50,100]).max(),5)
+        with self.db.connect() as conn:
+            metadata=json.loads(conn.execute('SELECT evidence_metadata FROM security_events WHERE id=?',(row['id'],)).fetchone()[0])
+        self.assertEqual(metadata['frame_id'],list(result.task.context.frame_id))
+        self.assertEqual(metadata['face_box'],[80,20,130,90])
 
     def test_unknown_confirmation_rejects_ambiguity_loss_stale_cancelled_and_model_failure(self):
         for changes in ({'identity_uncertain':True},{'embedding':()},{}):

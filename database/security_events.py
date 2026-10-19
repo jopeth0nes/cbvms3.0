@@ -4,7 +4,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from core.attendance import MANILA, validate_filters
 
 UNKNOWN_STATUS = 'Unknown / Unrecognized'
-UNAVAILABLE_CAMERA = 'Unavailable (historical camera metadata)'
+UNAVAILABLE_CAMERA = 'Camera not recorded'
 UNKNOWN_COLUMNS = ('observed_at', 'source_label', 'source_id', 'reference_id',
                    'presence_id', 'status', 'snapshot_available')
 
@@ -14,6 +14,9 @@ def migrate_security_events(conn):
     for name in ('event_key', 'source_id', 'source_label', 'session_id'):
         if name not in columns:
             conn.execute(f'ALTER TABLE security_events ADD COLUMN {name} TEXT')
+    for name, kind in (('context_snapshot','BLOB'), ('evidence_metadata','TEXT')):
+        if name not in columns:
+            conn.execute(f'ALTER TABLE security_events ADD COLUMN {name} {kind}')
     # NULL keys preserve every historical row, including historical duplicates.
     conn.execute('CREATE UNIQUE INDEX IF NOT EXISTS security_event_key ON security_events(event_key)')
     conn.execute('CREATE INDEX IF NOT EXISTS security_event_source_time ON security_events(source_id, observed_at)')
@@ -50,8 +53,8 @@ class SecurityEventStore:
     _security_columns = """id, observed_at, presence_id,
         COALESCE(event_key,'legacy:'||id) reference_id,
         COALESCE(NULLIF(source_id,''),'Unavailable') source_id,
-        COALESCE(NULLIF(source_label,''),'Unavailable (historical camera metadata)') source_label,
-        CASE WHEN snapshot IS NOT NULL AND length(snapshot)>0 THEN 'Available' ELSE 'Unavailable' END snapshot_available,
+        COALESCE(NULLIF(source_label,''),'Camera not recorded') source_label,
+        CASE WHEN (snapshot IS NOT NULL AND length(snapshot)>0) OR length(context_snapshot)>0 THEN 'Available' ELSE 'Unavailable' END snapshot_available,
         'Unknown / Unrecognized' status"""
 
     def query_unknown_sightings(self, *, username, filters=None, page=0, page_size=50):
@@ -83,10 +86,13 @@ class SecurityEventStore:
                 if selected is None or row['id'] in selected:
                     yield dict(row)
 
-    def unknown_snapshot(self, event_id, *, username):
+    def unknown_snapshot(self, event_id, *, username, kind="crop"):
+        if kind not in ("crop", "context"):
+            raise ValueError("Invalid evidence kind")
         self._attendance_staff_only()
         with self.connect() as conn:
             self._security_access(conn, username)
-            row = conn.execute("SELECT snapshot FROM security_events WHERE id=? AND event_code='unknown_person'",
+            column = "snapshot" if kind == "crop" else "context_snapshot"
+            row = conn.execute(f"SELECT {column} FROM security_events WHERE id=? AND event_code='unknown_person'",
                                (int(event_id),)).fetchone()
             return row[0] if row else None

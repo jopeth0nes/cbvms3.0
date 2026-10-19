@@ -27,11 +27,12 @@ class OverviewUITests(unittest.TestCase):
         self.panel.grid(row=0,column=0,sticky='nsew')
         self.errors=[]; self.root.report_callback_exception=lambda *args:self.errors.append(args)
         self.clock=patch('core.suspension_analytics.utc_now',return_value=NOW); self.clock.start()
+        self.management_clock=patch('database.student_management.utc_now',return_value=NOW); self.management_clock.start()
 
     def tearDown(self):
         worker=self.panel.worker
         self.panel.destroy(); self.root.destroy(); worker.thread.join(1)
-        self.clock.stop(); self.temp.cleanup()
+        self.clock.stop(); self.management_clock.stop(); self.temp.cleanup()
         self.assertFalse(worker.thread.is_alive()); self.assertEqual(self.errors,[])
 
     def pump(self,seconds=.15):
@@ -144,7 +145,8 @@ class OverviewUITests(unittest.TestCase):
         self.show(); self.panel.select_student('S1')
         self.until(lambda:self.panel.records._ready)
         records=self.panel.records
-        records._tabs.set('Suspension History'); self.pump()
+        # Embedded records already show suspension history alongside violations.
+        self.pump()
         self.panel.records_canvas.yview_moveto(1); self.pump()
         self.assertTrue(records._lift_btn.winfo_ismapped())
         self.assertLess(records._lift_btn.winfo_rooty()+records._lift_btn.winfo_height(),self.root.winfo_rooty()+self.root.winfo_height())

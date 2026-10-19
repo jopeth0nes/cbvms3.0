@@ -145,6 +145,10 @@ class RecordsPanel(ctk.CTkFrame):
         if key == "appeals" and self.on_open_appeals:
             self.on_open_appeals()
             return
+        self._attendance_frame._clear_preview()
+        top=self.winfo_toplevel()
+        if hasattr(top,"_sightings_layout"):
+            top._sightings_layout(key == "attendance" and self._attendance_frame.view.get() == "Unknown / Unrecognized")
         self._tab_var.set(key)
         for k, btn in self._tab_btns.items():
             btn.configure(fg_color=COLOR_ACCENT if k == key else COLOR_SURFACE)

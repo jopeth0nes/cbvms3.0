@@ -475,10 +475,20 @@ class LiveProcessor:
             ok,jpeg = cv2.imencode('.jpg',crop,[cv2.IMWRITE_JPEG_QUALITY,85])
             if not guard():
                 continue
+            # Both encodings come only from the qualified immutable task frame.
+            context = task.frame
+            if max(h,w) > 1280:
+                scale = 1280 / max(h,w)
+                context = cv2.resize(context,(max(1,int(w*scale)),max(1,int(h*scale))))
+            context_ok, context_jpeg = cv2.imencode('.jpg',context,[cv2.IMWRITE_JPEG_QUALITY,80])
+            metadata = json.dumps(dict(frame_id=task.context.frame_id, camera_generation=task.camera_generation,
+                face_box=[int(v) for v in assessment.face_box], original_width=w, original_height=h,
+                context_width=context.shape[1], context_height=context.shape[0]))
             fact = UnknownEncounter(key, assessment.presence_id,
                 utc_stamp(datetime.fromtimestamp(task.observed_at,timezone.utc)),
                 task.source_id, task.source_label, str(task.context.frame_id[0]),
-                jpeg.tobytes() if ok and jpeg.nbytes <= 2_000_000 else None)
+                jpeg.tobytes() if ok and jpeg.nbytes <= 2_000_000 else None,
+                context_jpeg.tobytes() if context_ok and context_jpeg.nbytes <= 1_000_000 else None, metadata)
             try:
                 accepted = (self.security_writer.offer(fact,task.cancelled) if self.security_writer is not None
                             else fact.write(self.database,guard) is not None)

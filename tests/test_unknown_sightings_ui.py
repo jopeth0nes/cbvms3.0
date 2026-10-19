@@ -48,14 +48,14 @@ class UnknownSightingsUITests(unittest.TestCase):
             self.assertNotEqual(threading.get_ident(),main)
             return image_open(*args,**kwargs)
         with patch.object(self.db,'unknown_snapshot',side_effect=read), patch('ui.attendance_panel.Image.open',side_effect=decode):
-            panel.open_snapshot();self.until(lambda:not panel.snapshot_task.busy)
+            self.until(lambda:panel.preview_picture is not None)
+            panel.open_snapshot()
         self.assertIsNotNone(panel.snapshot_window)
         panel.filters['search'].set('encounter-000');panel.refresh()
         self.until(lambda:not panel.task.busy)
         self.assertIsNone(panel.snapshot_window);self.assertEqual(panel.total,1)
-        panel.tree.selection_set(panel.tree.get_children()[0]);panel.open_snapshot()
-        self.until(lambda:not panel.snapshot_task.busy)
-        self.assertIn('unavailable',panel.message.cget('text'))
+        panel.tree.selection_set(panel.tree.get_children()[0])
+        self.until(lambda:panel.preview_state=='No snapshot was saved for this encounter.')
         panel.filters['search'].set('missing');panel.refresh();self.until(lambda:not panel.task.busy)
         self.assertIn('No matching',panel.message.cget('text'))
         panel.view.set('Daily Summary');panel.clear_filters();self.until(lambda:not panel.task.busy)
@@ -68,6 +68,40 @@ class UnknownSightingsUITests(unittest.TestCase):
         self.until(lambda:not shared.task.busy)
         self.assertEqual(shared.total,61)
         records.destroy()
+
+    def test_automatic_selection_race_refresh_and_unreadable(self):
+        self.seed();panel=self.panel
+        def jpeg(color):
+            data=BytesIO();Image.new('RGB',(100,80),color).save(data,format='JPEG');return data.getvalue()
+        a=self.db.log_security_event('same',event_key='red',source_id='A',snapshot_jpeg=jpeg('red'))
+        b=self.db.log_security_event('same',event_key='blue',source_id='B',snapshot_jpeg=jpeg('blue'))
+        broken=self.db.log_security_event('same',event_key='broken',snapshot_jpeg=b'broken')
+        panel.refresh();self.until(lambda:not panel.task.busy)
+        entered,release=threading.Event(),threading.Event()
+        original=self.db.unknown_snapshot
+        def delayed(event_id,**kwargs):
+            if event_id==a:entered.set();release.wait(3)
+            return original(event_id,**kwargs)
+        with patch.object(self.db,'unknown_snapshot',side_effect=delayed):
+            panel.tree.selection_set(str(a));self.until(entered.is_set)
+            panel.tree.selection_set(str(b));self.root.update()
+            self.assertIsNone(panel.preview_picture)
+            release.set();self.until(lambda:panel.preview_picture is not None)
+        self.assertEqual(panel.preview_id,b)
+        self.assertGreater(panel.preview_picture.getpixel((0,0))[2],240)
+        picture=panel.preview_picture
+        panel.refresh(reset_page=False,preserve=True);self.until(lambda:not panel.task.busy)
+        self.root.update()
+        self.assertIs(panel.preview_picture,picture)
+        panel.open_snapshot();self.assertIsNotNone(panel.snapshot_window)
+        panel.tree.selection_set(str(broken));self.until(lambda:'Unable to read' in panel.preview_state)
+        self.assertIsNone(panel.preview_picture);self.assertIsNone(panel.snapshot_window)
+        for width,height in ((1200,850),(700,820)):
+            self.root.geometry(f'{width}x{height}');self.root.update()
+            self.assertGreater(panel.tree.winfo_height(),100)
+            self.assertGreater(panel.preview.winfo_height(),60)
+        panel.filters['search'].set('absent');panel.refresh();self.until(lambda:not panel.task.busy)
+        self.assertIsNone(panel.preview_id)
 
     def test_stale_queries_snapshots_and_errors_do_not_replace_current_view(self):
         self.seed();panel=self.panel
@@ -90,7 +124,7 @@ class UnknownSightingsUITests(unittest.TestCase):
             entered.set();release.wait(3)
             return original_snapshot(*args,**kwargs)
         with patch.object(self.db,'unknown_snapshot',side_effect=slow_snapshot):
-            panel.open_snapshot();self.until(entered.is_set)
+            panel._selection_changed(force=True);self.until(entered.is_set)
             panel.view.set('Daily Summary');panel.refresh()
             release.set();self.until(lambda:not panel.snapshot_task.busy and not panel.task.busy)
         self.assertIsNone(panel.snapshot_window)
