@@ -107,3 +107,179 @@ class CloudSyncTests(unittest.TestCase):
         name, _, blob = picture_evidence()
         action = self.action('appeals', {'violation_id': vid, 'reason': 'Please review this original detection picture.', 'filename': name, 'file': base64.b64encode(blob).decode()})
         self.assertEqual(apply_action(self.db, action)['status'], 'rejected')
+
+class ProtocolTests(CloudSyncTests):
+    def register(self):
+        with self.db.connect() as conn:
+            conn.execute("INSERT INTO campus_sync_identity (singleton,source_id,writer_id) VALUES (1,'source','writer')")
+
+    def test_replay_with_changed_payload_is_not_acknowledged(self):
+        action = self.action('reports', {'title': 'Test', 'description': 'Details', 'category': 'Other'})
+        apply_action(self.db, action)
+        action['payload']['title'] = 'Changed'
+        with self.assertRaises(ValueError):
+            apply_action(self.db, action)
+
+    def test_profile_base_value_conflict(self):
+        action = self.action('profile', {'name': 'Cloud name', 'expected_name': 'Old campus name'})
+        self.assertEqual(apply_action(self.db, action)['status'], 'rejected')
+        self.assertEqual(self.db.get_student_by_student_id('S1')['name'], 'S1')
+
+    def test_audit_is_readonly_even_with_due_deadlines(self):
+        from core.sync_audit import audit, readonly
+        before = Path(self.db.db_path).read_bytes()
+        with patch.object(CBVMSDatabase, 'initialize', side_effect=AssertionError), patch.object(CBVMSDatabase, 'process_expired_deadlines', side_effect=AssertionError):
+            self.assertEqual(audit(self.db.db_path)['local_students'], 2)
+        self.assertEqual(before, Path(self.db.db_path).read_bytes())
+        with readonly(self.db.db_path) as conn:
+            with self.assertRaises(Exception):
+                conn.execute('DELETE FROM students')
+
+    def test_backup_restores_committed_wal(self):
+        import sqlite3
+        from core.sync_audit import backup, readonly
+        connection = sqlite3.connect(self.db.db_path)
+        self.addCleanup(connection.close)
+        connection.execute('PRAGMA journal_mode=WAL')
+        connection.execute("UPDATE students SET name='Committed WAL' WHERE student_id='S1'")
+        connection.commit()
+        target = Path(self.temp.name) / 'backup.db'
+        self.assertEqual(backup(self.db.db_path, target)['restore_check'], 'passed')
+        with readonly(target) as conn:
+            self.assertEqual(conn.execute("SELECT name FROM students WHERE student_id='S1'").fetchone()[0], 'Committed WAL')
+
+    def test_consistent_export_snapshot(self):
+        from core.cloud_sync import frozen_database
+        with frozen_database(self.db) as frozen:
+            with self.db.connect() as conn:
+                conn.execute("UPDATE students SET name='Concurrent change' WHERE student_id='S1'")
+            self.assertEqual(frozen.get_student_by_student_id('S1')['name'], 'S1')
+
+    def test_registered_offline_source_does_not_finalize_deadlines(self):
+        vid = self.db.log_violation('S1', 'S1', 'wrong_uniform')
+        with self.db.connect() as conn:
+            conn.execute('UPDATE violations SET appeal_deadline=? WHERE id=?', (format_db_datetime(utc_now()-timedelta(days=1)), vid))
+        self.register()
+        self.db.process_expired_deadlines()
+        with self.db.connect() as conn:
+            self.assertEqual(conn.execute('SELECT COUNT(*) FROM strikes').fetchone()[0], 0)
+
+    def test_timely_offline_appeal_corrects_actual_strike_and_automatic_suspension(self):
+        vids = [self.db.log_violation('S1', 'S1', 'wrong_uniform') for _ in range(3)]
+        now = utc_now()
+        with self.db.connect() as conn:
+            conn.execute('UPDATE violations SET appeal_deadline=?', (format_db_datetime(now-timedelta(hours=1)),))
+        self.db.process_expired_deadlines(now=now)
+        with self.db.connect() as conn:
+            self.assertEqual(conn.execute('SELECT COUNT(*) FROM strikes WHERE is_active=1').fetchone()[0], 3)
+            self.assertEqual(conn.execute('SELECT COUNT(*) FROM student_suspensions WHERE lifted_at IS NULL').fetchone()[0], 1)
+        name, _, blob = picture_evidence()
+        action = self.action('appeals', {'violation_id': vids[-1], 'reason': 'Please review my timely submitted appeal.', 'filename': name, 'file': base64.b64encode(blob).decode()})
+        action['created_at'] = (now-timedelta(hours=2)).isoformat()
+        self.assertEqual(apply_action(self.db, action)['status'], 'applied')
+        with self.db.connect() as conn:
+            self.assertEqual(conn.execute('SELECT COUNT(*) FROM strikes WHERE is_active=1').fetchone()[0], 2)
+            self.assertEqual(conn.execute('SELECT COUNT(*) FROM student_suspensions WHERE lifted_at IS NULL').fetchone()[0], 0)
+            self.assertEqual(conn.execute('SELECT COUNT(*) FROM discipline_reconciliations').fetchone()[0], 1)
+            self.assertTrue(conn.execute("SELECT 1 FROM student_notifications WHERE title LIKE 'Timely appeal%'").fetchone())
+        self.assertEqual(self.db.get_appeal_eligibility(vids[-1], 'S1')['reason'], 'already_submitted')
+
+    def test_manual_suspension_remains_after_timely_cloud_appeal(self):
+        vid = self.db.log_violation('S1', 'S1', 'wrong_uniform')
+        now = utc_now()
+        with self.db.connect() as conn:
+            conn.execute('UPDATE violations SET appeal_deadline=? WHERE id=?', (format_db_datetime(now-timedelta(hours=1)), vid))
+            conn.execute("INSERT INTO student_suspensions (student_id,reason,starts_at,imposed_by,imposed_at) VALUES ('S1','Office decision',?,'office',?)", (format_db_datetime(now), format_db_datetime(now)))
+        self.db.process_expired_deadlines(now=now)
+        name, _, blob = picture_evidence()
+        action = self.action('appeals', {'violation_id': vid, 'reason': 'Please review my timely submitted appeal.', 'filename': name, 'file': base64.b64encode(blob).decode()})
+        action['created_at'] = (now-timedelta(hours=2)).isoformat()
+        self.assertEqual(apply_action(self.db, action)['status'], 'applied')
+        with self.db.connect() as conn:
+            self.assertIsNone(conn.execute("SELECT lifted_at FROM student_suspensions WHERE imposed_by='office'").fetchone()[0])
+
+    def test_same_hash_with_new_reset_revision_rejects_password_command(self):
+        with self.db.connect() as conn:
+            row = conn.execute("SELECT password_hash,credential_version FROM student_accounts WHERE student_id='S1'").fetchone()
+        action = self.action('password', {'password_hash': hash_password('Personal cloud password'), 'expected_hash': row['password_hash'], 'expected_version': row['credential_version']-1})
+        self.assertEqual(apply_action(self.db, action)['status'], 'rejected')
+
+    def test_audit_cloud_comparison_never_calls_mutation_endpoint(self):
+        from core.sync_audit import audit
+        cloud = FakeCloud()
+        report = audit(self.db.db_path, cloud)
+        self.assertEqual(report['local_only'], 0)
+        self.assertEqual(report['cloud_only'], 0)
+        self.assertEqual(cloud.writes, [])
+
+    def test_sync_lock_cannot_be_bypassed_with_different_cache(self):
+        from core.cloud_sync import sync_lock, sync_once
+        with sync_lock(Path(self.db.db_path).with_suffix('.cloud-sync-state')):
+            with self.assertRaises(OSError):
+                sync_once(self.db, FakeCloud(), Path(self.temp.name)/'other.json')
+
+    def test_wrong_source_empty_roster_and_protocol_have_zero_remote_writes(self):
+        from core.cloud_sync import sync_once
+        self.register()
+        for field, value in [('source_id', 'wrong'), ('protocol', 1), ('ids', [str(i) for i in range(100)])]:
+            cloud = FakeCloud()
+            cloud.meta[field] = value
+            with self.assertRaises(ValueError):
+                sync_once(self.db, cloud)
+            self.assertEqual(cloud.writes, [])
+
+    def test_backlog_bad_action_and_ack_crash_recovery(self):
+        from core.cloud_sync import sync_once
+        self.register()
+        cloud = FakeCloud()
+        cloud.actions = [dict(self.action('reports', {'title': 'Test', 'description': 'Details', 'category': 'Other'}, aid=f'action-{i}'), sequence=i+1) for i in range(30)]
+        cloud.actions.insert(0, {'id': 'missing-evidence', 'student_id': 'S1', 'kind': 'appeals', 'sequence': 0, 'error': 'Missing evidence'})
+        cloud.fail_after_publish = True
+        with self.assertRaises(ConnectionError):
+            sync_once(self.db, cloud)
+        sync_once(self.db, cloud)
+        with self.db.connect() as conn:
+            self.assertEqual(conn.execute('SELECT COUNT(*) FROM system_reports').fetchone()[0], 30)
+            self.assertEqual(conn.execute('SELECT generation FROM campus_sync_identity').fetchone()[0], 2)
+
+    def test_missing_remote_evidence_repaired_even_with_corrupt_cache(self):
+        from core.cloud_sync import sync_once
+        self.register()
+        name, _, blob = picture_evidence()
+        self.db.log_violation('S1', 'S1', 'wrong_uniform', snapshot_jpeg=blob)
+        cloud = FakeCloud()
+        cache = Path(self.temp.name)/'cache.json'
+        cache.write_text('{broken')
+        sync_once(self.db, cloud, cache)
+        initial = len([p for p in cloud.writes if p == 'evidence'])
+        self.assertGreater(initial, 0)
+        sync_once(self.db, cloud, cache)
+        self.assertEqual(len([p for p in cloud.writes if p == 'evidence']), initial*2)
+
+
+class FakeCloud:
+    def __init__(self):
+        self.meta = {'protocol': 2, 'source_id': 'source', 'writer_id': 'writer', 'generation': 0,
+                     'run_id': None, 'ids': ['S1', 'S2'], 'queue': [], 'queued_ids': [], 'checked_at': utc_now().isoformat()}
+        self.actions, self.writes = [], []
+        self.fail_after_publish = False
+
+    def call(self, path, data=None):
+        if path == 'audit':
+            return dict(self.meta)
+        if path.startswith('actions?'):
+            after = int(path.split('=')[1])
+            actions = [a for a in self.actions if a['sequence'] > after or (after == 0 and a['sequence'] == 0)]
+            return {'actions': actions[:25], 'has_more': len(actions)>25, 'pending': len(self.actions), 'oldest_pending': None}
+        self.writes.append(path)
+        if path == 'evidence':
+            return {'sha256': data['sha256']}
+        if path == 'publish':
+            self.meta.update(generation=data['generation']+1, run_id=data['run_id'])
+            receipts = {r['id'] for r in data['receipts']}
+            self.actions = [a for a in self.actions if a['id'] not in receipts]
+            if self.fail_after_publish:
+                self.fail_after_publish = False
+                raise ConnectionError('Disconnected after commit')
+            return {'generation': self.meta['generation'], 'run_id': data['run_id']}
+        raise AssertionError(path)

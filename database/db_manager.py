@@ -255,6 +255,8 @@ class CBVMSDatabase(StudentManagement, StudentCredentials, AttendanceStore, Secu
 
     def initialize(self, *, process_deadlines: bool = True) -> None:
         with self.connect() as conn:
+            from database.cloud_sync_migration import migrate
+            migrate(conn)
             for ddl in ALL_TABLES:
                 conn.execute(ddl)
             user_cols = {r[1] for r in conn.execute("PRAGMA table_info(users)")}
@@ -1010,10 +1012,12 @@ class CBVMSDatabase(StudentManagement, StudentCredentials, AttendanceStore, Secu
         active_count = self._active_strike_count_conn(conn, sid, "wrong_uniform", term)
         count = next((threshold for threshold in (7, 5, 3) if active_count >= threshold), 0)
         days = {3: 2, 5: 7, 7: 14}.get(count)
-        if days is None or conn.execute(
-            "SELECT 1 FROM automatic_suspension_awards WHERE student_id=? AND semester_id=? AND threshold=?",
+        previous_award = conn.execute(
+            "SELECT s.lifted_by,s.lift_reason FROM automatic_suspension_awards a JOIN student_suspensions s ON s.id=a.suspension_id WHERE a.student_id=? AND a.semester_id=? AND a.threshold=?",
             (sid, term, count),
-        ).fetchone():
+        ).fetchone()
+        if days is None or (previous_award and not (previous_award['lifted_by'] == 'cloud-sync' and
+                previous_award['lift_reason'] == 'Timely appeal: deadline penalty corrected')):
             return
         start = parse_db_datetime(changed_at)
         end_text = format_db_datetime(start + timedelta(days=days))
@@ -1035,7 +1039,7 @@ class CBVMSDatabase(StudentManagement, StudentCredentials, AttendanceStore, Secu
             (student_id, reason, starts_at, ends_at, imposed_by, imposed_at, violation_id)
             VALUES (?, ?, ?, ?, 'system', ?, ?)""",
             (sid, reason, changed_at, end_text, changed_at, violation["id"]))
-        conn.execute("INSERT INTO automatic_suspension_awards VALUES (?, ?, ?, ?)",
+        conn.execute("INSERT INTO automatic_suspension_awards VALUES (?, ?, ?, ?) ON CONFLICT(student_id,semester_id,threshold) DO UPDATE SET suspension_id=excluded.suspension_id",
             (sid, term, count, cursor.lastrowid))
         message = (f"You have reached {count} finalized no-uniform strikes this semester. "
             f"You are automatically suspended for {days} days.\n"
@@ -1222,6 +1226,19 @@ class CBVMSDatabase(StudentManagement, StudentCredentials, AttendanceStore, Secu
 
     def process_expired_deadlines(self, *, now=None, student_id=None):
         """Finalize unused publication windows, including after restart, exactly once."""
+        # Once registered, only deadlines covered by a fully imported cloud queue
+        # may finalize. An offline campus keeps windows pending, not penalized.
+        with self.connect() as guard:
+            from core.sync_audit import identity
+            source = identity(guard)
+        if not source and (Path(__file__).resolve().parents[1] / 'data/cloud-sync.json').exists():
+            return {"auto_confirmed": 0, "appeal_windows_expired": 0}
+        if source:
+            watermark = parse_db_datetime(source['verified_through'])
+            requested = parse_db_datetime(now) if now is not None else utc_now()
+            if watermark is None:
+                return {"auto_confirmed": 0, "appeal_windows_expired": 0}
+            now = min(requested, watermark)
         self.reconcile_automatic_uniform_suspensions(now=now, student_id=student_id)
         scope = " AND student_id=?" if student_id is not None else ""
         scope_args = (student_id,) if student_id is not None else ()
@@ -2115,6 +2132,51 @@ class CBVMSDatabase(StudentManagement, StudentCredentials, AttendanceStore, Secu
             return False
 
     decide_appeal = update_appeal_decision
+
+    def _reconcile_cloud_appeal_conn(self, conn, violation, submitted):
+        """Undo only provable deadline penalties for a timely authenticated command.
+
+        A mixed/manual escalation is held for review rather than guessed at.
+        Runs inside the appeal + receipt transaction; ledger and notices survive.
+        """
+        closed = parse_db_datetime(violation.get('appeal_window_closed_at'))
+        if not closed:
+            return
+        if submitted > parse_db_datetime(violation['appeal_deadline']):
+            raise ValueError('Deadline penalty requires administrator review.')
+        strike = conn.execute('SELECT * FROM strikes WHERE violation_id=? AND is_active=1',
+                              (violation['id'],)).fetchone()
+        if not strike:
+            conn.execute('UPDATE violations SET appeal_window_closed_at=NULL WHERE id=?', (violation['id'],))
+            return
+        if violation['status'] != 'auto_confirmed' or parse_db_datetime(strike['awarded_at']) != closed:
+            raise ValueError('Unrelated strike requires administrator review.')
+        awards = conn.execute("""SELECT a.threshold,s.* FROM automatic_suspension_awards a
+            JOIN student_suspensions s ON s.id=a.suspension_id
+            WHERE a.student_id=? AND a.semester_id=? AND s.lifted_at IS NULL""",
+            (strike['student_id'], strike['semester_id'])).fetchall()
+        count = self._active_strike_count_conn(conn, strike['student_id'], 'wrong_uniform', strike['semester_id'])
+        to_lift = [a for a in awards if strike['violation_code'] == 'wrong_uniform' and count - 1 < a['threshold']]
+        for award in to_lift:
+            # Existing escalation may have absorbed a manual penalty. Do not infer
+            # what its remaining duration should be; preserve it for office review.
+            if conn.execute("SELECT 1 FROM student_suspensions WHERE student_id=? AND lifted_at=? AND lift_reason='Replaced by automatic strike escalation'",
+                            (strike['student_id'], award['imposed_at'])).fetchone():
+                raise ValueError('Mixed suspension history requires administrator review.')
+        stamp = format_db_datetime(utc_now())
+        conn.execute('INSERT INTO discipline_reconciliations VALUES (?,?,?,?,?)',
+                     (violation['id'], strike['id'], 'cloud-sync', 'Timely authenticated appeal imported after deadline', stamp))
+        conn.execute("UPDATE strikes SET is_active=0,deactivated_at=?,deactivation_reason='pending_appeal_reconciliation' WHERE id=?", (stamp, strike['id']))
+        conn.execute('UPDATE violations SET appeal_window_closed_at=NULL WHERE id=?', (violation['id'],))
+        self._sync_third_strike_event_conn(conn, student_id=strike['student_id'],
+            violation_code=strike['violation_code'], semester_id=strike['semester_id'], changed_at=stamp,
+            resolution_reason='pending_appeal_reconciliation')
+        for award in to_lift:
+            conn.execute("UPDATE student_suspensions SET lifted_at=?,lifted_by='cloud-sync',lift_reason='Timely appeal: deadline penalty corrected' WHERE id=?", (stamp, award['id']))
+        self._insert_event_notification_conn(conn, student_id=strike['student_id'],
+            title='Timely appeal received — deadline penalty corrected',
+            message='Your appeal was submitted online on time. Its deadline strike has been removed pending review. Office-imposed penalties remain unchanged.',
+            event_key=f"violation:{violation['id']}:cloud_reconciled", created_at=stamp, violation_id=violation['id'])
 
     def reconcile_pending_appeal_strike(self, violation_id, *, username, reason):
         """Explicit historical repair only; never called by initialization or refresh.

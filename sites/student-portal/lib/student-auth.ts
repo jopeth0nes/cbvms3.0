@@ -97,23 +97,12 @@ export async function authRoute(request: Request, data: Row): Promise<Response |
   if (await verifyPassword(password, session.password_hash)) return json({ error: 'Choose a different password.' }, 400);
   if (session.pending_action_id) return json({ error: 'Your last password change is still syncing. Try again after campus sync.' }, 409);
   const hash = await hashPassword(password), id = crypto.randomUUID();
-  const payload = { password_hash: hash, expected_hash: session.password_hash, expected_must_change: session.must_change_password };
+  const payload = { password_hash: hash, expected_hash: session.password_hash, expected_version: session.credential_version, expected_must_change: session.must_change_password };
   const result = await db().batch([
     db().prepare('UPDATE portal_accounts SET password_hash=?,must_change_password=0,pending_base_hash=?,pending_action_id=? WHERE student_id=? AND password_hash=? AND pending_action_id IS NULL').bind(hash, session.password_hash, id, session.student_id, session.password_hash),
-    db().prepare("INSERT INTO portal_actions (id,student_id,kind,payload,created_at) SELECT ?,student_id,'password',?,? FROM portal_accounts WHERE student_id=? AND pending_action_id=?").bind(id, JSON.stringify(payload), new Date().toISOString(), session.student_id, id),
+    db().prepare("INSERT INTO portal_actions (id,student_id,kind,payload,created_at) SELECT ?,student_id,'password',?,strftime('%Y-%m-%dT%H:%M:%fZ','now') FROM portal_accounts WHERE student_id=? AND pending_action_id=?").bind(id, JSON.stringify(payload), session.student_id, id),
   ]);
   if (!result[0].meta.changes) return json({ error: 'Credentials changed. Please sign in again.' }, 401);
   await db().prepare('DELETE FROM portal_sessions WHERE student_id=?').bind(session.student_id).run();
   return issueSession({ ...session, password_hash: hash, must_change_password: 0 });
-}
-
-export async function syncAccount(studentId: string, data: Row) {
-  if (typeof data.username !== 'string' || !data.username.trim() || data.username.length > 200 || !validHash(data.password_hash)) throw Error('Invalid account.');
-  const current = await db().prepare('SELECT * FROM portal_accounts WHERE student_id=?').bind(studentId).first<Row>();
-  if (current?.pending_action_id && data.password_hash === current.pending_base_hash) {
-    await db().prepare('UPDATE portal_accounts SET username=? WHERE student_id=?').bind(data.username.trim(), studentId).run();
-    return;
-  }
-  await db().prepare('INSERT INTO portal_accounts (student_id,username,password_hash,must_change_password) VALUES (?,?,?,?) ON CONFLICT(student_id) DO UPDATE SET username=excluded.username,password_hash=excluded.password_hash,must_change_password=excluded.must_change_password,pending_base_hash=NULL,pending_action_id=NULL')
-    .bind(studentId, data.username.trim(), data.password_hash, data.must_change_password ? 1 : 0).run();
 }

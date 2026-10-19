@@ -15,6 +15,13 @@
       "when": 1792427321299,
       "tag": "0001_overrated_medusa",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1792450000000,
+      "tag": "0002_sync_protocol",
+      "breakpoints": true
     }
   ]
 }

@@ -99,6 +99,7 @@ class SettingsPanel(ctk.CTkFrame):
         ).grid(row=0, column=0, sticky="w", padx=PADDING, pady=(PADDING, 10))
 
         row = 1
+        row = self._cloud_sync_section(scroll, row=row)
         row = self._camera_configuration_section(scroll, row=row)
         row = self._recognition_section(scroll, row=row)
         row = self._violation_section(scroll, row=row)
@@ -124,6 +125,60 @@ class SettingsPanel(ctk.CTkFrame):
             anchor="w", padx=PADDING, pady=(PADDING, 8)
         )
         return card
+
+    def _cloud_sync_section(self, master, *, row):
+        import queue
+        from core.sync_status import read_status
+        card = self._section_card(master, 'Student portal synchronization')
+        card.grid(row=row, column=0, sticky='ew', padx=PADDING, pady=8)
+        label = ctk.CTkLabel(card, text='', justify='left', wraplength=680)
+        label.pack(anchor='w', padx=PADDING, pady=8)
+        results = queue.Queue()
+        busy = [False]
+        def launch(apply=False):
+            if busy[0]:
+                return
+            busy[0] = True
+            def work():
+                try:
+                    import json
+                    from core.cloud_sync import CONFIG, CloudClient, sync_once
+                    from core.sync_audit import audit
+                    config = json.loads(CONFIG.read_text()) if CONFIG.exists() else {}
+                    client = CloudClient(config) if config else None
+                    if apply:
+                        if not client or config.get('enabled') is not True:
+                            raise ValueError('Sync is paused until source registration and production approval.')
+                        sync_once(self.database, client)
+                        result = 'Retry finished. See verified status below.'
+                    else:
+                        report = audit(self.database.db_path, client)
+                        result = json.dumps(report, indent=2)
+                    results.put(result)
+                except Exception:
+                    results.put('Operation stopped. Check source registration, schema and connectivity. No automatic reset or deletion was performed.')
+            threading.Thread(target=work, daemon=True, name='cloud-sync-admin').start()
+        ctk.CTkButton(card, text='Read-only audit', command=launch).pack(anchor='w', padx=PADDING, pady=4)
+        ctk.CTkButton(card, text='Retry approved sync', command=lambda: launch(True)).pack(anchor='w', padx=PADDING, pady=4)
+        output = ctk.CTkTextbox(card, height=130)
+        output.pack(fill='x', padx=PADDING, pady=8)
+        def refresh():
+            if not self.winfo_exists():
+                return
+            state = read_status(self.database.db_path)
+            label.configure(text=f"{state.get('state', 'paused').title()} · Last verified: {state.get('last_success', 'never')}\n"
+                f"Pending: {state.get('pending', 'unknown')} · Oldest: {state.get('oldest_pending') or 'unknown'} · Evidence verified: {state.get('evidence_verified', 0)}\n"
+                f"{state.get('message', '')}")
+            try:
+                result = results.get_nowait()
+                busy[0] = False
+                output.delete('1.0', 'end')
+                output.insert('1.0', result)
+            except queue.Empty:
+                pass
+            self.after(2000, refresh)
+        refresh()
+        return row + 1
 
     def _camera_configuration_section(self, master, *, row: int) -> int:
         section = CameraConfigurationSection(
