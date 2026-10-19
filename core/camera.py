@@ -15,6 +15,20 @@ import numpy as np
 CAMERA_DEVICE_LOCK = threading.Lock()
 
 
+def usb_camera_label(index: int) -> str:
+    if index == 0 and platform.system() == "Darwin":
+        return "MacBook Camera"
+    return f"USB Camera {index}"
+
+
+def usb_camera_backends() -> tuple:
+    if platform.system() == "Windows":
+        return (cv2.CAP_DSHOW, cv2.CAP_MSMF)
+    if platform.system() == "Darwin":
+        return (cv2.CAP_AVFOUNDATION,)
+    return (None,)
+
+
 @dataclass(frozen=True)
 class CameraSample:
     frame: np.ndarray
@@ -59,13 +73,16 @@ class CameraCapture:
         self._frame_wall_time = None
         self._source_token = uuid.uuid4().hex
 
-    def _backend(self) -> int | None:
-        if platform.system() == "Darwin" and hasattr(cv2, "CAP_AVFOUNDATION"):
-            return cv2.CAP_AVFOUNDATION
+    def _try_open_index(self, index: int) -> cv2.VideoCapture | None:
+        for backend in usb_camera_backends():
+            if self.cancel_event.is_set():
+                return None
+            cap = self._open_index_backend(index, backend)
+            if cap is not None:
+                return cap
         return None
 
-    def _try_open_index(self, index: int) -> cv2.VideoCapture | None:
-        backend = self._backend()
+    def _open_index_backend(self, index: int, backend: int | None) -> cv2.VideoCapture | None:
         cap = (
             cv2.VideoCapture(index, backend)
             if backend is not None

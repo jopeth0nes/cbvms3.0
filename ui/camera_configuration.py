@@ -17,6 +17,7 @@ from api.camera_store import (
     get_saved_ip_cameras,
     resolve_camera_source,
 )
+from core.camera import usb_camera_label
 from core.ip_camera import build_candidate_urls, redact
 from ui.components import (
     COLOR_ACCENT,
@@ -388,7 +389,7 @@ class CameraConfigurationSection(ctk.CTkFrame):
     if delete_ip_camera(raw):
       if (self._active or {}).get("id") == cam.get("id"):
         fallback = self._preference_for(
-            {"id": "usb_0", "type": "usb", "index": 0, "label": "MacBook Camera"}
+            {"id": "usb_0", "type": "usb", "index": 0, "label": usb_camera_label(0)}
         )
         self._active = fallback
         self._on_camera_connected(dict(fallback))

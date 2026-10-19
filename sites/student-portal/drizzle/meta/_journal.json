@@ -1,0 +1,20 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1792426035560,
+      "tag": "0000_furry_moira_mactaggert",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1792427321299,
+      "tag": "0001_overrated_medusa",
+      "breakpoints": true
+    }
+  ]
+}

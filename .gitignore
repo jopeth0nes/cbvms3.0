@@ -4,6 +4,18 @@ venv/
 env/
 cbvms/.venv/
 
+# Project-local runtime installations and setup downloads
+/.desktop-python/
+/.python-runtime/
+/.python-runtime.zip
+/.python-installer.exe
+/.get-pip.py
+/*.log
+
+# Temporary Sites starter and local nested repository metadata
+/sites/portal-starter/
+/sites/student-portal/.git/
+
 # Nested duplicate project folder (local copy with its own .git / venv)
 cbvms/
 

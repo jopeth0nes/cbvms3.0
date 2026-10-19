@@ -30,6 +30,8 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     database = CBVMSDatabase()
     database.initialize()
+    from core.cloud_sync import start_cloud_sync
+    start_cloud_sync(database)
 
     # Build the heavy CV objects now and warm their models on a background thread while
     # the login screen is up — by the time the user signs in, scanning is ready to go.

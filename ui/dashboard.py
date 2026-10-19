@@ -15,7 +15,7 @@ import cv2
 import customtkinter as ctk
 import numpy as np
 
-from core.camera import CAMERA_DEVICE_LOCK, CameraCapture
+from core.camera import CAMERA_DEVICE_LOCK, CameraCapture, usb_camera_label
 from core.discipline import local_calendar_day_utc_bounds
 from core.notifier import Notifier
 from core.person_detector import PersonDetector
@@ -150,7 +150,7 @@ class CBVMSDashboard(WorkspaceWindow):
         self._camera_state = 'IDLE'
         self._camera_message = 'Camera: Starting…'
         self._camera_established = False
-        self._camera_requested_source = dict(id='usb_0', type='usb', index=0, label='MacBook Camera')
+        self._camera_requested_source = dict(id='usb_0', type='usb', index=0, label=usb_camera_label(0))
         self._camera_active_source = None
         # Power saver: the camera is released when no consumer (Live view, enroll
         # wizard, or training capture modal) has asked for a frame recently.
@@ -430,9 +430,9 @@ class CBVMSDashboard(WorkspaceWindow):
         # Quick camera source switcher — flip between the MacBook camera and any saved
         # IP camera instantly, without opening Settings. Persists the choice.
         self._cam_sources: dict[str, dict] = {}
-        self._cam_source_var = ctk.StringVar(value="MacBook Camera")
+        self._cam_source_var = ctk.StringVar(value=usb_camera_label(0))
         self._cam_switcher = ctk.CTkOptionMenu(
-            title_row, variable=self._cam_source_var, values=["MacBook Camera"],
+            title_row, variable=self._cam_source_var, values=[usb_camera_label(0)],
             width=190, height=30, command=self._on_switch_camera,
             fg_color=COLOR_SURFACE, button_color=COLOR_BORDER,
             button_hover_color=COLOR_ACCENT_HOVER, font=body_small_font(),
@@ -507,7 +507,7 @@ class CBVMSDashboard(WorkspaceWindow):
         self._camera_actions.grid(row=5, column=0, sticky='w', padx=PADDING, pady=4)
         for text, command in (
             ('Retry camera', self._retry_selected_camera),
-            ('Return to MacBook Camera', lambda: self._on_switch_camera('MacBook Camera')),
+            (f'Return to {usb_camera_label(0)}', lambda: self._on_switch_camera(usb_camera_label(0))),
             ('Camera Settings', lambda: self._on_nav_select('settings')),
         ):
             ctk.CTkButton(self._camera_actions, text=text, command=command, height=28).pack(side='left', padx=(0, 8))
@@ -944,7 +944,7 @@ class CBVMSDashboard(WorkspaceWindow):
 
         usb_by_index: dict[int, dict] = {
             0: {"id": "usb_0", "type": "usb", "index": 0,
-                "label": "MacBook Camera", "status": "connected"},
+                "label": usb_camera_label(0), "status": "connected"},
         }
         for cam in self._discovered_usb_sources:
             try:
@@ -955,7 +955,7 @@ class CBVMSDashboard(WorkspaceWindow):
                 "id": str(cam.get("id") or f"usb_{index}"),
                 "type": "usb",
                 "index": index,
-                "label": "MacBook Camera" if index == 0 else str(
+                "label": usb_camera_label(0) if index == 0 else str(
                     cam.get("label") or f"USB Camera {index}"
                 ),
                 "status": cam.get("status", "available"),
@@ -984,7 +984,7 @@ class CBVMSDashboard(WorkspaceWindow):
         except Exception:
             return
         # Reflect the currently-active source in the dropdown without re-triggering it.
-        current = "MacBook Camera"
+        current = usb_camera_label(0)
         if self._camera_source_url:
             for k, v in sources.items():
                 if v.get("url") == self._camera_source_url:
@@ -1036,7 +1036,7 @@ class CBVMSDashboard(WorkspaceWindow):
         if self._camera_source_url is None:
             self._camera_index_setting = int(camera_index)
             self._camera_requested_source = dict(id=f'usb_{camera_index}', type='usb',
-                index=int(camera_index), label='MacBook Camera' if int(camera_index) == 0 else f'USB Camera {camera_index}')
+                index=int(camera_index), label=usb_camera_label(int(camera_index)))
         self._camera_resolution_setting = (int(resolution[0]), int(resolution[1]))
         self._fps_cap_setting = max(10, min(60, int(fps_cap)))
         self._feed_interval_ms = max(16, 1000 // self._fps_cap_setting)

@@ -2,23 +2,15 @@
 
 from __future__ import annotations
 
-import platform
 import threading
 from typing import Any
 
-import cv2
 
 from api.camera_store import get_camera_preference, get_saved_ip_cameras, save_camera_preference
-from core.camera import CAMERA_DEVICE_LOCK, CameraCapture
+from core.camera import CAMERA_DEVICE_LOCK, CameraCapture, usb_camera_label
 from core.ip_camera import open_stream, probe_camera
 
 _USB_SCAN_MAX = 10
-
-
-def _backend() -> int | None:
-    if platform.system() == "Darwin" and hasattr(cv2, "CAP_AVFOUNDATION"):
-        return cv2.CAP_AVFOUNDATION
-    return None
 
 
 def test_ip_camera(url: str, *, timeout_frames: int = 15, cancel_event=None) -> bool:
@@ -44,7 +36,6 @@ def probe_ip_camera(address: str, username: str = "", password: str = "",
 
 def scan_usb_cameras(*, cancel_event=None) -> list[dict[str, Any]]:
     cameras: list[dict[str, Any]] = []
-    backend = _backend()
     import time
     cancelled = cancel_event or threading.Event()
     deadline = time.monotonic() + 3
@@ -59,27 +50,21 @@ def scan_usb_cameras(*, cancel_event=None) -> list[dict[str, Any]]:
         for index in range(_USB_SCAN_MAX):
             if cancelled.is_set():
                 break
-            cap = (
-                cv2.VideoCapture(index, backend)
-                if backend is not None
-                else cv2.VideoCapture(index)
-            )
-            if cap is None or not cap.isOpened():
-                if cap is not None:
-                    cap.release()
-                continue
-            ret, _ = cap.read()
-            if ret:
+            capture = CameraCapture(camera_index=index, cancel_event=cancelled)
+            try:
+                if not capture.open():
+                    continue
                 cameras.append(
                     {
                         "id": f"usb_{index}",
                         "index": index,
                         "type": "usb",
-                        "label": f"USB Camera {index}",
+                        "label": usb_camera_label(index),
                         "status": "available",
                     }
                 )
-            cap.release()
+            finally:
+                capture.release()
     finally:
         CAMERA_DEVICE_LOCK.release()
     return cameras

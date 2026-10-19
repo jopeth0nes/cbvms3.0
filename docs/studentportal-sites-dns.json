@@ -1,0 +1,29 @@
+{
+  "domain": "studentportal.bond",
+  "status": "active",
+  "replace_existing_apex_record": true,
+  "records": [
+    {
+      "type": "A",
+      "name": "@",
+      "value": "162.159.143.30",
+      "proxy": "DNS only"
+    },
+    {
+      "type": "A",
+      "name": "@",
+      "value": "172.66.3.26",
+      "proxy": "DNS only"
+    },
+    {
+      "type": "TXT",
+      "name": "_openai-site-verification.studentportal.bond",
+      "value": "openai-site-verification=KOvr9Cldzw9mab00m1TyhTKjtoNE9e_flRi-YKNkOr4"
+    },
+    {
+      "type": "TXT",
+      "name": "_cf-custom-hostname.studentportal.bond",
+      "value": "1a626d14-d170-4308-a3f8-a6bd964769c6"
+    }
+  ]
+}

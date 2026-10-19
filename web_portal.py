@@ -39,8 +39,15 @@ def public(value):
 class PortalServer(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, address, database):
+    def __init__(self, address, database, *, public_origin=None):
+        if public_origin:
+            parsed = urlsplit(public_origin)
+            if (parsed.scheme != 'https' or not parsed.hostname or parsed.username
+                    or parsed.password or parsed.path not in ('', '/') or parsed.query or parsed.fragment):
+                raise ValueError('Public origin must be an HTTPS origin, such as https://studentportal.bond')
+            public_origin = public_origin.rstrip('/')
         super().__init__(address, PortalHandler)
+        self.public_origin = public_origin
         self.database = database
         self.attempts = {}
         self.lock = threading.Lock()
@@ -77,7 +84,8 @@ class PortalHandler(BaseHTTPRequestHandler):
     def session_reply(self, session):
         token = session['session_token']
         age = max(0, int(session['expires'] - time.time()))
-        return self.reply(200, session, cookie=f'cbvms_session={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age={age}')
+        secure = '; Secure' if self.server.public_origin else ''
+        return self.reply(200, session, cookie=f'cbvms_session={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age={age}{secure}')
 
     def do_GET(self):
         self.handle_request(False)
@@ -112,7 +120,8 @@ class PortalHandler(BaseHTTPRequestHandler):
             if self.headers.get('Content-Type', '').split(';')[0] != 'application/json':
                 return self.reply(415, {'error': 'JSON required.'})
             origin = self.headers.get('Origin')
-            if origin and origin != f'http://{self.headers.get("Host")}':
+            expected_origin = self.server.public_origin or f'http://{self.headers.get("Host")}'
+            if (self.server.public_origin or origin) and origin != expected_origin:
                 return self.reply(403, {'error': 'Request origin rejected.'})
             data = json.loads(self.rfile.read(size))
             if not isinstance(data, dict):
@@ -139,7 +148,8 @@ class PortalHandler(BaseHTTPRequestHandler):
             return self.reply(403, {'error': 'Please refresh and try again.'})
         if write and path == '/api/logout':
             db.revoke_student_session(token)
-            return self.reply(200, {'ok': True}, cookie='cbvms_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0')
+            secure = '; Secure' if self.server.public_origin else ''
+            return self.reply(200, {'ok': True}, cookie=f'cbvms_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0{secure}')
         if not write and path == '/api/me':
             return self.reply(200, session if session['must_change_password'] else
                               dict(session, preferences=db.get_portal_preferences(sid)))
@@ -213,11 +223,12 @@ def main():
     parser.add_argument('--host', default='127.0.0.1')
     parser.add_argument('--port', type=int, default=8080)
     parser.add_argument('--database', type=Path)
+    parser.add_argument('--public-origin', help='Exact HTTPS origin when serving behind a TLS tunnel or proxy')
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
     db = CBVMSDatabase(args.database)
     db.initialize()
-    server = PortalServer((args.host, args.port), db)
+    server = PortalServer((args.host, args.port), db, public_origin=args.public_origin)
     print(f'Student portal: http://{args.host}:{args.port} | Database: {db.db_path}', flush=True)
     try:
         server.serve_forever()

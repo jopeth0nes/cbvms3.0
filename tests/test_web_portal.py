@@ -35,7 +35,7 @@ class WebPortalTests(unittest.TestCase):
         self.server.server_close()
         self.thread.join()
 
-    def request(self, path, data=None, csrf=True):
+    def request(self, path, data=None, csrf=True, extra_headers=None):
         conn = http.client.HTTPConnection(*self.server.server_address)
         headers = {}
         if self.cookie:
@@ -44,6 +44,7 @@ class WebPortalTests(unittest.TestCase):
             headers['Content-Type'] = 'application/json'
             if csrf:
                 headers['X-CSRF-Token'] = self.csrf
+        headers.update(extra_headers or {})
         conn.request('POST' if data is not None else 'GET', path,
                      json.dumps(data) if data is not None else None, headers)
         result = conn.getresponse()
@@ -62,6 +63,34 @@ class WebPortalTests(unittest.TestCase):
         status, session = self.request('/api/setup/password', {'password': 'personal passphrase', 'confirmation': 'personal passphrase'})
         self.assertEqual(status, 200, session)
         self.csrf = session['csrf']
+
+    def test_public_https_origin_allows_login_and_sets_secure_cookie(self):
+        self.server.public_origin = 'https://studentportal.bond'
+        conn = http.client.HTTPConnection(*self.server.server_address)
+        conn.request('POST', '/api/login', json.dumps({'username': 'S1', 'password': 'password'}),
+                     {'Content-Type': 'application/json', 'Origin': self.server.public_origin})
+        response = conn.getresponse()
+        self.assertEqual(response.status, 200)
+        cookie = response.getheader('Set-Cookie')
+        self.assertIn('; Secure', cookie)
+        self.assertIn('; HttpOnly', cookie)
+        response.read()
+        conn.close()
+
+    def test_public_mode_rejects_missing_or_wrong_origin_even_with_proxy_headers(self):
+        self.server.public_origin = 'https://studentportal.bond'
+        for headers in ({}, {'Origin': 'https://other.example'},
+                        {'Origin': 'http://studentportal.bond'},
+                        {'Origin': 'https://other.example', 'X-Forwarded-Host': 'other.example',
+                         'X-Forwarded-Proto': 'https'}):
+            self.assertEqual(self.request('/api/login', {'username': 'S1', 'password': 'password'},
+                                          extra_headers=headers)[0], 403)
+
+    def test_public_origin_requires_https_without_path(self):
+        for origin in ('http://studentportal.bond', 'https://studentportal.bond/path',
+                       'https://user:pass@studentportal.bond'):
+            with self.assertRaises(ValueError):
+                PortalServer(('127.0.0.1', 0), self.db, public_origin=origin)
 
     def test_authentication_csrf_logout_and_preferences(self):
         self.assertEqual(self.request('/api/page')[0], 401)
