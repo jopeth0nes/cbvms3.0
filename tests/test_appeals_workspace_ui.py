@@ -9,6 +9,7 @@ from unittest.mock import patch
 import customtkinter as ctk
 from database.db_manager import CBVMSDatabase
 from tests.evidence_fixture import picture_evidence
+from tests.term_fixture import verified_term
 from ui.appeals_panel import AppealsPanel
 from core.appeal_categories import BY_CODE, BY_OPTION, CATEGORIES, SELECT_CATEGORY, LEGACY_CATEGORY
 
@@ -19,6 +20,7 @@ class AppealsWorkspaceTests(unittest.TestCase):
         self.tmp=tempfile.TemporaryDirectory()
         self.db=CBVMSDatabase(Path(self.tmp.name)/'ui.db');self.db.initialize()
         self.db.insert_student('2023-00883','Fixture Student','BSIT','3A',b'',b'')
+        verified_term(self.db,'2023-00883')
         self.ids=[]
         for _ in range(13):
             vid=self.db.log_violation('2023-00883','Fixture Student','wrong_uniform',snapshot_jpeg=picture_evidence()[2])

@@ -1,0 +1,13 @@
+# Managed by codex-on-crack. Edit roles here, then run setup again to regenerate the agent files.
+schema_version = 1
+
+[installation]
+profile = ""
+catalog = "/Users/jopethones/.codex/models_cache.json"
+
+[roles.builder]
+model = "gpt-6-luna"
+effort = "medium"
+tasks = ["implementation", "tests", "ui"]
+writes = true
+brief = "Implement one bounded CBVMS assignment including scoped discovery, tests and debugging. Astra owns architecture, security decisions and acceptance. Never delegate; return changed files, exact verification evidence and unresolved risks."

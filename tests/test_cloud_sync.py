@@ -150,6 +150,21 @@ class ProtocolTests(CloudSyncTests):
         with readonly(target) as conn:
             self.assertEqual(conn.execute("SELECT name FROM students WHERE student_id='S1'").fetchone()[0], 'Committed WAL')
 
+    def test_readonly_uri_cannot_create_missing_database_or_write_existing_one(self):
+        import sqlite3
+        from core.sync_audit import readonly
+        missing = Path(self.temp.name) / 'missing database #1.db'
+        with self.assertRaises(sqlite3.OperationalError):
+            with readonly(missing):
+                self.fail('A missing database must not open')
+        self.assertFalse(missing.exists())
+        with readonly(self.db.db_path) as conn:
+            self.assertTrue(conn.in_transaction)
+            self.assertEqual(conn.execute('PRAGMA query_only').fetchone()[0], 1)
+            conn.execute('PRAGMA query_only=OFF')
+            with self.assertRaises(sqlite3.OperationalError):
+                conn.execute("UPDATE students SET name='Must not persist'")
+
     def test_consistent_export_snapshot(self):
         from core.cloud_sync import frozen_database
         with frozen_database(self.db) as frozen:

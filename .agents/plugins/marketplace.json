@@ -1,0 +1,32 @@
+{
+  "name": "cbvms-local",
+  "interface": {
+    "displayName": "Cbvms Local"
+  },
+  "plugins": [
+    {
+      "name": "cbvms-ecc",
+      "source": {
+        "source": "local",
+        "path": "./plugins/cbvms-ecc"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    },
+    {
+      "name": "codex-on-crack",
+      "source": {
+        "source": "local",
+        "path": "./plugins/codex-on-crack"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    }
+  ]
+}

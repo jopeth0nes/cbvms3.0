@@ -1,0 +1,16 @@
+# Project-only defaults. Inherit provider, credentials, effort and permissions.
+model = "gpt-6-astra"
+
+[agents]
+max_concurrent_threads_per_session = 1
+max_depth = 1
+
+[marketplaces.cbvms-local]
+source_type = "local"
+source = "/Users/jopethones/Documents/GitHub/cbvms3.0"
+
+[plugins."cbvms-ecc@cbvms-local"]
+enabled = true
+
+[plugins."codex-on-crack@cbvms-local"]
+enabled = true

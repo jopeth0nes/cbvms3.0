@@ -14,6 +14,7 @@ from core.reports import violation_values, VIOLATION_HEADERS
 from database.appeal_category_migration import migrate_appeal_categories
 from database.db_manager import CBVMSDatabase
 from tests.evidence_fixture import picture_evidence
+from tests.term_fixture import verified_term
 
 
 class AppealCategoryTests(unittest.TestCase):
@@ -27,6 +28,7 @@ class AppealCategoryTests(unittest.TestCase):
         self.serial+=1
         sid=f'000{self.serial}-A/B'
         self.db.insert_student(sid,'Student','BSIT','3A',b'face',b'photo')
+        verified_term(self.db,sid)
         vid=self.db.log_violation(sid,'Student','wrong_uniform',snapshot_jpeg=picture_evidence()[2])
         aid=self.db.insert_appeal(vid,sid,'Please review the original incident.',evidence=picture_evidence())
         return sid,vid,aid

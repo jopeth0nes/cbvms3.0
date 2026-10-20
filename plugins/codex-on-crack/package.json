@@ -1,0 +1,9 @@
+{
+  "name": "codex-on-crack",
+  "private": true,
+  "version": "2.2.2+cbvms.1",
+  "type": "module",
+  "engines": {
+    "node": ">=24.15.0"
+  }
+}

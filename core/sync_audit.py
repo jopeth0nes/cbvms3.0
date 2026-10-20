@@ -9,7 +9,7 @@ PROTOCOL = 2
 
 @contextmanager
 def readonly(path):
-    conn = sqlite3.connect(Path(path).resolve().as_uri() + '?mode=ro')
+    conn = sqlite3.connect(Path(path).resolve().as_uri() + '?mode=ro', uri=True)
     conn.row_factory = sqlite3.Row
     conn.execute('PRAGMA query_only=ON')
     conn.execute('BEGIN')
