@@ -39,6 +39,9 @@ class ReportCSVTests(unittest.TestCase):
         self.assertEqual(self.db.get_student_by_student_id('00001')['name'], 'Original')
 
     def test_discipline_export_reads_real_records_and_escapes_formulas(self):
+        from tests.term_fixture import verified_term
+        from core.discipline import utc_now
+        verified_term(self.db,'00001',utc_now().year)
         self.db.log_violation('00001', 'Original', 'wrong_uniform')
         rows = live_rows(self.db, 'Discipline')
         self.assertEqual(rows[0]['record_type'], 'Violation')

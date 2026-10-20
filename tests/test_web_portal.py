@@ -1,3 +1,4 @@
+from tests.term_fixture import verified_term
 import base64
 import http.client
 import json
@@ -21,6 +22,7 @@ class WebPortalTests(unittest.TestCase):
         for sid in ('S1', 'S2'):
             self.db.insert_student(sid, sid, 'BSIT', '3A', b'biometric', b'photo',
                 account_username=sid, account_password='password', email=f'{sid}@example.com')
+            verified_term(self.db,sid)
         self.server = PortalServer(('127.0.0.1', 0), self.db)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()

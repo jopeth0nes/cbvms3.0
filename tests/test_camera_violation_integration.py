@@ -21,6 +21,8 @@ class CameraViolationIntegrationTests(unittest.TestCase):
         database.initialize()
         database.insert_student(student_id="S-1", name="Student S-1", course="BSIT",
                                 year_and_section="3A", encoding=b"", photo=b"", gender="Male")
+        from tests.term_fixture import verified_term
+        verified_term(database,'S-1',2027)
         return database
 
     def fixture(self):
@@ -75,6 +77,8 @@ class CameraViolationIntegrationTests(unittest.TestCase):
         fixture = self.fixture()
         sid = "2023-00883"
         fixture.database.insert_student(sid,"Fixture Student","BSIT","3A",b"",b"")
+        from tests.term_fixture import verified_term
+        verified_term(fixture.database,sid,2027)
         fixture.recognizer.recognize_faces.return_value = [detection(sid)]
         fixture.persist(fixture.confirmed())
         rows = fixture.database.get_visible_violations_for_student(sid)
@@ -139,7 +143,7 @@ class CameraViolationIntegrationTests(unittest.TestCase):
         result = fixture.confirmed()
         # Standing changes after recognition, before the transaction commits.
         with fixture.database.connect() as connection:
-            connection.execute("UPDATE students SET student_status='Graduate' WHERE student_id='S-1'")
+            connection.execute("UPDATE student_term_enrollments SET status='withdrawn' WHERE student_id='S-1'")
         fixture.persist(result)
         self.assertEqual(fixture.database.get_violations_for_student("S-1"), [])
         self.assertEqual(fixture.database.query_attendance(view="events")["count"], 1)

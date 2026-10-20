@@ -7,7 +7,8 @@ ROSTER = ('student_id', 'name', 'college_department', 'course', 'section', 'year
 DISCIPLINE_BASE = ROSTER + ('record_type', 'record_id', 'category', 'status', 'date', 'ends_at', 'reason')
 DECISION_COLUMNS = ('appeal_status','decision_category_code','decision_category_label','decision_category_version',
                     'decision_reason','decided_by','decided_at')
-DISCIPLINE = DISCIPLINE_BASE + DECISION_COLUMNS
+TERM_COLUMNS = ('semester_id','semester_name','school_year','enrollment_status')
+DISCIPLINE = DISCIPLINE_BASE + DECISION_COLUMNS + TERM_COLUMNS
 
 
 def student_fields(student):
@@ -54,13 +55,13 @@ def read_csv(path, kind):
                 raise ValueError(f'Line {line}: column count does not match the header.')
             clean = {key: row[key].strip() for key in columns}
             if kind != 'Roster':
-                clean.update({key:(row.get(key) or '').strip() for key in DECISION_COLUMNS})
+                clean.update({key:(row.get(key) or '').strip() for key in DECISION_COLUMNS + TERM_COLUMNS})
             for key, value in clean.items():
                 if len(value) > 1 and value[0] == "'" and value[1] in "'=+-@\t\r":
                     clean[key] = value[1:]
             if not clean['student_id'] or not clean['name']:
                 raise ValueError(f'Line {line}: student_id and name are required.')
-            if kind != 'Roster' and (clean['college_department'] or clean['course']) and clean['course'] != NEEDS_REVIEW:
+            if kind != 'Roster' and (clean['college_department'] or clean['course']) and clean['course'] not in (NEEDS_REVIEW, 'Unverified'):
                 try:
                     clean['college_department'], clean['course'] = validate_pair(clean['college_department'], clean['course'])
                 except ValueError as exc:
@@ -112,28 +113,36 @@ def import_roster(database, rows):
 
 
 def live_rows(database, kind):
+    import json
     from core.discipline import violation_display_name
     from ui.suspensions_panel import suspension_state
-    students = {s['student_id']: student_fields(dict(s)) for s in database.get_all_students()}
     if kind == 'Roster':
-        return list(students.values())
-    rows = []
+        # Identity demographics only; confirmed term rosters use query_term_roster.
+        return [student_fields(dict(s)) for s in database.get_all_students()]
+    rows=[]
     with database.connect() as conn:
-        for record in conn.execute('''SELECT v.*,a.status AS appeal_status,a.decision_category_code,
+        terms={r['id']:dict(r) for r in conn.execute('SELECT * FROM academic_terms')}
+        for record in conn.execute("""SELECT v.*,a.status AS appeal_status,a.decision_category_code,
                 a.decision_category_label,a.decision_category_version,a.admin_notes AS decision_reason,a.decided_by,a.decided_at
-                FROM violations v LEFT JOIN appeals a ON a.violation_id=v.id ORDER BY v.timestamp DESC'''):
-            r = dict(record)
-            base = students.get(r['student_id'], dict.fromkeys(ROSTER, ''))
-            rows.append(dict(base, student_id=r['student_id'] or '', name=r['student_name'] or base['name'],
-                             record_type='Violation', record_id=str(r['id']),
-                             category=violation_display_name(r['violation_code']), status=r['status'],
-                             date=r['timestamp'], ends_at='', reason='',
-                             **{key: (category_display(r) if r.get('appeal_status') in ('approved','rejected') else '')
-                                if key=='decision_category_label' else r.get(key) or '' for key in DECISION_COLUMNS}))
-        for record in conn.execute('SELECT * FROM student_suspensions ORDER BY imposed_at DESC'):
-            r = dict(record)
-            base = students.get(r['student_id'], dict.fromkeys(ROSTER, ''))
-            rows.append(dict(base, student_id=r['student_id'], record_type='Suspension',
-                             record_id=str(r['id']), category='Suspension', status=suspension_state(r),
-                             date=r['starts_at'], ends_at=r['ends_at'] or '', reason=r['reason']))
+                FROM violations v LEFT JOIN appeals a ON a.violation_id=v.id ORDER BY v.timestamp DESC"""):
+            r=dict(record);academic=json.loads(r.get('academic_snapshot') or '{}');term=terms.get(r['semester_id'],{})
+            rows.append(dict(student_id=r['student_id'] or '',name=r['student_name'] or '',
+                college_department=academic.get('college_department') or 'Unverified',course=academic.get('course') or 'Unverified',
+                year_level=academic.get('report_year_level') or '',section=academic.get('report_section') or '',
+                semester_id=r['semester_id'],semester_name=term.get('semester_name','Outside academic term'),
+                school_year=term.get('school_year',''),enrollment_status=r['enrollment_status'],
+                record_type='Violation',record_id=str(r['id']),category=violation_display_name(r['violation_code']),
+                status=r['status'],date=r['timestamp'],ends_at='',reason='',
+                **{key:(category_display(r) if r.get('appeal_status') in ('approved','rejected') else '')
+                   if key=='decision_category_label' else r.get(key) or '' for key in DECISION_COLUMNS}))
+        for record in conn.execute("""SELECT s.*,v.semester_id,v.academic_snapshot FROM student_suspensions s
+                LEFT JOIN violations v ON v.id=s.violation_id ORDER BY s.imposed_at DESC"""):
+            r=dict(record);academic=json.loads(r.get('academic_snapshot') or '{}');term=terms.get(r['semester_id'],{})
+            rows.append(dict(student_id=r['student_id'],name='',record_type='Suspension',record_id=str(r['id']),
+                college_department=academic.get('college_department') or 'Unverified',course=academic.get('course') or 'Unverified',
+                year_level=academic.get('report_year_level') or '',section=academic.get('report_section') or '',
+                semester_id=r['semester_id'],semester_name=term.get('semester_name','Legacy / Unassigned'),
+                school_year=term.get('school_year',''),enrollment_status='',category='Suspension',
+                status='Ended by term rollover' if r['effective_ended_at'] else suspension_state(r),
+                date=r['starts_at'],ends_at=r['effective_ended_at'] or r['ends_at'] or '',reason=r['reason']))
     return rows

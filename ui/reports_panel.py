@@ -44,7 +44,7 @@ class ReportsPanel(ctk.CTkFrame):
                           command=lambda _: self.refresh()).grid(row=0, column=1, columnspan=2, sticky='ew', padx=10, pady=10)
         self.filters = {}
         self.menus = {}
-        for column, (key, title) in enumerate([('college_department', 'College / Department'),
+        for column, (key, title) in enumerate([('school_year','Academic year'), ('semester_name','Term'), ('college_department', 'College / Department'),
                                                ('course', 'Course'), ('section', 'Section'), ('year_level', 'Year level')]):
             ctk.CTkLabel(tools, text=title, anchor='w', text_color=COLOR_TEXT_MUTED,
                          font=body_small_font()).grid(row=1, column=column, sticky='ew', padx=10)
@@ -75,6 +75,7 @@ class ReportsPanel(ctk.CTkFrame):
         style.map('Reports.Treeview', background=[('selected', COLOR_ACCENT)])
         self.tree = ttk.Treeview(table, show='headings', style='Reports.Treeview')
         self.tree.grid(row=0, column=0, sticky='nsew')
+        self.tree.bind('<Double-1>',self.open_evidence)
         vertical = ttk.Scrollbar(table, orient='vertical', command=self.tree.yview)
         vertical.grid(row=0, column=1, sticky='ns')
         horizontal = ttk.Scrollbar(table, orient='horizontal', command=self.tree.xview)
@@ -101,7 +102,7 @@ class ReportsPanel(ctk.CTkFrame):
                 return
             self.rows = rows
             for key, menu in self.menus.items():
-                values = ['All', *sorted({r[key] or 'Unspecified' for r in rows}, key=str.casefold)]
+                values = ['All', *sorted({r.get(key) or 'Unspecified' for r in rows}, key=str.casefold)]
                 if key == 'college_department':
                     values = list(dict.fromkeys(['All', *COLLEGES, *values[1:]]))
                 menu.configure(values=values)
@@ -129,11 +130,12 @@ class ReportsPanel(ctk.CTkFrame):
             self.message.configure(text='Date filters apply to Discipline reports. Select Discipline or clear the dates.')
             return False
         self.filtered = [r for r in self.rows if all(var.get() == 'All' or
-                         (r[key] or 'Unspecified') == var.get() for key, var in self.filters.items())]
+                         (r.get(key) or 'Unspecified') == var.get() for key, var in self.filters.items())]
         if start or end:
             def in_range(row):
                 stamp = parse_db_datetime(row.get('date'))
-                day = stamp.astimezone().date() if stamp else None
+                from core.academic_calendar import MANILA
+                day = stamp.astimezone(MANILA).date() if stamp else None
                 return day is not None and (not start or day >= start) and (not end or day <= end)
             self.filtered = [r for r in self.filtered if in_range(r)]
         self.filtered.sort(key=lambda r: str(r.get(self.sort_key) or '').casefold(), reverse=self.sort_reverse)
@@ -231,3 +233,20 @@ class ReportsPanel(ctk.CTkFrame):
                 self.message.configure(text=f'Imported {len(rows)} {kind.lower()} rows.')
             self.task.run(commit, imported, lambda error: self.message.configure(text=f'Import failed: {error}'))
         self.task.run(read, preview, lambda error: self.message.configure(text=f'Import failed: {error}'))
+
+    def open_evidence(self,_event=None):
+        selected=self.tree.selection()
+        if not selected or self.source.get()!='Live database':return
+        row=self.filtered[int(selected[0])]
+        if row.get('record_type')!='Violation':return
+        def loaded(record):
+            blob=record.get('snapshot')
+            if not blob:
+                messagebox.showinfo('Evidence','No original incident image available.',parent=self);return
+            from PIL import Image,ImageTk
+            import io
+            window=ctk.CTkToplevel(self);window.title(f"Original incident #{row['record_id']}")
+            image=Image.open(io.BytesIO(blob));image.thumbnail((800,600))
+            label=tk.Label(window);label.image=ImageTk.PhotoImage(image);label.configure(image=label.image);label.pack()
+        self.task.run(lambda:self.database.get_student_original_evidence(int(row['record_id']),row['student_id']),
+                      loaded,lambda error:messagebox.showerror('Evidence',error,parent=self))

@@ -95,7 +95,10 @@ def page_snapshot(database, student_id, page, *, offset=0, group='All', violatio
     """Load only a page's metadata; evidence bytes are fetched on explicit request."""
     started = time.monotonic()
     database.process_expired_deadlines(student_id=student_id)
-    data = {'_unread_count': database.get_unread_notification_count(student_id)}
+    data = {'_unread_count': database.get_unread_notification_count(student_id),
+            '_term_history': database.term_history(student_id),
+            '_academic_terms': database.get_academic_terms(),
+            '_enrollment_status': database.enrollment_context(student_id)['status']}
     if page in {'dashboard', 'violations', 'profile'}:
         data['_current_term'] = database.get_current_academic_term() or {}
         data['_strike_summary'] = database.get_strike_summary(student_id)
@@ -110,6 +113,9 @@ def page_snapshot(database, student_id, page, *, offset=0, group='All', violatio
             if row:
                 from core.academics import display_academics
                 data['_student'].update(display_academics(row))
+                enrolled=database.enrollment_context(student_id)['enrollment']
+                if enrolled:
+                    data['_student'].update({k:enrolled[k] for k in ('college_department','course','report_year_level','report_section')})
         data['_active_suspension'] = database.get_active_suspension(student_id)
     if page in {'dashboard', 'violations'}:
         with database.connect() as conn:

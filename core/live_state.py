@@ -211,6 +211,7 @@ class LiveAssessment:
     unknown_confirmed: bool = False
     uniform_assessment: UniformAssessment = UniformAssessment.UNASSESSED
     active_suspension: bool = False
+    enrollment_status: str = ""
 
     @property
     def matched(self) -> bool:
@@ -446,8 +447,8 @@ class LiveState:
             state = IDENTIFYING
             reason = "Confirming identity across fresh frames"
         elif not eligible:
-            state = UNIFORM_NOT_ASSESSED
-            reason = "Student is not eligible for disciplinary checks"
+            state = "Enrollment review"
+            reason = str(row.get('enrollment_status') or 'Enrollment needs verification')
         elif not torso_valid or not row.get("uniform_available", False):
             state = UNIFORM_NOT_ASSESSED
             reason = reason or "A visible, confidently associated torso is required"
@@ -526,6 +527,7 @@ class LiveState:
             accepted_categories=tuple(accepted), association_valid=association_valid,
             academic_snapshot=tuple(row.get("academic_snapshot", ())),
             term_snapshot=tuple(row.get("term_snapshot", ())),
+            enrollment_status=str(row.get("enrollment_status") or ""),
             uniform_assessment=(UniformAssessment.CORRECT if label == "correct_uniform" else
                                 UniformAssessment.WRONG if label == "wrong_uniform" else
                                 UniformAssessment.UNASSESSED),

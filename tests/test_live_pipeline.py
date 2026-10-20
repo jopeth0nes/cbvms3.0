@@ -32,6 +32,7 @@ class PipelineFixture:
         self.database = MagicMock()
         self.database.get_student_by_student_id.side_effect = lambda sid: dict(
             student_id=sid, name=f"Student {sid}", student_status="Enrolled", registration_pending=False)
+        self.database.enrollment_context.return_value = {'eligible':True,'status':'Enrolled in current term','enrollment':{},'term':{}}
         self.database.get_active_suspension.return_value = None
         self.database.record_attendance.return_value = True
         self.database.record_premises_entry.return_value = True
@@ -230,6 +231,7 @@ class LivePipelineTests(unittest.TestCase):
     def test_graduate_presence_pending_registration_and_suspension_eligibility(self):
         for status, pending in (("Graduate", False), ("Unenrolled", False), ("Enrolled", True)):
             fx = PipelineFixture()
+            fx.database.enrollment_context.return_value={'eligible':False,'status':'Enrollment unverified — legacy record','enrollment':None,'term':{}}
             fx.database.get_student_by_student_id.side_effect = lambda sid: dict(
                 student_id=sid, student_status=status, registration_pending=pending)
             result = fx.confirmed()

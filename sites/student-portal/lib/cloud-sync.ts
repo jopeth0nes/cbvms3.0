@@ -102,8 +102,9 @@ export async function cloudSync(request: Request, path: string, readBody: (r: Re
     const account = await db().prepare('SELECT * FROM portal_accounts WHERE student_id=?').bind(s.id).first<Obj>();
     if (account && (s.account.credential_version < account.credential_version ||
         (s.account.credential_version === account.credential_version && ![account.password_hash, account.pending_base_hash].includes(s.account.password_hash)))) throw Error('Campus credential revision conflict');
+    if (s.snapshot.schema_version !== 3 || control.minimum_snapshot_version !== 3 || !Array.isArray(s.snapshot.academic_terms) || !s.snapshot.term_history) throw Error('Upgrade desktop: academic snapshot version 3 required');
     const snapshot = JSON.stringify(s.snapshot);
-    if (snapshot.length > 1500000 || /"(?:password_hash|encoding|profile_photo)"\s*:/.test(snapshot)) throw Error('Unsafe snapshot');
+    if (snapshot.length > 1500000 || /"(?:password_hash|encoding|profile_photo|photo|capture_id|capture_hashes|provenance)"\s*:/.test(snapshot)) throw Error('Unsafe snapshot');
     statements.push(db().prepare(`INSERT INTO portal_students (id,email,name,snapshot,synced_at,active) SELECT ?,?,?,?,?,? WHERE ${guard} ON CONFLICT(id) DO UPDATE SET email=excluded.email,name=excluded.name,snapshot=excluded.snapshot,synced_at=excluded.synced_at`).bind(s.id, s.email, s.name, snapshot, new Date().toISOString(), s.active ? 1 : 0, ...fence));
     // A single SQL statement preserves concurrent student password edits. An
     // administrative reset (newer campus revision) supersedes pending changes.

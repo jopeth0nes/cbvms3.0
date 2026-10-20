@@ -231,7 +231,7 @@ class SuspensionsWorkspace(ctk.CTkFrame):
         self.filter_button.grid(row=0,column=1,padx=(0,12),pady=12)
         self.filters_frame=ctk.CTkFrame(p,fg_color=COLOR_SURFACE)
         self.variables={}; self.filter_controls=[]; self.menus={}
-        specs=[('college','College / department',[ALL,*COLLEGES,NEEDS_REVIEW,UNAVAILABLE]),
+        specs=[('academic_year','Academic year',[ALL]),('section','Section',[ALL]),('college','College / department',[ALL,*COLLEGES,NEEDS_REVIEW,UNAVAILABLE]),
                ('course','Course',[ALL,*[x[1] for x in COURSES.values()],NEEDS_REVIEW,UNAVAILABLE]),
                ('year','Year level',[ALL,*YEAR_LEVELS,NEEDS_REVIEW,UNAVAILABLE]),
                ('category','Violation category',[ALL]),('outcome','Violation outcome',[ALL,*OUTCOMES]),
@@ -384,6 +384,8 @@ class SuspensionsWorkspace(ctk.CTkFrame):
         self.period_menu.configure(values=['Current academic term','All Data','Custom date range','Unassigned term',*self._term_options])
         self._category_options={violation_display_name(code):code for code in r['categories']}
         self.menus['category'].configure(values=[ALL,*self._category_options])
+        self.menus['academic_year'].configure(values=[ALL,*sorted({t['school_year'] for t in r['terms']})])
+        self.menus['section'].configure(values=[ALL,*r['sections']])
         self.menus['year'].configure(values=list(dict.fromkeys([ALL,*YEAR_LEVELS,*r['years'],NEEDS_REVIEW,UNAVAILABLE])))
         self.scope.configure(text=r['scope'])
         self.status.configure(text=f"Refreshed {r['refreshed_at']}"+(' · No matching period records.' if not any(r['counts'][k] for k in METRICS) else ''),text_color=COLOR_TEXT_MUTED)

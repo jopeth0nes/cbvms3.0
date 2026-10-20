@@ -23,9 +23,13 @@ class ViolationWorkflowTests(unittest.TestCase):
         self.now = datetime(2099,8,1,2,tzinfo=timezone.utc)
         clock = patch('database.db_manager.utc_now',return_value=self.now)
         self.clock = clock.start(); self.addCleanup(clock.stop)
+        calendar_clock=patch('core.academic_calendar.utc_now',side_effect=lambda:self.clock())
+        calendar_clock.start();self.addCleanup(calendar_clock.stop)
         self.db.initialize()
         for sid in (self.SID,self.OTHER):
             self.db.insert_student(sid,'Fixture student','BSIT','3A',b'',b'')
+            from tests.term_fixture import verified_term
+            verified_term(self.db,sid,2099)
 
     def detect(self, **kwargs):
         return self.db.log_violation(self.SID,'Fixture student','Wrong Uniform (82%)',
@@ -206,8 +210,10 @@ class ViolationWorkflowTests(unittest.TestCase):
         self.decide(aid,'approved')
         self.assertEqual(self.db.get_active_suspension(self.SID,now=self.now)['id'],suspension)
         self.assertEqual(self.db.get_strike_count(self.SID,'earring'),0)
-        self.db.set_current_academic_term('Semester 2','2099-2100')
-        self.assertEqual(self.db.get_strike_count(self.SID,'wrong_uniform'),0)
+        # Report selection cannot change the operational calendar.
+        with self.assertRaises(ValueError):
+            self.db.set_current_academic_term('Semester 2','2099-2100')
+        self.assertEqual(self.db.get_strike_count(self.SID,'wrong_uniform'),3)
         self.assertEqual(self.count('strikes'),3)
 
     def test_migration_is_versioned_fresh_and_preserves_historical_decisions_and_conflicts(self):

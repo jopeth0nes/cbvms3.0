@@ -28,6 +28,7 @@ _STATE_LABELS = {
     "uniform_compliant": ("Uniform compliant", COLOR_SAFE),
     "suspected_uniform_violation": ("Suspected uniform violation", COLOR_DANGER),
     "uniform_not_assessed": ("Uniform not assessed", COLOR_TEXT_MUTED),
+    "enrollment_review": ("Enrollment review", "#C778DD"),
     "unknown_person": ("Unknown person", COLOR_WARNING),
 }
 

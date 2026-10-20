@@ -65,10 +65,10 @@ class AttendanceStore:
                 raise PermissionError('An administrator or superadmin is required.')
             conn.execute('UPDATE attendance_settings SET cooldown_seconds=? WHERE id=1', (seconds,))
 
-    def attendance_term_snapshot(self):
+    def attendance_term_snapshot(self, *, occurred_at=None):
+        from core.academic_calendar import resolve_term
         with self.connect() as conn:
-            row = conn.execute('SELECT id,semester_name,school_year FROM academic_terms WHERE is_current=1 LIMIT 1').fetchone()
-            return dict(row) if row else {}
+            return resolve_term(conn,occurred_at)
 
     def record_attendance(self, student_id, *, observed_at=None, sighting=None, valid_if=None):
         """Single writer boundary. Retries/cooldown/summary updates commit atomically.
@@ -94,6 +94,15 @@ class AttendanceStore:
             if not isinstance(sighting, Sighting) or sighting.student_id != student_id:
                 raise ValueError('Sighting identity does not match the student.')
             timestamp = utc_stamp(sighting.observed_at)
+            from core.academic_calendar import enrollment_context
+            from dataclasses import replace
+            context = enrollment_context(conn,student_id,timestamp)
+            term = context['term']
+            academic = context['enrollment'] or {}
+            sighting = replace(sighting,semester_id=term.get('id'),semester_name=term.get('semester_name',''),
+                school_year=term.get('school_year',''),
+                **{k:academic.get(k,'Unverified' if k in ('college_department','course') else '')
+                   for k in ('college_department','course','report_year_level','report_section')})
             if not sighting.session_id or not sighting.frame_id or not sighting.source_id:
                 raise ValueError('Sighting source, session and frame are required.')
             receipt = conn.execute('SELECT outcome FROM attendance_receipts WHERE event_key=?', (sighting.key,)).fetchone()
@@ -103,19 +112,23 @@ class AttendanceStore:
             observed = parse_db_datetime(timestamp)
             # Both neighbours matter for delayed/out-of-order writes. Exact boundary is accepted.
             near = conn.execute('''SELECT 1 FROM attendance_events WHERE student_id=?
-                AND observed_at>? AND observed_at<? LIMIT 1''', (student_id,
+                AND semester_id IS ? AND observed_at>? AND observed_at<? LIMIT 1''', (student_id,sighting.semester_id,
                 utc_stamp(observed-timedelta(seconds=cooldown)), utc_stamp(observed+timedelta(seconds=cooldown)))).fetchone()
             outcome = 'cooldown' if near else 'accepted'
             conn.execute('INSERT INTO attendance_receipts VALUES(?,?,?)', (sighting.key, outcome, timestamp))
             if not near:
                 payload = sighting.payload()
                 payload['observed_at'] = timestamp
+                payload['enrollment_status'] = context['status']
+                payload['term_classification'] = 'published_term' if term else 'outside_term'
                 payload.update(event_key=sighting.key, attendance_date=manila_date(timestamp),
                                cooldown_seconds=cooldown, persisted_at=utc_stamp(utc_now()))
                 columns = ','.join(payload)
-                conn.execute(f'INSERT INTO attendance_events({columns}) VALUES({",".join("?" for _ in payload)})', tuple(payload.values()))
+                recorded=conn.execute(f'INSERT INTO attendance_events({columns}) VALUES({",".join("?" for _ in payload)})', tuple(payload.values()))
+                if not term:
+                    self._term_exception_conn(conn,'attendance_events',recorded.lastrowid)
                 day = payload['attendance_date']
-                existing = conn.execute('SELECT id FROM attendance WHERE student_id=? AND attendance_date=?', (student_id,day)).fetchone()
+                existing = conn.execute('SELECT id,legacy_summary FROM attendance WHERE student_id=? AND attendance_date=?', (student_id,day)).fetchone()
                 if not existing:
                     conn.execute('''INSERT INTO attendance(student_id,student_name,attendance_date,first_seen,last_seen,
                         sighting_count,legacy_summary,college_department,course,report_year_level,report_section,
@@ -123,7 +136,7 @@ class AttendanceStore:
                         (student_id,sighting.student_name,day,timestamp,timestamp,sighting.college_department,sighting.course,
                          sighting.report_year_level,sighting.report_section,sighting.semester_id,sighting.semester_name,
                          sighting.school_year,'confirmed_sightings' if sighting.provenance=='confirmed_live_identity' else sighting.provenance))
-                else:
+                elif not existing['legacy_summary']:
                     # Snapshot on summaries describes the earliest new accepted event, never current profile data.
                     first = conn.execute('SELECT * FROM attendance_events WHERE student_id=? AND attendance_date=? ORDER BY observed_at,id LIMIT 1', (student_id,day)).fetchone()
                     conn.execute('''UPDATE attendance SET first_seen=MIN(first_seen,?), last_seen=MAX(last_seen,?),
@@ -141,13 +154,13 @@ class AttendanceStore:
         if view not in ('summary','events'):
             raise ValueError('Choose Daily Summary or Sighting Events.')
         filters = validate_filters(filters)
-        table = 'attendance' if view == 'summary' else 'attendance_events'
+        table = 'attendance_report_summaries' if view == 'summary' else 'attendance_events'
         clauses, args = [], []
         for key, value in filters.items():
             if key in ('start','end'):
                 clauses.append(f'a.attendance_date {">=" if key=="start" else "<="} ?')
             elif key == 'source_id' and view == 'summary':
-                clauses.append('EXISTS(SELECT 1 FROM attendance_events e WHERE e.student_id=a.student_id AND e.attendance_date=a.attendance_date AND e.source_id=?)')
+                clauses.append('EXISTS(SELECT 1 FROM attendance_events e WHERE e.student_id=a.student_id AND e.attendance_date=a.attendance_date AND e.semester_id IS a.semester_id AND e.source_id=?)')
             elif key in ('name','search'):
                 keys = ('student_name',) if key=='name' else ('student_name','student_id','course')
                 clauses.append('('+' OR '.join(f'instr(lower(a.{column}),lower(?))>0' for column in keys)+')')

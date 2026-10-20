@@ -1,3 +1,4 @@
+from tests.term_fixture import verified_term
 """Real SQLite and bounded-worker regressions for page-specific portal loading."""
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -23,6 +24,8 @@ class PortalRequestTests(unittest.TestCase):
         self.db.initialize()
         for sid in (self.SID, self.OTHER):
             self.db.insert_student(sid, 'Test student', 'BSIT', '3A', b'', b'')
+            verified_term(self.db,sid)
+        self.db.reconcile_term_boundaries()
         self.worker = PortalRequests(self.db, self.SID)
 
     def tearDown(self):

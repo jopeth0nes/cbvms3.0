@@ -1,3 +1,4 @@
+from tests.term_fixture import verified_term
 from tests.auth_fixture import portal_session
 """Regression coverage for the complete picture-backed appeal and Alerts flow."""
 import io
@@ -58,6 +59,7 @@ class AppealFlowFixture(unittest.TestCase):
         self.clock = patch("database.db_manager.utc_now", return_value=self.confirmed)
         self.clock_mock = self.clock.start()
         self.addCleanup(self.clock.stop)
+        verified_term(self.db,'S1',2099)
         self.vid = self.new_violation()
 
     def new_violation(self):

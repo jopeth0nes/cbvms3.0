@@ -63,7 +63,9 @@ def student_snapshot(database, row):
     violations = database.get_visible_violations_for_student(sid, include_snapshot=False)
     result = {'id': sid, 'email': row['email'], 'name': row['name'],
         'active': not bool(row.get('registration_pending')),
-        'snapshot': {'profile': profile, 'term': dashboard.get('_current_term'),
+        'snapshot': {'schema_version': 3, 'academic_terms': database.get_academic_terms(),
+            'term_history': database.term_history(sid), 'enrollment_status': database.enrollment_context(sid)['status'],
+            'suspension_history': database.get_suspension_history(sid), 'profile': profile, 'term': dashboard.get('_current_term'),
             'strikes': dashboard.get('_strike_summary'), 'suspension': dashboard.get('_active_suspension'),
             'counts': dashboard.get('_violation_counts'), 'violations': violations,
             'notifications': database.get_notifications_for_student(sid),

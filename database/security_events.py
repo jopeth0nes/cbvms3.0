@@ -31,7 +31,7 @@ class SecurityEventStore:
     @staticmethod
     def _security_filter(filters):
         filters = validate_filters(filters)
-        if set(filters) - {'start', 'end', 'source_id', 'search'}:
+        if set(filters) - {'start', 'end', 'source_id', 'search', 'semester_id'}:
             raise ValueError('Unsupported unknown sightings filter.')
         where, args = ["event_code='unknown_person'"], []
         for key, op in (('start', '>='), ('end', '<')):
@@ -42,6 +42,8 @@ class SecurityEventStore:
                 stamp = datetime.combine(day, time(), MANILA).astimezone(timezone.utc)
                 where.append(f'julianday(observed_at){op}julianday(?)')
                 args.append(stamp.isoformat())
+        if 'semester_id' in filters:
+            where.append('semester_id=?');args.append(int(filters['semester_id']))
         if 'source_id' in filters:
             where.append("COALESCE(source_id,'')=?")
             args.append('' if filters['source_id'] == '__historical__' else filters['source_id'])
@@ -50,7 +52,7 @@ class SecurityEventStore:
             args.extend([filters['search']] * 2)
         return ' AND '.join(where), args
 
-    _security_columns = """id, observed_at, presence_id,
+    _security_columns = """id, observed_at, presence_id, semester_id, term_classification,
         COALESCE(event_key,'legacy:'||id) reference_id,
         COALESCE(NULLIF(source_id,''),'Unavailable') source_id,
         COALESCE(NULLIF(source_label,''),'Camera not recorded') source_label,

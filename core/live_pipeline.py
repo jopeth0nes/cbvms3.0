@@ -213,7 +213,10 @@ class LiveProcessor:
             event("frame_rejected", stage="recognition", reason=task.rejection())
             return None
         read_database = self.read_database or self.database
-        term = read_database.attendance_term_snapshot()
+        term = read_database.attendance_term_snapshot(occurred_at=task.observed_at)
+        if hasattr(self.notifier,'audio'):
+            with read_database.connect() as conn:
+                self.notifier.audio.enrollment_cooldown = conn.execute('SELECT alarm_cooldown FROM enrollment_settings WHERE id=1').fetchone()[0]
         if not isinstance(term, dict):
             term = {}
         for row in rows:
@@ -223,12 +226,14 @@ class LiveProcessor:
                 if student is None:
                     row.update(matched=False,identity_uncertain=True,student_id="",name="Identity uncertain")
                     continue
-                row['academic_snapshot'] = tuple(snapshot_fields(student).items())
+                context = read_database.enrollment_context(student['student_id'], occurred_at=task.observed_at)
+                row['academic_snapshot'] = tuple((context['enrollment'] or {}).items())
                 row['term_snapshot'] = tuple(term.items())
                 row['name'] = student.get('name') or row.get('name', '')
                 row['gender'] = student.get('gender') or row.get('gender', '')
                 row['student_status']=standing_label(student)
-                row['discipline_eligible']=(student['student_status']=='Enrolled' and not student['registration_pending'])
+                row['enrollment_status']=context['status']
+                row['discipline_eligible']=context['eligible']
                 suspension=read_database.get_active_suspension(student['student_id'])
                 row['active_suspension'] = bool(suspension)
                 row['suspension_tag']=suspension_label(suspension) if suspension else ''
@@ -544,6 +549,15 @@ class LiveProcessor:
                 return MotionProjection(task.frame, assessment.face_box).advance(current.frame) is not None
             sid=assessment.student_id
             if assessment.reliable_identity:
+                if not assessment.discipline_eligible and guard():
+                    x1,y1,x2,y2=map(int,assessment.face_box)
+                    h,w=task.frame.shape[:2]
+                    crop=task.frame[max(0,y1):min(h,y2),max(0,x1):min(w,x2)]
+                    if crop.size:
+                        ok,jpeg=cv2.imencode('.jpg',crop)
+                        if ok:
+                            self.database.record_enrollment_review(sid,observed_at=observed,
+                                source_id=task.source_id,snapshot=jpeg.tobytes(),valid_if=guard)
                 key=(sid, 'premises')
                 if assessment.student_status in ('Graduate','Unenrolled') and now-self.attendance_cooldowns.get(key,-30)>=30 and guard():
                     try:

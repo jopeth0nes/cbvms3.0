@@ -91,6 +91,7 @@ class StudentManagement:
             raise ValueError("End must be later than start; leave end blank only for indefinite suspension.")
         if not reason.strip() or not imposed_by.strip():
             raise ValueError("A reason and administrator identity are required.")
+        self.reconcile_term_boundaries()
         start_text = format_db_datetime(start)
         end_text = format_db_datetime(end) if end else None
         with self.connect() as conn:
@@ -100,9 +101,15 @@ class StudentManagement:
             if violation_id is not None and not conn.execute(
                     "SELECT 1 FROM violations WHERE id=? AND student_id=?", (violation_id, student_id)).fetchone():
                 raise ValueError("The linked violation must belong to this student.")
+            if violation_id is not None:
+                from core.academic_calendar import resolve_term
+                parent=conn.execute('SELECT semester_id FROM violations WHERE id=?',(violation_id,)).fetchone()
+                if parent['semester_id'] != resolve_term(conn,start).get('id'):
+                    raise ValueError('A previous-term case cannot activate a suspension in another term.')
             overlap = conn.execute("""SELECT 1 FROM student_suspensions WHERE student_id=?
                 AND lifted_at IS NULL AND (ends_at IS NULL OR ends_at>?)
-                AND (? IS NULL OR starts_at<?)""", (student_id, start_text, end_text, end_text)).fetchone()
+                AND (effective_ended_at IS NULL OR julianday(effective_ended_at)>julianday(?))
+                AND (? IS NULL OR starts_at<?)""", (student_id, start_text, start_text, end_text, end_text)).fetchone()
             if overlap:
                 raise ValueError("An overlapping suspension exists. Lift it before replacing it.")
             cur = conn.execute("""INSERT INTO student_suspensions
@@ -121,7 +128,7 @@ class StudentManagement:
         now = format_db_datetime(utc_now())
         with self.connect() as conn:
             cur = conn.execute("""UPDATE student_suspensions SET lifted_at=?, lifted_by=?, lift_reason=?
-                WHERE id=? AND lifted_at IS NULL AND (ends_at IS NULL OR ends_at>?)""",
+                WHERE id=? AND lifted_at IS NULL AND effective_ended_at IS NULL AND (ends_at IS NULL OR ends_at>?)""",
                 (now, lifted_by.strip(), reason.strip(), suspension_id, now))
             return cur.rowcount == 1
 
@@ -129,8 +136,10 @@ class StudentManagement:
         timestamp = format_db_datetime(parse_db_datetime(now) if now is not None else utc_now())
         with self.connect() as conn:
             row = conn.execute("""SELECT * FROM student_suspensions WHERE student_id=?
-                AND starts_at<=? AND (ends_at IS NULL OR ends_at>?) AND lifted_at IS NULL
-                ORDER BY starts_at DESC LIMIT 1""", (student_id, timestamp, timestamp)).fetchone()
+                AND starts_at<=? AND (ends_at IS NULL OR ends_at>?) AND lifted_at IS NULL AND (effective_ended_at IS NULL OR julianday(effective_ended_at)>julianday(?))
+                AND NOT EXISTS(SELECT 1 FROM academic_terms t WHERE t.publication_state='published'
+                  AND julianday(t.starts_at)>julianday(student_suspensions.starts_at) AND julianday(t.starts_at)<=julianday(?))
+                ORDER BY starts_at DESC LIMIT 1""", (student_id, timestamp, timestamp, timestamp, timestamp)).fetchone()
             return dict(row) if row else None
 
     def get_suspension_history(self, student_id):
@@ -158,8 +167,11 @@ class StudentManagement:
                     conn.rollback()
                 return False
             suspension = conn.execute("""SELECT id FROM student_suspensions WHERE student_id=?
-                AND starts_at<=? AND (ends_at IS NULL OR ends_at>?) AND lifted_at IS NULL""",
-                (student_id, timestamp, timestamp)).fetchone()
+                AND starts_at<=? AND (ends_at IS NULL OR ends_at>?) AND lifted_at IS NULL
+                AND (effective_ended_at IS NULL OR julianday(effective_ended_at)>julianday(?))
+                AND NOT EXISTS(SELECT 1 FROM academic_terms t WHERE t.publication_state='published'
+                    AND julianday(t.starts_at)>julianday(student_suspensions.starts_at) AND julianday(t.starts_at)<=julianday(?))""",
+                (student_id, timestamp, timestamp,timestamp,timestamp)).fetchone()
             conn.execute("""INSERT INTO premises_entries
                 (student_id, student_name, student_status, entered_at, last_seen, suspension_id) VALUES (?, ?, ?, ?, ?, ?)""",
                 (student_id, student["name"], student["student_status"], timestamp, timestamp, suspension[0] if suspension else None))

@@ -293,15 +293,24 @@ class SaveFlowTests(unittest.TestCase):
         panel._gender_var.get.return_value = 'Male'
         panel._set_enroll_status = MagicMock()
         panel.database.student_id_exists.return_value = False
+        panel.database.get_student_by_student_id.return_value = None
+        panel.username='superadmin'
+        panel._enrollment_terms={'Current':2}
+        panel._enrollment_term_var=MagicMock()
+        panel._enrollment_term_var.get.return_value='Current'
         state['student_key'] = panel._capture_student_key(state)
         capture = FaceCapture.freeze(state['student_key'], sample(3), face())
         state['angle_frames'] = {'front': [capture]}
         with patch('ui.enrollment.threading.Thread'):
             EnrollmentPanel._finish_enroll(panel, state['modal'], state)
-        saved = panel.database.insert_student.call_args.kwargs
+        saved = panel.database.confirm_term_enrollment.call_args.kwargs['new_student']
         self.assertEqual(saved['student_id'], 'NEW')
-        self.assertEqual(saved['photo'], capture.photo)
-        np.testing.assert_array_equal(pickle.loads(saved['encoding'])[0], capture.embedding)
+        self.assertIsNone(saved['photo'])
+        self.assertIsNone(saved['encoding'])
+        confirmed=panel.database.confirm_term_enrollment.call_args
+        self.assertEqual(confirmed.args[0:2],('NEW',2))
+        self.assertEqual(confirmed.args[3][0].photo,capture.photo)
+        np.testing.assert_array_equal(confirmed.args[3][0].embedding,capture.embedding)
         panel.recognizer.enrollment_faces.assert_not_called()
         panel._academics.raw.return_value = (*COURSES['cs'], '1st Year', 'A')
         self.assertFalse(panel._capture_current(state))

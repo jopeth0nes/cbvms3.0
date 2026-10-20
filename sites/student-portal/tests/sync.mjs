@@ -12,7 +12,7 @@ try {
   await build({stdin: {contents: `import {GET,POST} from './app/api/[...path]/route.ts'; export default {fetch(r) {return r.method === 'GET' ? GET(r) : POST(r)}};`, resolveDir: resolve('.')}, bundle: true, format: 'esm', platform: 'browser', external: ['cloudflare:workers', 'node:*'], outfile: join(directory, 'worker.mjs')});
   mf = new Miniflare({modulesRoot: directory, rootPath: directory, modules: true, scriptPath: join(directory, 'worker.mjs'), compatibilityDate: '2026-05-15', compatibilityFlags: ['nodejs_compat'], bindings: {SYNC_KEY: 'fixture-only'}, d1Databases: ['DB'], r2Buckets: ['BUCKET']});
   const db = await mf.getD1Database('DB');
-  for (const name of ['0000_furry_moira_mactaggert', '0001_overrated_medusa', '0002_sync_protocol']) {
+  for (const name of ['0000_furry_moira_mactaggert', '0001_overrated_medusa', '0002_sync_protocol', '0003_academic_snapshots']) {
     const sql = await readFile(`drizzle/${name}.sql`, 'utf8');
     for (const statement of sql.split('--> statement-breakpoint').flatMap(s => s.split(';')).filter(s => s.trim())) await db.prepare(statement).run();
   }
@@ -24,12 +24,14 @@ try {
     return {status: response.status, data: await response.json(), cookie: response.headers.get('Set-Cookie')?.split(';')[0]};
   }
   const hash = password => createHash('sha256').update(password).digest('hex');
-  const students = ['S1','S2'].map((id,i) => ({id,email: `${id}@fixture.invalid`,name: id,active:true,account:{username:id,password_hash:hash('Initial password'),must_change_password:false,credential_version:1},snapshot:{profile:{student_id:id,name:id},violations:[{id:i+1,identity:hash(id),can_appeal:true,appeal_deadline:'2099-01-01 00:00:00'}],notifications:[],appeals:[]}}));
+  const students = ['S1','S2'].map((id,i) => ({id,email: `${id}@fixture.invalid`,name: id,active:true,account:{username:id,password_hash:hash('Initial password'),must_change_password:false,credential_version:1},snapshot:{schema_version:3,academic_terms:[],term_history:{enrollments:[]},profile:{student_id:id,name:id},violations:[{id:i+1,identity:hash(id),can_appeal:true,appeal_deadline:'2099-01-01 00:00:00'}],notifications:[],appeals:[]}}));
   const publish = (rows=students, receipts=[]) => call('/api/sync/publish', {generation,run_id:crypto.randomUUID(),students:rows,receipts}, syncHeaders);
   assert.equal((await call('/api/sync/audit')).status,401);
   assert.equal((await call('/api/sync/audit',undefined, {...syncHeaders,'X-CBVMS-Protocol':'1'})).status,409);
   assert.equal((await call('/api/sync/audit',undefined, {...syncHeaders,'X-CBVMS-Source':'wrong'})).status,409);
   assert.equal((await call('/api/sync/roster',{ids:[]},syncHeaders)).status,409);
+  const oldSnapshot=structuredClone(students); delete oldSnapshot[0].snapshot.schema_version;
+  assert.equal((await publish(oldSnapshot)).status,400);
   assert.equal((await publish()).status,200); generation++;
   assert.equal((await publish([])).status,409);
   const staleCredentials=structuredClone(students); staleCredentials[0].account.credential_version=0;

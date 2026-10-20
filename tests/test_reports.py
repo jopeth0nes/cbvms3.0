@@ -17,6 +17,8 @@ class ReportTests(unittest.TestCase):
             db.initialize()
             db.insert_student(student_id="S-01", name="Student One", course="BSIT",
                 year_and_section="3A", encoding=b"", photo=b"", gender="Male")
+            from tests.term_fixture import verified_term
+            verified_term(db,'S-01',2026)
             first = datetime(2026, 9, 18, 12, tzinfo=timezone.utc)
             self.assertFalse(db.record_attendance("unknown", observed_at=first))
             self.assertTrue(db.record_attendance("S-01", observed_at=first + timedelta(minutes=10)))

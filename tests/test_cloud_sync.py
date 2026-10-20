@@ -25,6 +25,8 @@ class CloudSyncTests(unittest.TestCase):
         for sid in ('S1', 'S2'):
             self.db.insert_student(sid, sid, 'BSIT', '3A', b'biometric-secret', b'photo-secret',
                 account_username=sid, account_password='password', email=sid + '@example.com')
+            from tests.term_fixture import verified_term
+            verified_term(self.db,sid,utc_now().year)
 
     def action(self, kind, payload, aid='cloud-action-1'):
         return {'id': aid, 'student_id': 'S1', 'kind': kind, 'payload': payload,

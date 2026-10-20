@@ -248,7 +248,7 @@ class AttendancePanel(ctk.CTkFrame):
             'Unknown / Unrecognized means the system could not match the person to a registered identity. '
             'This is not a confirmed intruder. Counts describe encounters, not unique people.' if unknown else self.known_description))
         for key,widgets in self.filter_widgets.items():
-            visible = key in {'start','end','source_id','search'} if unknown else key != 'search'
+            visible = key in {'start','end','source_id','search','semester_id'} if unknown else key != 'search'
             for widget in widgets:
                 widget.grid() if visible else widget.grid_remove()
         if self.task.busy:
@@ -267,7 +267,7 @@ class AttendancePanel(ctk.CTkFrame):
         def read():
             if view == 'unknown':
                 data = self.database.query_unknown_sightings(username=self.username,filters=filters,page=page,page_size=size)
-                return data, {'sources':data['sources'], 'semesters':[]}, None
+                return data, {'sources':data['sources'], 'semesters':[dict(t,semester_id=t['id']) for t in self.database.get_academic_terms()]}, None
             return (self.database.query_attendance(view=view,filters=filters,page=page,page_size=size),
                     self.database.attendance_filter_options(),self.database.get_attendance_cooldown())
         def loaded(result):

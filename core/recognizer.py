@@ -333,6 +333,7 @@ class FaceRecognizer:
         known: list[tuple[dict, np.ndarray]] = []
         try:
             students = self._db.get_all_students()
+            captures = self._db.recognition_capture_encodings() if hasattr(self._db, "recognition_capture_encodings") else {}
             for row in students:
                 student = dict(row)          # sqlite3.Row → plain dict
                 blob = student.get("encoding")
@@ -353,6 +354,12 @@ class FaceRecognizer:
                     except Exception:
                         raw = []
 
+                capture_blob = captures.get(student.get('student_id'))
+                if isinstance(capture_blob, bytes):
+                    try:
+                        raw.extend(pickle.loads(capture_blob))
+                    except Exception:
+                        pass  # Permanent anchor remains usable if a newer capture is damaged.
                 unit_embs: list[np.ndarray] = []
                 for e in raw:
                     e = np.asarray(e, dtype=np.float32).reshape(-1)

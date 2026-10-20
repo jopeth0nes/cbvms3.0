@@ -1,3 +1,4 @@
+from tests.term_fixture import verified_term
 import tempfile
 import unittest
 from datetime import timedelta
@@ -16,6 +17,7 @@ class DisciplineEmailTests(unittest.TestCase):
         self.db = CBVMSDatabase(Path(self.tmp.name) / 'test.db')
         self.db.initialize()
         self.db.insert_student('S1', 'Student', 'BSIT', '3A', b'', b'', email='student@example.com')
+        verified_term(self.db,'S1')
         self.dispatch = Mock()
         self.publication_dispatch = Mock()
         patch('core.email_sender.dispatch_discipline_notice', side_effect=
@@ -123,10 +125,13 @@ class DisciplineEmailTests(unittest.TestCase):
         self.assertEqual(len(self.db.get_suspension_history('S1')), 3)
         self.assertIn('parents', self.dispatch.call_args.args[4])
         self.assertIsNone(self.db.get_active_suspension('S1', now=now + timedelta(days=14, seconds=1)))
-        self.db.set_current_academic_term('Semester 2', '2099-2100')
-        for _ in range(3):
-            self.db.log_violation('S1', 'Student', 'wrong_uniform', status='confirmed')
-        self.db.process_expired_deadlines(now=now + timedelta(days=20))
+        verified_term(self.db,'S1',2099)
+        from core.academic_calendar import instant
+        future=instant('2099-06-01')
+        with patch('core.academic_calendar.utc_now',return_value=future), patch('database.db_manager.utc_now',return_value=future):
+            for _ in range(3):
+                self.db.log_violation('S1', 'Student', 'wrong_uniform', status='confirmed')
+            self.db.process_expired_deadlines(now=future + timedelta(days=6))
         self.assertEqual(self.dispatch.call_count, 4)
         self.assertEqual(len(self.db.get_suspension_history('S1')), 4)
 
@@ -137,7 +142,7 @@ class DisciplineEmailTests(unittest.TestCase):
         self.assertEqual(self.db.get_suspension_history('S1'), [])
         self.dispatch.assert_called_once()
 
-    def test_existing_pre_policy_strikes_catch_up_once(self):
+    def test_existing_pre_policy_strikes_do_not_issue_retrospective_penalties(self):
         for _ in range(5):
             self.db.log_violation('S1', 'Student', 'wrong_uniform', status='confirmed')
         with patch.object(self.db, '_automatic_uniform_suspension_conn'):
@@ -146,9 +151,8 @@ class DisciplineEmailTests(unittest.TestCase):
         self.dispatch.reset_mock()
         self.db.process_expired_deadlines()
         self.db.process_expired_deadlines()
-        self.assertEqual(len(self.db.get_suspension_history('S1')), 1)
-        self.assertIn('7 days', self.dispatch.call_args.args[4])
-        self.dispatch.assert_called_once()
+        self.assertEqual(len(self.db.get_suspension_history('S1')), 0)
+        self.dispatch.assert_not_called()
 
     def test_suspension_and_email_roll_back_with_strike_transaction(self):
         for _ in range(3):

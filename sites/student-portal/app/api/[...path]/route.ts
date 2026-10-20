@@ -53,18 +53,25 @@ async function route(request: Request) {
   });
   if (request.method === 'GET' && path === '/api/page') {
     const page = url.searchParams.get('page') || 'dashboard';
+    const selectedTerm = url.searchParams.get('semester_id') || '';
+    const termMatches = (id: unknown) => !selectedTerm || (selectedTerm === 'legacy' ? id == null || (snapshot.academic_terms || []).some((t: Obj) => t.semester_code === 'legacy' && String(t.id) === String(id)) : String(id) === selectedTerm);
+    const scopedViolations = violations.filter((v: Obj) => termMatches(v.semester_id));
     const offset = Math.max(0, Math.min(Number(url.searchParams.get('offset') || 0) || 0, 100000));
-    const data: Obj = { _unread_count: notifications.filter((n: Obj) => !n.is_read).length, _synced_at: student.synced_at, _current_term: snapshot.term || {}, _strike_summary: snapshot.strikes || [], _active_suspension: snapshot.suspension || null };
+    const data: Obj = { _academic_terms: snapshot.academic_terms || [], _term_history: snapshot.term_history || {}, _enrollment_status: snapshot.enrollment_status || 'Enrollment unverified — legacy record', _suspension_history: snapshot.suspension_history || [], _unread_count: notifications.filter((n: Obj) => !n.is_read).length, _synced_at: student.synced_at, _current_term: snapshot.term || {}, _strike_summary: snapshot.strikes || [], _active_suspension: snapshot.suspension || null };
+    if (selectedTerm) {
+      data._term_history = {...data._term_history, enrollments: (data._term_history.enrollments || []).filter((e: Obj) => termMatches(e.semester_id)), strikes_by_term: (data._term_history.strikes_by_term || []).filter((e: Obj) => termMatches(e.semester_id)), enrollment_reviews: (data._term_history.enrollment_reviews || []).filter((e: Obj) => termMatches(e.semester_id))};
+      data._suspension_history = data._suspension_history.filter((s: Obj) => termMatches(violations.find((v: Obj) => v.id === s.violation_id)?.semester_id));
+    }
     if (['dashboard', 'profile'].includes(page)) data._student = snapshot.profile;
     if (['dashboard', 'violations'].includes(page)) {
       const size = page === 'dashboard' ? 5 : 10;
-      data._violations = violations.slice(offset, offset + size); data._has_more = violations.length > offset + size;
-      data._violation_counts = snapshot.counts || {};
+      data._violations = scopedViolations.slice(offset, offset + size); data._has_more = scopedViolations.length > offset + size;
+      data._violation_counts = {pending: scopedViolations.filter((v: Obj) => ['pending_review','unreviewed'].includes(v.status)).length, resolved: scopedViolations.filter((v: Obj) => ['dismissed','resolved'].includes(v.status) || v.appeal_status === 'approved').length, confirmed: scopedViolations.filter((v: Obj) => !['pending_review','unreviewed','dismissed','resolved'].includes(v.status) && v.appeal_status !== 'approved').length};
       data._pending_appeals = (snapshot.appeals || []).filter((a: Obj) => a.status === 'pending').length + queued.filter(a => a.kind === 'appeals').length;
     } else if (page === 'notifications') { data._notifications = notifications.slice(offset, offset + 10); data._has_more = notifications.length > offset + 10; }
     else if (page === 'appeals') {
       const pending = result.results.filter(a => a.kind === 'appeals' && a.status !== 'applied').map(a => ({ ...JSON.parse(a.payload), id: a.id, status: a.status === 'queued' ? 'Awaiting campus sync' : 'Campus review needed', admin_notes: a.result, submitted_at: a.created_at.replace('T', ' ').slice(0, 19) }));
-      const rows = [...pending, ...(snapshot.appeals || [])]; data._appeals = rows.slice(offset, offset + 10); data._has_more = rows.length > offset + 10;
+      const rows = [...pending, ...(snapshot.appeals || [])].filter((a: Obj) => !selectedTerm || violations.some((v: Obj) => String(v.id) === String(a.violation_id) && termMatches(v.semester_id))); data._appeals = rows.slice(offset, offset + 10); data._has_more = rows.length > offset + 10;
     } else if (!['profile', 'settings', 'report'].includes(page)) return json({ error: 'Unknown page' }, 400);
     return json(data);
   }

@@ -53,6 +53,15 @@ def open_student_details(parent, database, student_id, actor, on_saved):
         tabs = ctk.CTkTabview(win, corner_radius=CORNER_RADIUS)
         tabs.pack(fill="both", expand=True, padx=16, pady=16)
         details, history = (tabs.add(name) for name in ("Details", "Status History"))
+        term_tab=tabs.add('Term History')
+        term_text=tk.Text(term_tab,wrap='word');term_text.pack(fill='both',expand=True)
+        import json
+        def read_terms():
+            return dict(database.term_history(student_id),suspensions=database.get_suspension_history(student_id),
+                        cases=database.get_discipline_history_for_student(student_id))
+        term_task=BackgroundTask(term_tab)
+        term_task.run(read_terms,lambda result:term_text.insert('end',json.dumps(result,indent=2,default=str,ensure_ascii=False)),
+                      lambda error:term_text.insert('end',error))
         form = ctk.CTkScrollableFrame(details, fg_color=COLOR_SURFACE)
         form.pack(fill="both", expand=True)
         ctk.CTkLabel(form, text=f"{student['name']} · {student_id}", font=heading_font(16),
@@ -63,7 +72,7 @@ def open_student_details(parent, database, student_id, actor, on_saved):
         status.pack(fill="x", pady=4)
         verify = tk.BooleanVar(value=False)
         if student.get("registration_pending"):
-            ctk.CTkCheckBox(form, text="OSA verified current enrollment", variable=verify).pack(anchor="w", pady=8)
+            ctk.CTkCheckBox(form, text="Demographic record reviewed (does not confirm term enrollment)", variable=verify).pack(anchor="w", pady=8)
         academics = AcademicFields(form, student)
         academics.pack(fill="x", pady=8)
         reason = _field(form, "Reason for status change / verification")

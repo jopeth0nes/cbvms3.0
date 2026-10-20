@@ -16,7 +16,7 @@ ALL = 'All'
 METRICS = {'recorded': 'Recorded violations', 'finalized': 'Finalized violations',
            'suspensions': 'Suspension records', 'students': 'Distinct suspended students'}
 OUTCOMES = ('Pending review', 'Appeal pending', 'Resolved / dismissed', 'Finalized', 'Awaiting finalization / legacy')
-SUSPENSION_STATES = ('Active', 'Scheduled', 'Expired', 'Lifted / cancelled', 'Date unavailable')
+SUSPENSION_STATES = ('Active', 'Scheduled', 'Expired', 'Lifted / cancelled', 'Ended by term rollover', 'Date unavailable')
 
 
 @dataclass(frozen=True)
@@ -24,6 +24,8 @@ class ReportFilter:
     period: str = 'current'  # current, all, custom, unassigned, or term:<id>
     start: str = ''
     end: str = ''
+    academic_year: str = ALL
+    section: str = ALL
     college: str = ALL
     course: str = ALL
     year: str = ALL
@@ -49,6 +51,9 @@ class ReportFilter:
 def suspension_state(row, now):
     if row.get('lifted_at'):
         return 'Lifted / cancelled'
+    rollover=parse_db_datetime(row.get('effective_ended_at'))
+    if rollover and rollover <= now:
+        return 'Ended by term rollover'
     start, end = parse_db_datetime(row.get('starts_at')), parse_db_datetime(row.get('ends_at'))
     if end and end <= now:
         return 'Expired'
@@ -99,7 +104,7 @@ def _read_snapshot(database, username):
         students = {r['student_id']: dict(r) for r in conn.execute('''SELECT student_id,name,
             college_department,course,report_year_level,year_and_section FROM students''')}
         violations = [dict(r) for r in conn.execute('''SELECT id,student_id,student_name,
-            violation_code,violation_type,timestamp,status,semester_id FROM violations''')]
+            violation_code,violation_type,timestamp,status,semester_id,academic_snapshot FROM violations''')]
         strikes = {r['violation_id']: dict(r) for r in conn.execute('''SELECT violation_id,
             awarded_at,is_active,semester_id FROM strikes''')}
         appeals = defaultdict(set)
@@ -118,32 +123,38 @@ def load_report(database, username, filters=ReportFilter(), *, now=None):
         raise ValueError('Unsupported chart interval or measure.')
     now = parse_db_datetime(now) if now is not None else utc_now()
     terms, students, violations, strikes, appeals, suspensions, awards = _read_snapshot(database, username)
-    current = next((t for t in terms if t['is_current']), None)
+    from core.academic_calendar import instant
+    current = next((t for t in terms if t.get('publication_state')=='published' and instant(t['starts_at'])<=now<instant(t['ends_before'])),None)
     term_id = current['id'] if current and filters.period == 'current' else None
     if filters.period.startswith('term:'):
         term_id = int(filters.period.split(':')[1])
     elif filters.period not in ('current','all','custom','unassigned'):
         raise ValueError('Unsupported reporting period.')
 
-    def classification(sid):
-        student = students.get(sid)
-        if student is None:
-            return dict(college=UNAVAILABLE, course=UNAVAILABLE, year=UNAVAILABLE)
-        fields = display_academics(student)
-        return dict(college=fields['college_department'], course=fields['course'],
-                    year=fields['report_year_level'] or NEEDS_REVIEW)
+    def classification(row):
+        import json
+        fields=json.loads(row.get('academic_snapshot') or '{}')
+        if not fields and row['student_id'] not in students:
+            return dict(college=UNAVAILABLE,course=UNAVAILABLE,year=UNAVAILABLE,section=UNAVAILABLE)
+        return dict(college=fields.get('college_department') or NEEDS_REVIEW,
+                    course=fields.get('course') or NEEDS_REVIEW,
+                    year=fields.get('report_year_level') or NEEDS_REVIEW,
+                    section=fields.get('report_section') or NEEDS_REVIEW)
 
     def matches(row, *, period=True):
         if any(value != ALL and row[key] != value for key, value in
-               (('college',filters.college),('course',filters.course),('year',filters.year),('category',filters.category))):
+               (('college',filters.college),('course',filters.course),('year',filters.year),('section',filters.section),('category',filters.category))):
             return False
         if not period:
             return True
+        if filters.academic_year != ALL and not any(t['id']==row['term_id'] and t['school_year']==filters.academic_year for t in terms):
+            return False
         if filters.period == 'current' and current is None:
             return False
         if term_id is not None and row['term_id'] != term_id:
             return False
-        if filters.period == 'unassigned' and row['term_id'] is not None:
+        if filters.period == 'unassigned' and row['term_id'] is not None and not any(
+                t['id']==row['term_id'] and t['semester_code']=='legacy' for t in terms):
             return False
         if bounds[0]:
             at = parse_db_datetime(row['date'])
@@ -155,7 +166,7 @@ def load_report(database, username, filters=ReportFilter(), *, now=None):
         sid = row['student_id']
         return dict(kind=kind,id=row['id'],student_id=sid,
             name=students.get(sid,{}).get('name') or row.get('student_name') or 'Student record unavailable',
-            available=sid in students,date=at,term_id=term,category=category,status=status,**classification(sid))
+            available=sid in students,date=at,term_id=term,category=category,status=status,**classification(row))
 
     recorded, finalized = [], []
     violation_by_id = {v['id']:v for v in violations}
@@ -192,6 +203,11 @@ def load_report(database, username, filters=ReportFilter(), *, now=None):
         term = next(iter(associations)) if len(associations) == 1 else None
         category = normalize_violation_code(related['violation_code'] or related['violation_type']) if related else 'Unassigned'
         categories.add(category)
+        row=dict(row,academic_snapshot=related.get('academic_snapshot'))
+        for t in terms:
+            if t.get('publication_state')=='published' and instant(row['starts_at'])<instant(t['starts_at'])<=now and (not row['ends_at'] or instant(t['starts_at'])<instant(row['ends_at'])):
+                if not row.get('effective_ended_at') or instant(t['starts_at'])<instant(row['effective_ended_at']):
+                    row['effective_ended_at']=t['starts_at']
         item = base(row,'suspension',row['starts_at'],term,category,suspension_state(row,now))
         item.update(ends_at=row['ends_at'],reason=row['reason'])
         # Current snapshot deliberately ignores period AND suspension-status selectors.
@@ -217,7 +233,7 @@ def load_report(database, username, filters=ReportFilter(), *, now=None):
              if selected_term else 'No current academic term' if filters.period=='current' else
              f'{filters.start} – {filters.end} · Asia/Manila, inclusive' if filters.period=='custom' else
              'Unassigned term records' if filters.period=='unassigned' else 'All Data')
-    for title, value in (('College',filters.college),('Course',filters.course),('Year',filters.year),
+    for title, value in (('Academic year',filters.academic_year),('Section',filters.section),('College',filters.college),('Course',filters.course),('Year',filters.year),
                          ('Category',filters.category),('Violation outcome',filters.outcome),
                          ('Suspension status',filters.suspension_status)):
         if value != ALL:
@@ -228,7 +244,8 @@ def load_report(database, username, filters=ReportFilter(), *, now=None):
         trends={k:trend(records[k],filters.interval,bounds) for k in ('recorded','finalized','suspensions')},
         outcomes=sorted(Counter(r['status'] for r in recorded).items()),
         suspension_states=sorted(Counter(r['status'] for r in starts).items()),categories=sorted(categories),
-        years=sorted({classification(s)['year'] for s in students}),
+        years=sorted({classification(v)['year'] for v in violations}),
+        sections=sorted({classification(v)['section'] for v in violations}),
         unassigned_suspensions=sum(r['term_id'] is None for r in starts),
         undated={k:sum(parse_db_datetime(r['date']) is None for r in records[k]) for k in records})
 

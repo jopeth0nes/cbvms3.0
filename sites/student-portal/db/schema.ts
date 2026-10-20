@@ -33,6 +33,7 @@ export const loginLimits = sqliteTable('portal_login_limits', {
 export const syncControl = sqliteTable('campus_sync_control', {
   singleton: integer('singleton').primaryKey(), sourceId: text('source_id').notNull(),
   writerId: text('writer_id').notNull(), protocol: integer('protocol').notNull().default(2),
+  minimumSnapshotVersion: integer('minimum_snapshot_version').notNull().default(3),
   generation: integer('generation').notNull().default(0), runId: text('run_id'), checkedAt: text('checked_at'),
 }, table => [check('sync_singleton', sql`${table.singleton}=1`)]);
 

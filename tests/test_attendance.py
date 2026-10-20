@@ -24,6 +24,8 @@ class AttendanceTests(unittest.TestCase):
         self.db.initialize(process_deadlines=False)
         self.sid='0001-02/A'
         self.db.insert_student(self.sid,'=Student','BSIT','3A',b'face',b'photo')
+        from tests.term_fixture import verified_term
+        self.term_id=verified_term(self.db,self.sid,2026)
         self.when=datetime(2026,10,4,15,55,tzinfo=timezone.utc)
 
     def fact(self,seconds=0,**changes):
@@ -135,7 +137,7 @@ class AttendanceTests(unittest.TestCase):
         self.db.set_attendance_cooldown(0,actor='admin')
         for i in range(61):
             self.save(self.fact(i,frame_id=str(i)))
-        filters=dict(start='2026-10-04',end='2026-10-04',semester_id='1',college_department=COURSES['it'][0],
+        filters=dict(start='2026-10-04',end='2026-10-04',semester_id=str(self.term_id),college_department=COURSES['it'][0],
             course=COURSES['it'][1],report_year_level='3rd Year',report_section='A',student_id=self.sid,name='Student',source_id='gate-1')
         first=self.db.query_attendance(view='events',filters=filters,page_size=25)
         second=self.db.query_attendance(view='events',filters=filters,page_size=25,page=1)
@@ -143,7 +145,7 @@ class AttendanceTests(unittest.TestCase):
         self.assertEqual((first['count'],len(first['rows']),len(second['rows']),len(last['rows'])),(61,25,25,11))
         self.assertFalse({r['id'] for r in first['rows']} & {r['id'] for r in second['rows']})
         self.assertEqual(self.db.query_attendance(filters=filters)['count'],1)
-        for key,value in dict(student_id='001-02/A',report_section='Z',source_id='absent',semester_id='2',course='Nursing',name='nobody').items():
+        for key,value in dict(student_id='001-02/A',report_section='Z',source_id='absent',semester_id='99999',course='Nursing',name='nobody').items():
             self.assertEqual(self.db.query_attendance(view='events',filters=dict(filters,**{key:value}))['count'],0)
         all_path=Path(self.tmp.name)/'all.csv'
         selected_path=Path(self.tmp.name)/'selected.csv'

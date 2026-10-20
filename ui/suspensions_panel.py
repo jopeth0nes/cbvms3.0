@@ -55,6 +55,9 @@ def suspension_state(row):
     if row.get("lifted_at"):
         return "Lifted / Cancelled"
     now = utc_now()
+    rollover=parse_db_datetime(row.get("effective_ended_at"))
+    if rollover and rollover <= now:
+        return "Ended by term rollover"
     end = parse_db_datetime(row.get("ends_at"))
     if end and end <= now:
         return "Expired"
@@ -545,6 +548,8 @@ class SuspensionsPanel(ctk.CTkFrame):
         text = ""
         if row:
             text = f"{suspension_state(row)} · Assigned {row['imposed_at']} UTC by {row['imposed_by']}\n{row['reason']}"
+            if row.get("effective_ended_at"):
+                text += f"\nEffective end {row['effective_ended_at']}: {row['effective_end_reason']} (original scheduled end preserved)"
             if row["lifted_at"]:
                 text += f"\nLifted {row['lifted_at']} UTC by {row['lifted_by']}: {row['lift_reason']}"
         self._history_detail.configure(text=text)

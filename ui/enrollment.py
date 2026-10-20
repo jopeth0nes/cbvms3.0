@@ -571,6 +571,12 @@ class EnrollmentPanel(ctk.CTkFrame):
     # ------------------------------------------------------------------
 
     def _open_enroll_flow(self) -> None:
+        try:
+            with self.database.connect() as conn:
+                self.database._term_admin(conn,self.username)
+        except PermissionError as exc:
+            self._set_status(str(exc),error=True)
+            return
         """Take over the panel's center: show the details form first, then (once it is
         filled with valid info) swap to the guided face-capture wizard — no modal window."""
         if self.recognizer is None:
@@ -593,9 +599,16 @@ class EnrollmentPanel(ctk.CTkFrame):
         header.grid(row=0, column=0, sticky="ew", padx=PADDING, pady=(0, 4))
         header.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(
-            header, text="Enroll New Student", font=heading_font(18), text_color=COLOR_TEXT,
+            header, text="Term Enrollment", font=heading_font(18), text_color=COLOR_TEXT,
         ).grid(row=0, column=0, sticky="w")
         self._build_enroll_stepper(header).grid(row=0, column=1, sticky="e")
+        from core.academic_calendar import instant
+        self._enrollment_terms={f"{t['semester_name']} · {t['school_year']} (#{t['id']})":t['id']
+            for t in self.database.get_academic_terms() if t.get('publication_state')=='published' and instant(t['ends_before'])>instant()}
+        self._enrollment_term_var=tk.StringVar(value=next(iter(self._enrollment_terms),'Publish term dates first'))
+        ctk.CTkOptionMenu(header,variable=self._enrollment_term_var,
+            values=list(self._enrollment_terms) or ['Publish term dates first']).grid(row=1,column=0,pady=8)
+
 
         # Body host — the form and capture sub-steps swap in and out of this cell.
         body = ctk.CTkFrame(screen, fg_color="transparent")
@@ -820,9 +833,6 @@ class EnrollmentPanel(ctk.CTkFrame):
                     (self._entries['student_id'].get().strip(), self._academics.raw())):
                 self._set_enroll_status('Details changed. Continue again.', error=True)
                 return
-            if exists:
-                self._set_enroll_status(f"Student ID '{student_id}' is already enrolled.", error=True)
-                return
             self._set_enroll_status('')
             self._build_enroll_capture(state)
         state['details_task'].run(lambda: self.database.student_id_exists(student_id), checked,
@@ -1034,7 +1044,7 @@ class EnrollmentPanel(ctk.CTkFrame):
     def _capture_student_key(self, state):
         if "target_pk" in state:
             return ("update", self._selected_pk, state["target_student_id"])
-        return ("enroll", tuple((key, entry.get().strip())
+        return ("enroll", self._enrollment_term_var.get(), tuple((key, entry.get().strip())
                                for key, entry in self._entries.items()), self._academics.raw(), self._gender_var.get())
 
     def _capture_current(self, state):
@@ -1462,6 +1472,13 @@ class EnrollmentPanel(ctk.CTkFrame):
             values.update(self._academics.values())
             if not all(values.get(k) for k in ('name','student_id')):
                 raise ValueError('Name and student ID are required.')
+            term_id = self._enrollment_terms.get(self._enrollment_term_var.get())
+            if not term_id:
+                raise ValueError('Publish current or upcoming term dates before enrollment.')
+            captures = tuple(self._ordered_captures(state))
+            student_key = state['student_key']
+            with self.database.connect() as conn:
+                self.database._term_admin(conn,self.username)
             contacts = {key:values.get(key,'') for _,key in CONTACT_FIELDS}
             validate_contacts(dict(contacts,email=values.get('email','')))
         except ValueError as exc:
@@ -1474,12 +1491,15 @@ class EnrollmentPanel(ctk.CTkFrame):
         sid = values['student_id']
         database,recognizer = self.database,self.recognizer
         def save():
-            # Row, contacts, photo, all confirmed embeddings, and account commit together.
-            database.insert_student(student_id=sid,name=values['name'],course=values['course'],
-                year_and_section=values['year_and_section'],gender=gender,encoding=blob,photo=photo,
-                college_department=values['college_department'], report_year_level=values['report_year_level'],
-                report_section=values['report_section'],
-                email=values.get('email',''),contacts=contacts,account_password=password)
+            existing=database.get_student_by_student_id(sid)
+            new_student=None
+            if existing is None:
+                new_student=dict(student_id=sid,name=values['name'],course=values['course'],
+                    year_and_section=values['year_and_section'],gender=gender,encoding=None,photo=None,
+                    college_department=values['college_department'],report_year_level=values['report_year_level'],
+                    report_section=values['report_section'],email=values.get('email',''),contacts=contacts,
+                    account_password=password)
+            database.confirm_term_enrollment(sid,term_id,values,captures,student_key,actor=self.username,new_student=new_student)
             note = ''
             try:
                 recognizer.load_known_faces()
@@ -1491,16 +1511,16 @@ class EnrollmentPanel(ctk.CTkFrame):
                     username = conn.execute('SELECT username FROM student_accounts WHERE student_id=?',(sid,)).fetchone()[0]
             except Exception:
                 note += ' Account saved; check Account Manager for the username.'
-            return note,username
+            return note,username,existing is None
         def completed(result):
-            note,username = result
+            note,username,is_new = result
             self._clear_form()
             self._reload_students()
-            self._set_status(f'Enrolled! Login: {username or "See Account Manager"} / {password}.{note}',success=True)
+            self._set_status(f'Term enrollment confirmed. Login: {username or "See Account Manager"}. '+(f'Temporary password: {password}. ' if is_new else 'Existing credentials preserved. ')+note,success=True)
             if state.get('close'):
                 state['close']()
             # Existing optional delivery never determines whether registration committed.
-            if values.get('email') and username:
+            if is_new and values.get('email') and username:
                 def email():
                     from core.email_sender import send_credentials
                     send_credentials(to_email=values['email'],student_name=values['name'],

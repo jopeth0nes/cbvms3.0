@@ -201,7 +201,11 @@ class _ClosingConnection(sqlite3.Connection):
             self.close()
 
 
-class CBVMSDatabase(StudentManagement, StudentCredentials, AttendanceStore, SecurityEventStore):
+from database.term_enrollment import TermEnrollmentStore
+from core.academic_calendar import resolve_term, enrollment_context
+
+
+class CBVMSDatabase(TermEnrollmentStore, StudentManagement, StudentCredentials, AttendanceStore, SecurityEventStore):
     def __init__(self, db_path: Path | str | None = None, *, timeout: float = 30.) -> None:
         if db_path is None:
             root = Path(__file__).resolve().parent.parent
@@ -350,12 +354,9 @@ class CBVMSDatabase(StudentManagement, StudentCredentials, AttendanceStore, Secu
 
             migrate_academics(conn)
             migrate_attendance(conn)
-            self._ensure_current_academic_term_conn(conn)
-            legacy_term_id = self._ensure_legacy_term_conn(conn)
-            conn.execute(
-                "UPDATE violations SET semester_id = ? WHERE semester_id IS NULL",
-                (legacy_term_id,),
-            )
+            from database.term_migration import migrate as migrate_terms
+            migrate_terms(conn)
+            self._ensure_legacy_term_conn(conn)
 
             # Normalize category identities before the versioned publication migration.
             # Historical finalized rows keep their existing disciplinary outcomes.
@@ -390,6 +391,7 @@ class CBVMSDatabase(StudentManagement, StudentCredentials, AttendanceStore, Secu
         # app was closed.  Migration/diagnostic tools may explicitly suppress this
         # workflow mutation while still applying the repeat-safe schema migration.
         if process_deadlines:
+            self.reconcile_term_boundaries()
             self.process_expired_deadlines()
 
     @staticmethod
@@ -404,33 +406,6 @@ class CBVMSDatabase(StudentManagement, StudentCredentials, AttendanceStore, Secu
             """INSERT INTO academic_terms
                (semester_code, semester_name, school_year, is_current)
                VALUES ('legacy', 'Legacy / Unassigned', 'Unassigned', 0)"""
-        )
-        return _inserted_row_id(cursor)
-
-    @staticmethod
-    def _ensure_current_academic_term_conn(conn: sqlite3.Connection) -> int:
-        row = conn.execute(
-            "SELECT id FROM academic_terms WHERE is_current = 1 ORDER BY id LIMIT 1"
-        ).fetchone()
-        if row is not None:
-            return int(row["id"])
-        term = default_academic_term()
-        existing = conn.execute(
-            """SELECT id FROM academic_terms
-               WHERE semester_code = ? AND school_year = ?""",
-            (term["semester_code"], term["school_year"]),
-        ).fetchone()
-        if existing is not None:
-            conn.execute(
-                "UPDATE academic_terms SET is_current = 1, updated_at = datetime('now') WHERE id = ?",
-                (existing["id"],),
-            )
-            return int(existing["id"])
-        cursor = conn.execute(
-            """INSERT INTO academic_terms
-               (semester_code, semester_name, school_year, is_current)
-               VALUES (?, ?, ?, 1)""",
-            (term["semester_code"], term["semester_name"], term["school_year"]),
         )
         return _inserted_row_id(cursor)
 
@@ -471,65 +446,14 @@ class CBVMSDatabase(StudentManagement, StudentCredentials, AttendanceStore, Secu
     # Academic-term configuration
     # ------------------------------------------------------------------
 
-    def get_current_academic_term(self) -> dict:
+    def get_current_academic_term(self, *, now=None) -> dict:
         with self.connect() as conn:
-            row = conn.execute(
-                """SELECT id, semester_code, semester_name, school_year,
-                          is_current, created_at, updated_at
-                   FROM academic_terms WHERE is_current = 1 LIMIT 1"""
-            ).fetchone()
-            if row is None:
-                conn.execute("BEGIN IMMEDIATE")
-                term_id = self._ensure_current_academic_term_conn(conn)
-                row = conn.execute(
-                    "SELECT * FROM academic_terms WHERE id = ?", (term_id,)
-                ).fetchone()
-                conn.commit()
-        return dict(row) if row is not None else {}
+            return resolve_term(conn, now)
 
-    # Readable alias used by portal code and integrations.
     get_current_semester = get_current_academic_term
 
-    def set_current_academic_term(self, semester_name: str, school_year: str) -> dict | None:
-        """Switch the logical current semester without deleting any history."""
-
-        name = (semester_name or "").strip()
-        year = (school_year or "").strip()
-        if not name or not year:
-            return None
-        code = academic_term_code(name)
-        with self.connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            conn.execute(
-                "UPDATE academic_terms SET is_current = 0, updated_at = datetime('now') "
-                "WHERE is_current = 1"
-            )
-            row = conn.execute(
-                """SELECT id FROM academic_terms
-                   WHERE semester_code = ? AND school_year = ?""",
-                (code, year),
-            ).fetchone()
-            if row is None:
-                cursor = conn.execute(
-                    """INSERT INTO academic_terms
-                       (semester_code, semester_name, school_year, is_current)
-                       VALUES (?, ?, ?, 1)""",
-                    (code, name, year),
-                )
-                term_id = _inserted_row_id(cursor)
-            else:
-                term_id = int(row["id"])
-                conn.execute(
-                    """UPDATE academic_terms
-                       SET semester_name = ?, is_current = 1, updated_at = datetime('now')
-                       WHERE id = ?""",
-                    (name, term_id),
-                )
-            result = conn.execute(
-                "SELECT * FROM academic_terms WHERE id = ?", (term_id,)
-            ).fetchone()
-            conn.commit()
-        return dict(result) if result is not None else None
+    def set_current_academic_term(self, *args, **kwargs):
+        raise ValueError('Publish explicit campus dates using save_academic_term; report selection cannot change the operational term.')
 
     set_current_semester = set_current_academic_term
 
@@ -598,6 +522,7 @@ class CBVMSDatabase(StudentManagement, StudentCredentials, AttendanceStore, Secu
         account_username: str | None = None,
         college_department: str | None = None,
         report_year_level: str | None = None, report_section: str | None = None,
+        _connection=None,
     ) -> int:
         # Older callers may supply an explicit alias without college; unknown values fail.
         if college_department is None:
@@ -610,7 +535,8 @@ class CBVMSDatabase(StudentManagement, StudentCredentials, AttendanceStore, Secu
             report_year_level if report_year_level is not None else legacy_year,
             report_section if report_section is not None else legacy_section)
         contact_values = validate_contacts({**(contacts or {}), "email": email})
-        with self.connect() as conn:
+        from contextlib import nullcontext
+        with (nullcontext(_connection) if _connection is not None else self.connect()) as conn:
             cursor = conn.execute(
                 """
                 INSERT INTO students (student_id, name, course, year_and_section, gender, email, encoding, photo)
@@ -637,7 +563,8 @@ class CBVMSDatabase(StudentManagement, StudentCredentials, AttendanceStore, Secu
                 conn.execute("""INSERT INTO student_accounts(student_id,username,password_hash)
                     VALUES (?,?,?)""",
                     (student_id.strip(), (account_username or student_id).strip(), hash_password(account_password)))
-            conn.commit()
+            if _connection is None:
+                conn.commit()
             return pk
 
     def update_student_profile_photo(self, student_id: str, photo: bytes) -> bool:
@@ -717,22 +644,18 @@ class CBVMSDatabase(StudentManagement, StudentCredentials, AttendanceStore, Secu
                 conn.rollback()
                 return None
             standing = conn.execute("SELECT student_status, registration_pending FROM students WHERE student_id=?", (safe_student_id,)).fetchone()
-            if standing and (standing["student_status"] != "Enrolled" or standing["registration_pending"]):
+            context = enrollment_context(conn, safe_student_id, detected_dt)
+            occurrence_term = context['term'].get('id')
+            if semester_id is not None and semester_id != occurrence_term:
+                raise ValueError('Explicit term conflicts with event occurrence time.')
+            semester_id = occurrence_term
+            if standing and is_disciplinary_code(safe_code) and not context['eligible']:
+                # Preserve the detection as an enrollment review, never a discipline case.
+                conn.rollback()
+                self.record_enrollment_review(safe_student_id, observed_at=detected_dt,
+                    source_id=(evidence_provenance or {}).get('camera_session','manual'),
+                    snapshot=snapshot_jpeg, valid_if=valid_if)
                 return None
-            if semester_id is None:
-                term_row = conn.execute(
-                    "SELECT id FROM academic_terms WHERE is_current = 1 LIMIT 1"
-                ).fetchone()
-                if term_row is None:
-                    semester_id = self._ensure_current_academic_term_conn(conn)
-                else:
-                    semester_id = int(term_row["id"])
-            else:
-                term_row = conn.execute(
-                    "SELECT id FROM academic_terms WHERE id = ?", (semester_id,)
-                ).fetchone()
-                if term_row is None:
-                    raise ValueError(f"Unknown academic term id: {semester_id}")
             cursor = conn.execute(
                 """
                 INSERT INTO violations
@@ -753,6 +676,12 @@ class CBVMSDatabase(StudentManagement, StudentCredentials, AttendanceStore, Secu
                 ),
             )
             violation_id = _inserted_row_id(cursor)
+            if not semester_id:
+                self._term_exception_conn(conn,"violations",violation_id)
+            enrollment = context['enrollment'] or {}
+            conn.execute('UPDATE violations SET enrollment_status=?,academic_snapshot=?,term_classification=? WHERE id=?',
+                (context['status'],json.dumps({k:enrollment.get(k) for k in ('college_department','course','report_year_level','report_section')}),
+                 'published_term' if semester_id else 'outside_term',violation_id))
             provenance = None
             if evidence_provenance is not None:
                 provenance = dict(evidence_provenance, version=1, violation_id=violation_id,
@@ -833,6 +762,11 @@ class CBVMSDatabase(StudentManagement, StudentCredentials, AttendanceStore, Secu
                 (presence_id, format_db_datetime(observed), snapshot_jpeg, event_key, source_id, source_label, session_id, context_snapshot, evidence_metadata),
             )
             event_id = int(cursor.lastrowid)
+            term = resolve_term(conn,observed)
+            if not term:
+                self._term_exception_conn(conn,"security_events",event_id)
+            conn.execute('UPDATE security_events SET semester_id=?,term_classification=? WHERE id=?',
+                (term.get('id'),'published_term' if term else 'outside_term',event_id))
             if valid_if is not None and not valid_if():
                 conn.rollback()
                 return None
@@ -1009,6 +943,8 @@ class CBVMSDatabase(StudentManagement, StudentCredentials, AttendanceStore, Secu
         if violation["violation_code"] != "wrong_uniform":
             return
         sid, term = violation["student_id"], violation["semester_id"]
+        if resolve_term(conn, changed_at).get('id') != term:
+            return  # Old decisions retain their strike term but cannot suspend a new term.
         active_count = self._active_strike_count_conn(conn, sid, "wrong_uniform", term)
         count = next((threshold for threshold in (7, 5, 3) if active_count >= threshold), 0)
         days = {3: 2, 5: 7, 7: 14}.get(count)
@@ -1025,7 +961,7 @@ class CBVMSDatabase(StudentManagement, StudentCredentials, AttendanceStore, Secu
         reason = f"Automatic suspension: {count} finalized no-uniform strikes this semester.{parent_action}"
         # Escalation replaces a shorter active suspension; retain its audit history.
         active = conn.execute("""SELECT * FROM student_suspensions WHERE student_id=?
-            AND lifted_at IS NULL AND starts_at<=? AND (ends_at IS NULL OR ends_at>?)""",
+            AND lifted_at IS NULL AND effective_ended_at IS NULL AND starts_at<=? AND (ends_at IS NULL OR ends_at>?)""",
             (sid, changed_at, changed_at)).fetchall()
         for previous in active:
             if previous["ends_at"] is None:
@@ -1226,6 +1162,10 @@ class CBVMSDatabase(StudentManagement, StudentCredentials, AttendanceStore, Secu
 
     def process_expired_deadlines(self, *, now=None, student_id=None):
         """Finalize unused publication windows, including after restart, exactly once."""
+        operational=self.reconcile_term_boundaries(now=now)
+        if not operational:
+            # Keep expired old cases pending during calendar gaps; no automatic academic penalties.
+            return {"auto_confirmed": 0, "appeal_windows_expired": 0}
         # Once registered, only deadlines covered by a fully imported cloud queue
         # may finalize. An offline campus keeps windows pending, not penalized.
         with self.connect() as guard:
@@ -1239,7 +1179,6 @@ class CBVMSDatabase(StudentManagement, StudentCredentials, AttendanceStore, Secu
             if watermark is None:
                 return {"auto_confirmed": 0, "appeal_windows_expired": 0}
             now = min(requested, watermark)
-        self.reconcile_automatic_uniform_suspensions(now=now, student_id=student_id)
         scope = " AND student_id=?" if student_id is not None else ""
         scope_args = (student_id,) if student_id is not None else ()
         due = """appeal_opened_at IS NOT NULL
@@ -2285,7 +2224,12 @@ class CBVMSDatabase(StudentManagement, StudentCredentials, AttendanceStore, Secu
                           v.snapshot AS violation_snapshot,
                           st.is_active AS strike_active,
                           st.deactivation_reason AS strike_removal_reason,
-                          s.name AS student_name_full, s.college_department, s.course, s.year_and_section
+                          s.name AS student_name_full, v.semester_id,
+                          json_extract(v.academic_snapshot,'$.college_department') AS college_department,
+                          json_extract(v.academic_snapshot,'$.course') AS course,
+                          json_extract(v.academic_snapshot,'$.report_year_level') AS report_year_level,
+                          json_extract(v.academic_snapshot,'$.report_section') AS report_section,
+                          '' AS year_and_section
                    FROM appeals a
                    LEFT JOIN violations v ON v.id = a.violation_id
                    LEFT JOIN strikes st ON st.violation_id = a.violation_id
@@ -2298,7 +2242,12 @@ class CBVMSDatabase(StudentManagement, StudentCredentials, AttendanceStore, Secu
         """All violations joined with student info, newest first."""
         with self.connect() as conn:
             rows = conn.execute(
-                """SELECT v.*, s.college_department, s.course, s.year_and_section,
+                """SELECT v.*,
+                          COALESCE(json_extract(v.academic_snapshot,'$.college_department'),'Unverified') AS college_department,
+                          COALESCE(json_extract(v.academic_snapshot,'$.course'),'Unverified') AS course,
+                          json_extract(v.academic_snapshot,'$.report_year_level') AS report_year_level,
+                          json_extract(v.academic_snapshot,'$.report_section') AS report_section,
+                          '' AS year_and_section,
                           t.semester_name, t.school_year,
                           st.is_active AS strike_active,
                           st.deactivation_reason AS strike_removal_reason,

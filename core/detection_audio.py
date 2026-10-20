@@ -27,18 +27,22 @@ class SoundKind(IntEnum):
     POSITIVE = 1
     VIOLATION = 2
     SUSPENSION = 3
+    ENROLLMENT = 4
     GENERIC = 0  # Separate compatibility/unknown alert; never inferred from text.
 
 
 ASSETS = {kind: ASSET_DIR / f'{kind.name.lower()}.wav' for kind in SoundKind}
 LABELS = {SoundKind.POSITIVE: 'Correct uniform chime',
           SoundKind.VIOLATION: 'Accepted violation tone',
-          SoundKind.SUSPENSION: 'Active suspension alert'}
+          SoundKind.SUSPENSION: 'Active suspension alert',
+          SoundKind.ENROLLMENT: 'Enrollment review alert'}
 
 
 def select_sound(assessment, active_suspension: bool) -> SoundKind | None:
     if not assessment.reliable_identity or not assessment.student_id:
         return None
+    if not assessment.discipline_eligible:
+        return SoundKind.ENROLLMENT
     if active_suspension:
         return SoundKind.SUSPENSION
     if any(code in ('wrong_uniform', 'earring') for code in assessment.accepted_categories):
@@ -117,6 +121,7 @@ class AudioDispatcher:
     def __init__(self, backend=None, *, clock=time.monotonic):
         self.backend = backend or LocalAudioBackend()
         self.clock = clock
+        self.enrollment_cooldown = 300.0
         self._cv = threading.Condition()
         self._pending = OrderedDict()
         self._states = OrderedDict()
@@ -226,7 +231,7 @@ class AudioDispatcher:
                     continue  # No periodic repetition for a held state, even after cooldown.
                 person = (scope, assessment.student_id)
                 prior = self._cooldowns.get(person)
-                if prior and now - prior[0] < self.COOLDOWN and kind <= prior[1]:
+                if prior and now - prior[0] < (self.enrollment_cooldown if kind == SoundKind.ENROLLMENT else self.COOLDOWN) and kind <= prior[1]:
                     continue
                 self._enqueue(AudioRequest(key, kind, now, guard,
                     lambda a=assessment, reader=suspension_reader: select_sound(a, bool(reader())),
@@ -289,7 +294,7 @@ class AudioDispatcher:
                     if req.person is not None:
                         prior = self._cooldowns.get(req.person)
                         now = self.clock()
-                        if prior and now-prior[0] < self.COOLDOWN and req.kind <= prior[1]:
+                        if prior and now-prior[0] < (self.enrollment_cooldown if req.kind == SoundKind.ENROLLMENT else self.COOLDOWN) and req.kind <= prior[1]:
                             continue
                         self._cooldowns[req.person] = (now, req.kind)
                         self._cooldowns.move_to_end(req.person)

@@ -25,6 +25,9 @@ class AttendancePipelineTests(unittest.TestCase):
 
     def test_two_known_students_compliant_and_unknown_survive_blocked_discipline_queue(self):
         self.db.insert_student('0002/B','Second','BSIT','2B',b'face2',b'photo2')
+        from tests.term_fixture import verified_term
+        verified_term(self.db,self.sid,2027)
+        verified_term(self.db,'0002/B',2027)
         fx=PipelineFixture();fx.processor.database=self.db
         fx.recognizer.recognize_faces.return_value=[detection(self.sid),detection('0002/B',350,embedding=1),detection('',520,embedding=2)]
         fx.trainer.predict_proba.return_value={'correct_uniform':.95}
@@ -81,6 +84,8 @@ class AttendancePipelineTests(unittest.TestCase):
         self.assertEqual(worker.attendance_writer.queue.qsize(),1)
 
     def test_confirmed_identity_is_recorded_even_when_uniform_stage_expires(self):
+        from tests.term_fixture import verified_term
+        verified_term(self.db,self.sid,2027)
         fx=PipelineFixture();fx.processor.database=self.db
         fx.recognizer.recognize_faces.return_value=[detection(self.sid)]
         worker=LiveWorker(fx.processor,persistence_worker=True)

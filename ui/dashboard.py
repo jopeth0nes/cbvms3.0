@@ -1436,7 +1436,7 @@ class CBVMSDashboard(WorkspaceWindow):
                     if overlap/area >= .5:
                         # Current geometry, same-person validated original evidence.
                         assessed.update(face_box=current['face_box'],torso_box=current['torso_box'])
-                        if current['torso_box'] is None:
+                        if current['torso_box'] is None and assessed.get('state') != 'Enrollment review':
                             assessed.update(state='Uniform not assessed',reason=current['reason'],
                                             detail=current['reason'],accepted_categories=())
                         current=assessed
@@ -1643,7 +1643,9 @@ class CBVMSDashboard(WorkspaceWindow):
             with self._database.connect() as conn:
                 today = conn.execute("SELECT COUNT(*) FROM violations WHERE datetime(timestamp)>=datetime(?) AND datetime(timestamp)<datetime(?)", (start,end)).fetchone()[0]
                 pending = conn.execute("SELECT COUNT(*) FROM violations WHERE status='pending_review'").fetchone()[0]
-                students = conn.execute("SELECT COUNT(*) FROM students WHERE student_status='Enrolled' AND registration_pending=0").fetchone()[0]
+                from core.academic_calendar import resolve_term
+                term=resolve_term(conn)
+                students = conn.execute("SELECT COUNT(*) FROM student_term_enrollments WHERE status='confirmed' AND semester_id=?",(term.get('id'),)).fetchone()[0]
                 last = conn.execute("SELECT MAX(timestamp) FROM violations").fetchone()[0]
             from core.discipline import parse_db_datetime
             stamp = parse_db_datetime(last).astimezone().strftime("%m-%d %H:%M:%S") if last else "—"

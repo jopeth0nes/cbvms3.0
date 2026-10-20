@@ -19,8 +19,9 @@ NOW=datetime(2026,10,5,8,tzinfo=timezone.utc)
 
 def seed(db):
     db.initialize(process_deadlines=False)
-    term=db.get_current_academic_term()['id']
-    old=db.set_current_academic_term('Semester 2','2025-2026')['id']
+    with db.connect() as c:actor=c.execute("SELECT username FROM users WHERE role='superadmin'").fetchone()[0]
+    term=db.save_academic_term(actor=actor,semester_code='semester_1',school_year='2026-2027',start_date='2026-06-01',end_date='2027-05-31',publish=True)
+    old=db.save_academic_term(actor=actor,semester_code='semester_2',school_year='2025-2026',start_date='2025-06-01',end_date='2026-05-31',publish=True)
     with db.connect() as c:
         c.execute('UPDATE academic_terms SET is_current=0')
         c.execute('UPDATE academic_terms SET is_current=1 WHERE id=?',(term,))
@@ -41,6 +42,10 @@ def seed(db):
         for id,sid,code,stamp,status,t in violations:
             c.execute('''INSERT INTO violations(id,student_id,student_name,violation_type,violation_code,timestamp,status,semester_id)
                 VALUES(?,?,?,?,?,?,?,?)''',(id,sid,sid,code,code,stamp,status,t))
+        import json
+        from core.academics import display_academics
+        for student in c.execute('SELECT * FROM students').fetchall():
+            c.execute('UPDATE violations SET academic_snapshot=? WHERE student_id=?',(json.dumps(display_academics(dict(student))),student['student_id']))
         for vid,at,active in [(2,'2026-10-05 16:00:00',1),(4,'2026-10-05 02:00:00',0),
                 (5,'2026-10-05 03:00:00',1),(6,'2026-10-05 04:00:00',1),(8,'2026-10-05 06:00:00',1),
                 (10,'2026-10-05 07:00:00',1)]:
@@ -78,6 +83,24 @@ class AnalyticsTests(unittest.TestCase):
         self.custom=ReportFilter(period='custom',start='2026-10-05',end='2026-10-05',interval='Day')
 
     def report(self,f=None): return load_report(self.db,'admin',f or ReportFilter(),now=NOW)
+
+    def test_academic_year_and_historical_section_filter_all_report_outputs(self):
+        import json
+        with self.db.connect() as conn:
+            snapshot=json.loads(conn.execute('SELECT academic_snapshot FROM violations WHERE id=7').fetchone()[0])
+            snapshot['report_section']='Historic X'
+            conn.execute('UPDATE violations SET academic_snapshot=? WHERE id=7',(json.dumps(snapshot),))
+        report=self.report(ReportFilter(period='all',academic_year='2025-2026',section='Historic X'))
+        self.assertEqual([r['id'] for r in drill_rows(report,'recorded')],[7])
+        self.assertEqual(report['counts']['recorded'],1)
+        self.assertEqual(sum(n for _,n in report['trends']['recorded']),1)
+        self.assertEqual(sum(n for _,n in report['rankings']['college']),1)
+
+    def test_unassigned_includes_existing_legacy_term_ids(self):
+        with self.db.connect() as conn:
+            legacy=conn.execute("SELECT id FROM academic_terms WHERE semester_code='legacy'").fetchone()[0]
+            conn.execute('UPDATE violations SET semester_id=? WHERE id=7',(legacy,))
+        self.assertIn(7,[r['id'] for r in self.report(ReportFilter(period='unassigned'))['records']['recorded']])
 
     def test_exact_counts_date_basis_and_no_join_inflation(self):
         r=self.report(self.custom)
@@ -144,7 +167,8 @@ class AnalyticsTests(unittest.TestCase):
         with self.db.connect() as c:
             c.execute("UPDATE students SET course='BSCS',report_year_level='4th Year' WHERE student_id='S1'")
         r=self.report(replace(self.custom,course='Computer Science',year='4th Year'))
-        self.assertEqual(r['counts']['recorded'],2)
+        self.assertEqual(r['counts']['recorded'],0)
+        self.assertEqual(self.report(replace(self.custom,course='Information Technology',year='1st Year'))['counts']['recorded'],2)
 
     def test_reads_do_not_run_deadline_processing_or_mutate_any_tables(self):
         with self.db.connect() as c: before=list(c.iterdump())
@@ -163,7 +187,8 @@ class AnalyticsTests(unittest.TestCase):
         r=self.report(replace(self.custom,course='no course'))
         self.assertFalse(any(r['counts'].values()))
         with self.db.connect() as c: c.execute('UPDATE academic_terms SET is_current=0')
-        r=self.report(); self.assertEqual(r['counts']['recorded'],0)
+        self.assertEqual(self.report()['counts']['recorded'],8)  # stale flags do not override dates
+        r=load_report(self.db,'admin',now=datetime(2027,7,1,tzinfo=timezone.utc)); self.assertEqual(r['counts']['recorded'],0)
         self.assertEqual(r['scope'],'No current academic term')
 
     def test_conflicting_or_foreign_suspension_term_is_unassigned(self):
@@ -211,7 +236,8 @@ class AnalyticsTests(unittest.TestCase):
         self.assertEqual(dict(result['rankings']['course'])['Information Technology'],4)
         after=self.report(ReportFilter(period='all'))
         self.assertEqual(after['counts']['recorded'],11)
-        self.assertEqual(dict(after['rankings']['course'])['Computer Science'],5)
+        self.assertEqual(dict(after['rankings']['course'])['Information Technology'],4)
+        self.assertNotIn('Computer Science',dict(after['rankings']['course']))  # missing event snapshot stays unverified
 
 
 class WorkerTests(unittest.TestCase):

@@ -1,3 +1,4 @@
+from tests.term_fixture import verified_term
 """History relationships and existing suspension/strike rules, in temporary DBs."""
 import tempfile
 import unittest
@@ -37,6 +38,7 @@ class SuspensionHistoryTests(unittest.TestCase):
         self.db.initialize()
         for sid in (self.SID, self.OTHER):
             self.db.insert_student(sid, "Same Name", "BSIT", "3A", b"", b"")
+            verified_term(self.db,sid)
 
     def violation(self, sid=None, status="pending_review", code="wrong_uniform"):
         return self.db.log_violation(sid or self.SID, "Same Name", code, status=status)
@@ -90,9 +92,11 @@ class SuspensionHistoryTests(unittest.TestCase):
         rows = {row["id"]: row for row in self.db.get_discipline_history_for_student(self.SID)}
         self.assertEqual(rows[ids[0]]["appeal_status"], "approved")
         self.assertEqual(rows[ids[0]]["strike_active"], 0)
-        self.db.set_current_academic_term("Semester 2", "2099-2100")
-        term_id = self.db.get_current_academic_term()["id"]
-        self.assertEqual(self.db.get_strike_count(self.SID, "wrong_uniform"), 0)
+        term_id = verified_term(self.db,self.SID,2099)
+        from core.academic_calendar import instant
+        with patch('core.academic_calendar.utc_now',return_value=instant('2099-06-01')):
+            self.assertEqual(self.db.get_current_academic_term()["id"],term_id)
+            self.assertEqual(self.db.get_strike_count(self.SID, "wrong_uniform"), 0)
         self.assertEqual(strike_explanation(rows[ids[1]], term_id), "Active strike in a previous semester")
         self.assertEqual(len(self.db.get_discipline_history_for_student(self.SID)), 5)
 
