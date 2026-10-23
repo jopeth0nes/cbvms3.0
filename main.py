@@ -17,13 +17,13 @@ from auth.auth_manager import AuthManager
 from auth.login import run_login
 from core.person_detector import PersonDetector
 from core.recognizer import FaceRecognizer
+from core.monitor_models import MonitorModels
 from database.db_manager import CBVMSDatabase
 from ui.dashboard import open_dashboard
 
 
-def _warm_models(recognizer: FaceRecognizer, person_detector) -> None:
-    from core.model_readiness import face_readiness
-    face_readiness(recognizer).start()
+def _warm_models(models: MonitorModels) -> None:
+    models.start()
 
 
 def main() -> None:
@@ -33,25 +33,27 @@ def main() -> None:
     from core.cloud_sync import start_cloud_sync
     start_cloud_sync(database)
 
-    # Build the heavy CV objects now and warm their models on a background thread while
-    # the login screen is up — by the time the user signs in, scanning is ready to go.
+    # Prepare reusable models in bounded background workers while login is open.
+    # Fast logins can still reach the dashboard before preparation finishes.
     recognizer = FaceRecognizer(database)
     try:
         person_detector = PersonDetector()
     except Exception as exc:
         print(f"[CBVMS] PersonDetector init failed: {exc}")
         person_detector = None
+    monitor_models = MonitorModels(recognizer, person_detector)
     def start_model_warmup():
         threading.Thread(
-            target=_warm_models, args=(recognizer, person_detector), daemon=True
+            target=_warm_models, args=(monitor_models,), daemon=True,
+            name="login-model-preparation",
         ).start()
 
     auth = AuthManager(database, recognizer=recognizer)
 
     username = run_login(auth, on_ready=start_model_warmup)
     if not username:
-        if hasattr(recognizer,'readiness'):
-            recognizer.readiness.wait(5.)
+        monitor_models.cancel_pending()
+        monitor_models.wait(5.)
         return  # login window closed — exit
 
     # The login root has been destroyed. Dispose its cyclic font/widget objects
@@ -68,6 +70,7 @@ def main() -> None:
         database=database,
         recognizer=recognizer,
         person_detector=person_detector,
+        monitor_models=monitor_models,
     )
 
     if logged_out:

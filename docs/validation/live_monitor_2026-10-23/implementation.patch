@@ -1,0 +1,2451 @@
+diff --git a/core/diagnostics.py b/core/diagnostics.py
+index 3b53b84..834eb4f 100644
+--- a/core/diagnostics.py
++++ b/core/diagnostics.py
+@@ -1,9 +1,15 @@
+ """Small structured diagnostics; callers supply metadata, never images/embeddings."""
+ import json
+ import logging
++from core.performance import PERF
+ 
+ LOG = logging.getLogger("cbvms.pipeline")
+ 
+ 
+ def event(name, **fields):
++    # Numeric allowlist only: raw events can contain IDs; performance summaries cannot.
++    if name == "stage_complete":
++        PERF.observe(fields.get("stage"), fields.get("elapsed"))
++    elif name == "frame_rejected":
++        PERF.observe("rejected", 0.)
+     LOG.info(json.dumps({"event": name, **fields}, default=str, sort_keys=True))
+diff --git a/core/live_pipeline.py b/core/live_pipeline.py
+index 5328fbf..18ce488 100644
+--- a/core/live_pipeline.py
++++ b/core/live_pipeline.py
+@@ -23,6 +23,7 @@ from core.person_detector import MAX_TORSO_SKIN_FRACTION, skin_fraction
+ from core.student_status import standing_label, suspension_label
+ from core.uniform_matcher import fuse_uniform_prob
+ from core.diagnostics import event
++from core.performance import PERF, measure
+ 
+ 
+ def put_latest(q, item):
+@@ -70,6 +71,17 @@ class MonitorTask:
+         frame.setflags(write=False)
+         object.__setattr__(self, 'frame', frame)
+ 
++    def with_observations(self, observations):
++        """Handoff of THIS task's localization; retain its owned, frozen pixels.
++
++        Ordinary construction/replacement still copies untrusted caller buffers.
++        Only this metadata handoff shares the existing task's frame and provenance.
++        """
++        from copy import copy
++        result = copy(self)
++        object.__setattr__(result, "observations", tuple(observations))
++        return result
++
+     def valid(self, now=None):
+         now = time.monotonic() if now is None else now
+         return not self.cancelled.is_set() and 0 <= now-self.context.captured_at <= 3.0
+@@ -213,8 +225,9 @@ class LiveProcessor:
+             event("frame_rejected", stage="recognition", reason=task.rejection())
+             return None
+         read_database = self.read_database or self.database
+-        term = read_database.attendance_term_snapshot(occurred_at=task.observed_at)
+-        if hasattr(self.notifier,'audio'):
++        database_started = time.monotonic()
++        term = read_database.attendance_term_snapshot(occurred_at=task.observed_at) if rows else {}
++        if rows and hasattr(self.notifier,'audio'):
+             with read_database.connect() as conn:
+                 self.notifier.audio.enrollment_cooldown = conn.execute('SELECT alarm_cooldown FROM enrollment_settings WHERE id=1').fetchone()[0]
+         if not isinstance(term, dict):
+@@ -237,6 +250,7 @@ class LiveProcessor:
+                 suspension=read_database.get_active_suspension(student['student_id'])
+                 row['active_suspension'] = bool(suspension)
+                 row['suspension_tag']=suspension_label(suspension) if suspension else ''
++        PERF.observe("database_read", time.monotonic()-database_started)
+         if task.observations is None and self.publish_identity is not None and task.valid():
+             identities = self.identity_state.update(task.context, rows, now=time.monotonic())
+             self.publish_identity(MonitorResult(task, identities, time.monotonic(),
+@@ -345,6 +359,10 @@ class LiveProcessor:
+             event("frame_rejected", stage="uniform", reason=task.rejection())
+             return None
+         assessments=self.state.update(task.context,rows,now=time.monotonic())
++        if any(a.reliable_identity for a in assessments):
++            PERF.first("first_stable_identity")
++        if any(r.get("uniform_available") for r in rows):
++            PERF.first("first_uniform_assessment")
+         if task.observations is not None:
+             assessments=tuple(replace(a, track_id=o.track_id, presence_id=o.presence_id)
+                               for a,o in zip(assessments,task.observations))
+@@ -634,6 +652,8 @@ class FaceTrackingProcessor:
+     def analyze(self, task):
+         started = time.monotonic()
+         rows = [dict(row, identity_uncertain=True) for row in self.recognizer.detect_faces(task.frame)]
++        if rows:
++            PERF.first("first_face")
+         bodies=[]
+         ready = self.person_detector is not None and (self.readiness is None or self.readiness.ready('body'))
+         if rows and ready:
+@@ -669,6 +689,8 @@ class FaceTrackingProcessor:
+         observations=tuple(TrackedFace(tuple(r['box']),float(r.get('score',1.)),tuple(r.get('keypoints',())),
+             a.track_id,a.presence_id,a.body_index,a.body_box,a.torso_box,r['reason'])
+             for r,a in zip(rows,tracks))
++        if any(a.torso_box for a in tracks):
++            PERF.first("first_torso")
+         event("stage_complete", stage="tracking", frame_id=task.context.frame_id,
+               elapsed=time.monotonic()-started, faces=len(tracks))
+         result=MonitorResult(task, tracks, time.monotonic(),
+@@ -697,6 +719,9 @@ class LiveWorker:
+             processor.read_database = copy(processor.database)
+             processor.read_database.timeout = .1
+         self.requests=queue.Queue(maxsize=1)
++        self._queue_clock_lock = threading.Lock()
++        self._queue_clock = {}
++        self._metric_kind = "tracking" if isinstance(processor, FaceTrackingProcessor) else "assessment"
+         self.results=queue.Queue(maxsize=1)
+         self.stop_event=threading.Event()
+         self.done=threading.Event()
+@@ -736,7 +761,8 @@ class LiveWorker:
+                 self.active_write = result.task
+                 try:
+                     if not self.stop_event.is_set() and result.task.valid():
+-                        self.processor.persist(result)
++                        with measure("persistence"):
++                            self.processor.persist(result)
+                     else:
+                         event("frame_rejected", stage="persistence", reason="stopped_or_expired")
+                 except Exception as exc:
+@@ -749,7 +775,15 @@ class LiveWorker:
+     def offer(self,task):
+         if not self.stop_event.is_set():
+             event("frame_submitted", worker=type(self.processor).__name__, frame_id=task.context.frame_id)
+-            put_latest(self.requests,task)
++            if not PERF.enabled:
++                put_latest(self.requests, task)
++                return
++            with self._queue_clock_lock:
++                if not self.requests.empty():
++                    PERF.observe("replaced_"+self._metric_kind, 0.)
++                self._queue_clock.clear()
++                self._queue_clock[id(task)] = time.monotonic()
++                put_latest(self.requests,task)
+ 
+     def stop(self):
+         self.stop_event.set()
+@@ -782,10 +816,16 @@ class LiveWorker:
+                         event("frame_rejected", stage="queue", reason=task.rejection())
+                     continue
+                 try:
++                    if PERF.enabled:
++                        with self._queue_clock_lock:
++                            offered_at = self._queue_clock.pop(id(task), None)
++                        if offered_at is not None:
++                            PERF.observe("queue_"+self._metric_kind, time.monotonic()-offered_at)
+                     self.active_task = task
+                     self.active_since = time.monotonic()
+                     result=self.processor.analyze(task)
+                     if result is not None and task.valid() and not self.stop_event.is_set():
++                        PERF.observe("capture_to_"+self._metric_kind, time.monotonic()-task.context.captured_at)
+                         self.last_error = ""
+                         if self.persistence_worker:
+                             if self.attendance_writer is not None:
+diff --git a/core/model_readiness.py b/core/model_readiness.py
+index 8841f15..b10e2c9 100644
+--- a/core/model_readiness.py
++++ b/core/model_readiness.py
+@@ -19,40 +19,83 @@ class ComponentStatus:
+ 
+ 
+ class ModelReadiness:
+-    def __init__(self, timeout=45.):
++    def __init__(self, timeout=45., max_concurrent=None):
+         self.timeout = timeout
+-        self._lock = threading.Lock()
++        self.max_concurrent = max_concurrent
++        self._lock = threading.RLock()
+         self._loaders = {}
+         self._status = {}
+         self._running = set()
+         self._threads = {}
++        self._priority = {}
++        self._sequence = 0
++        self._closed = False
+ 
+-    def add(self, name, loader):
++    def add(self, name, loader, *, priority=100):
+         with self._lock:
+             if name not in self._loaders:
+                 self._loaders[name] = loader
+                 self._status[name] = ComponentStatus()
++                self._priority[name] = (priority, self._sequence)
++                self._sequence += 1
++
++    def _launch_locked(self, retry=False):
++        if self._closed:
++            return
++        if retry:
++            # Queue every failed component for this explicit cycle. As each slot
++            # opens, face-priority ordering chooses the next item. A failed retry
++            # returns to failed and is never automatically requeued.
++            for name, status in tuple(self._status.items()):
++                if status.state == "failed":
++                    self._status[name] = ComponentStatus()
++        while self.max_concurrent is None or len(self._running) < self.max_concurrent:
++            candidates = [n for n, status in self._status.items()
++                          if n not in self._running and status.state == "waiting"]
++            if not candidates:
++                return
++            name = min(candidates, key=lambda n: self._priority[n])
++            started = time.monotonic()
++            self._running.add(name)
++            self._status[name] = ComponentStatus("loading", started=started)
++            worker = threading.Thread(target=self._load, args=(name,), daemon=True,
++                                      name=f"model-{name}")
++            self._threads[name] = worker
++            try:
++                # Start under the registry lock so wait/close can never observe a
++                # reserved loading component whose thread has not started yet.
++                worker.start()
++            except Exception as exc:
++                self._running.remove(name)
++                self._status[name] = ComponentStatus("failed", str(exc), started,
++                                                     time.monotonic()-started)
+ 
+     def start(self, *, retry=False):
+         with self._lock:
+-            names = [n for n, s in self._status.items() if n not in self._running
+-                     and (s.state == "waiting" or (retry and s.state == "failed"))]
+-            for name in names:
+-                self._running.add(name)
+-                self._status[name] = ComponentStatus("loading", started=time.monotonic())
+-        for name in names:
+-            worker=threading.Thread(target=self._load,args=(name,),daemon=True,name=f'model-{name}')
+-            with self._lock:
+-                self._threads[name]=worker
+-                worker.start()
++            self._launch_locked(retry=retry)
++
++    def cancel_pending(self):
++        """Prevent queued work from launching; running native calls retain ownership."""
++        with self._lock:
++            self._closed = True
++            for name, status in tuple(self._status.items()):
++                if name not in self._running and status.state == "waiting":
++                    self._status[name] = ComponentStatus(
++                        "cancelled", "Preparation cancelled before this component started.")
+ 
+     def wait(self, timeout=5.):
+         """Bounded shutdown grace; never claims to cancel a running native call."""
+-        deadline=time.monotonic()+timeout
+-        with self._lock:
+-            workers=tuple(self._threads.values())
+-        for worker in workers:
+-            worker.join(max(0,deadline-time.monotonic()))
++        deadline = time.monotonic()+timeout
++        while time.monotonic() < deadline:
++            with self._lock:
++                workers = tuple(self._threads[n] for n in self._running
++                                if n in self._threads)
++                if not workers:
++                    return
++            for worker in workers:
++                if worker.ident is not None:
++                    worker.join(max(0, deadline-time.monotonic()))
++            time.sleep(.001)
+ 
+     def _load(self, name):
+         event("component_load_start", component=name)
+@@ -68,6 +111,7 @@ class ModelReadiness:
+         with self._lock:
+             self._status[name] = ComponentStatus(state, error, started, elapsed)
+             self._running.remove(name)
++            self._launch_locked()
+         event("component_load_complete" if state == "ready" else "component_load_failed",
+               component=name, elapsed=round(elapsed, 3), error=error)
+ 
+@@ -105,7 +149,7 @@ def face_readiness(recognizer):
+     # The same registry travels with the shared recognizer from login to dashboard.
+     if not hasattr(recognizer, "readiness"):
+         registry = ModelReadiness()
+-        registry.add("face", recognizer._ensure_detector)
+-        registry.add("recognition", recognizer._ensure_recognition)
++        registry.add("face", recognizer._ensure_detector, priority=0)
++        registry.add("recognition", recognizer._ensure_recognition, priority=1)
+         recognizer.readiness = registry
+     return recognizer.readiness
+diff --git a/core/model_safety.py b/core/model_safety.py
+index 0f06456..a923a52 100644
+--- a/core/model_safety.py
++++ b/core/model_safety.py
+@@ -1,12 +1,17 @@
+ """Serialize access to shared model objects used by background workers."""
+ 
+ from functools import wraps
++from core.performance import PERF, timed_lock
+ 
+ 
+ def locked_model(method):
+     """Hold an instance's reentrant model lock through load/predict/result read."""
+     @wraps(method)
+     def locked(self, *args, **kwargs):
+-        with self._model_lock:
++        if not PERF.enabled:
++            with self._model_lock:
++                return method(self, *args, **kwargs)
++        owner = "person" if type(self).__name__ == "PersonDetector" else "trainer"
++        with timed_lock(self._model_lock, "lock_"+owner):
+             return method(self, *args, **kwargs)
+     return locked
+diff --git a/core/person_detector.py b/core/person_detector.py
+index 89738b4..c0f734f 100644
+--- a/core/person_detector.py
++++ b/core/person_detector.py
+@@ -15,6 +15,7 @@ import cv2
+ import numpy as np
+ 
+ from core.model_safety import locked_model
++from core.performance import measure
+ 
+ # Vertical slice of the person box used as the torso (fractions of body height).
+ _TORSO_TOP_FRAC = 0.20   # skip head/neck
+@@ -129,8 +130,9 @@ class PersonDetector:
+             if not Path(self._MODEL_PATH).is_file() or Path(self._MODEL_PATH).stat().st_size < 1024:
+                 raise RuntimeError(f"Missing or incomplete body weights: {self._MODEL_PATH}")
+             event("model_asset", component="body", path=self._MODEL_PATH, provider="cpu")
+-            from ultralytics import YOLO
+-            self._model = YOLO(self._MODEL_PATH)  # ~6 MB, auto-downloads once
++            with measure("body_load"):
++                from ultralytics import YOLO
++                self._model = YOLO(self._MODEL_PATH)  # validated local weights only
+             return self._model
+         except Exception as exc:
+             print(f"[PersonDetector] model load failed: {exc}")
+@@ -167,9 +169,10 @@ class PersonDetector:
+             return []
+         try:
+             # Pass BGR directly — ultralytics expects BGR numpy frames.
+-            results = model.predict(
+-                frame_bgr, conf=self._CONF, iou=self._IOU, classes=[0], verbose=False
+-            )
++            with measure("body_inference"):
++                results = model.predict(
++                    frame_bgr, conf=self._CONF, iou=self._IOU, classes=[0], verbose=False
++                )
+             boxes: list[list[int]] = []
+             if results:
+                 for b in results[0].boxes:
+diff --git a/core/recognizer.py b/core/recognizer.py
+index 6f3217b..be45135 100644
+--- a/core/recognizer.py
++++ b/core/recognizer.py
+@@ -17,6 +17,7 @@ import os
+ from pathlib import Path
+ from types import SimpleNamespace
+ from core.diagnostics import event
++from core.performance import measure, timed_lock
+ import pickle
+ import threading
+ from typing import TYPE_CHECKING
+@@ -38,8 +39,8 @@ IDENTITY_MARGIN = 0.05
+ # Drop weak SCRFD detections (real faces score well above this).
+ DET_SCORE_MIN = 0.5
+ 
+-# Input size for the fast detection-only pass (detect_faces). Smaller than the
+-# 640x640 recognition pass → ~52ms vs ~196ms, enough headroom for ~15 FPS tracking.
++# The live path detects at 320 and reuses these landmarks for recognition.
++# Enrollment also uses the 640 path; throughput depends on hardware and scene.
+ DET_FAST_SIZE = (320, 320)
+ 
+ 
+@@ -117,10 +118,12 @@ class FaceRecognizer:
+         return model
+ 
+     def _ensure_detector(self):
+-        with self._detector_lock:
++        with timed_lock(self._detector_lock, "lock_detector"):
+             if self._detector is None:
+-                model = self._local_model("det_10g.onnx", "detection")
+-                model.detect(np.zeros((320, 320, 3), np.uint8), input_size=DET_FAST_SIZE)
++                with measure("face_load"):
++                    model = self._local_model("det_10g.onnx", "detection")
++                with measure("face_warm"):
++                    model.detect(np.zeros((320, 320, 3), np.uint8), input_size=DET_FAST_SIZE)
+                 self._detector = model
+                 self._app = SimpleNamespace(det_model=model)
+                 for attr, filename in (("_frontal_cascade", "haarcascade_frontalface_default.xml"),
+@@ -130,10 +133,12 @@ class FaceRecognizer:
+             return self._detector
+ 
+     def _ensure_recognition(self):
+-        with self._recognition_lock:
++        with timed_lock(self._recognition_lock, "lock_recognition"):
+             if self._recognition is None:
+-                model = self._local_model("w600k_r50.onnx", "recognition")
+-                model.get_feat(np.zeros((112, 112, 3), np.uint8))
++                with measure("recognition_load"):
++                    model = self._local_model("w600k_r50.onnx", "recognition")
++                with measure("recognition_warm"):
++                    model.get_feat(np.zeros((112, 112, 3), np.uint8))
+                 self._recognition = model
+             return self._recognition
+ 
+@@ -196,16 +201,17 @@ class FaceRecognizer:
+     def detect_faces(self, frame_bgr: np.ndarray) -> list[dict]:
+         """Fast detection-only pass (no embedding) for the live tracker.
+ 
+-        Runs SCRFD at a smaller input size (~52 ms vs ~520 ms for full recognition),
+-        so the overlay can refresh box positions ~10-15x more often than identity.
++        Runs the installed detector at the live input size. The assessment worker reuses these
++        same-frame landmarks rather than running another detector pass.
+         Returns [{"box": [x1,y1,x2,y2], "score": float}] for confident detections.
+         """
+         if frame_bgr is None or frame_bgr.size == 0:
+             return []
+         try:
+             detector = self._ensure_detector()
+-            with self._detector_lock:
+-                bboxes, _kpss = detector.detect(frame_bgr, input_size=DET_FAST_SIZE)
++            with timed_lock(self._detector_lock, "lock_detector"):
++                with measure("face_inference"):
++                    bboxes, _kpss = detector.detect(frame_bgr, input_size=DET_FAST_SIZE)
+             self.detector_error = None
+         except Exception as exc:
+             self.detector_error = str(exc)
+@@ -224,7 +230,7 @@ class FaceRecognizer:
+         """Embed the tracker's exact same-frame landmarks, without redetecting faces."""
+         from insightface.app.common import Face
+         result = []
+-        with self._recognition_lock:
++        with timed_lock(self._recognition_lock, "lock_recognition"), measure("recognition_inference"):
+             for row in detections:
+                 points = np.asarray(row['keypoints'], dtype=np.float32)
+                 if points.shape != (5, 2) or not np.isfinite(points).all():
+diff --git a/core/trainer.py b/core/trainer.py
+index 47a0b9c..8943ca0 100644
+--- a/core/trainer.py
++++ b/core/trainer.py
+@@ -18,6 +18,7 @@ import cv2
+ import numpy as np
+ 
+ from core.model_safety import locked_model
++from core.performance import measure
+ from core.diagnostics import event
+ 
+ ROOT = Path(__file__).resolve().parents[1]
+@@ -343,8 +344,9 @@ class ViolationTrainer:
+             if not path.is_file() or path.stat().st_size < 1024:
+                 raise RuntimeError(f"Missing or incomplete classifier weights: {path}")
+             event("model_asset", component=module, path=str(path), provider="cpu")
+-            from ultralytics import YOLO
+-            model = YOLO(str(path))
++            with measure(module+"_load"):
++                from ultralytics import YOLO
++                model = YOLO(str(path))
+             if getattr(model, "task", "classify") != "classify":
+                 raise RuntimeError(f"Expected a classification model: {path}")
+             names = getattr(model, "names", None)
+@@ -370,7 +372,8 @@ class ViolationTrainer:
+             # ultralytics' classification preprocess does cv2.cvtColor(im, BGR2RGB)
+             # internally — converting here would double-swap R/B channels.
+             proc = _letterbox(image_bgr, IMG_SIZE)
+-            results = model.predict(proc, verbose=False)
++            with measure(module+"_inference"):
++                results = model.predict(proc, verbose=False)
+             if not results:
+                 return None, 0.0
+             res = results[0]
+@@ -398,7 +401,8 @@ class ViolationTrainer:
+             return None
+         try:
+             proc = _letterbox(image_bgr, IMG_SIZE)
+-            results = model.predict(proc, verbose=False)
++            with measure(module+"_inference"):
++                results = model.predict(proc, verbose=False)
+             if not results:
+                 return None
+             res = results[0]
+diff --git a/main.py b/main.py
+index e3c632e..671befe 100644
+--- a/main.py
++++ b/main.py
+@@ -17,13 +17,13 @@ from auth.auth_manager import AuthManager
+ from auth.login import run_login
+ from core.person_detector import PersonDetector
+ from core.recognizer import FaceRecognizer
++from core.monitor_models import MonitorModels
+ from database.db_manager import CBVMSDatabase
+ from ui.dashboard import open_dashboard
+ 
+ 
+-def _warm_models(recognizer: FaceRecognizer, person_detector) -> None:
+-    from core.model_readiness import face_readiness
+-    face_readiness(recognizer).start()
++def _warm_models(models: MonitorModels) -> None:
++    models.start()
+ 
+ 
+ def main() -> None:
+@@ -33,25 +33,27 @@ def main() -> None:
+     from core.cloud_sync import start_cloud_sync
+     start_cloud_sync(database)
+ 
+-    # Build the heavy CV objects now and warm their models on a background thread while
+-    # the login screen is up — by the time the user signs in, scanning is ready to go.
++    # Prepare reusable models in bounded background workers while login is open.
++    # Fast logins can still reach the dashboard before preparation finishes.
+     recognizer = FaceRecognizer(database)
+     try:
+         person_detector = PersonDetector()
+     except Exception as exc:
+         print(f"[CBVMS] PersonDetector init failed: {exc}")
+         person_detector = None
++    monitor_models = MonitorModels(recognizer, person_detector)
+     def start_model_warmup():
+         threading.Thread(
+-            target=_warm_models, args=(recognizer, person_detector), daemon=True
++            target=_warm_models, args=(monitor_models,), daemon=True,
++            name="login-model-preparation",
+         ).start()
+ 
+     auth = AuthManager(database, recognizer=recognizer)
+ 
+     username = run_login(auth, on_ready=start_model_warmup)
+     if not username:
+-        if hasattr(recognizer,'readiness'):
+-            recognizer.readiness.wait(5.)
++        monitor_models.cancel_pending()
++        monitor_models.wait(5.)
+         return  # login window closed — exit
+ 
+     # The login root has been destroyed. Dispose its cyclic font/widget objects
+@@ -68,6 +70,7 @@ def main() -> None:
+         database=database,
+         recognizer=recognizer,
+         person_detector=person_detector,
++        monitor_models=monitor_models,
+     )
+ 
+     if logged_out:
+diff --git a/scripts/benchmark_live_monitor.py b/scripts/benchmark_live_monitor.py
+index d3578d3..b3850f7 100644
+--- a/scripts/benchmark_live_monitor.py
++++ b/scripts/benchmark_live_monitor.py
+@@ -156,7 +156,9 @@ def run(seconds, people, processing, version, old, analysis_ms, native_tk=False)
+     deadline = started
+     try:
+         image_upload = (nullcontext() if native_tk else
+-                        patch.object(ImageTk, "PhotoImage", side_effect=lambda *args, **kwargs: object()))
++                        # A Mock with side_effect retains every PIL image in its
++                        # call history, creating artificial growth on long runs.
++                        patch.object(ImageTk, "PhotoImage", new=lambda *args, **kwargs: object()))
+         with image_upload:
+             while time.monotonic() - started < seconds:
+                 delay = deadline - time.monotonic()
+diff --git a/ui/dashboard.py b/ui/dashboard.py
+index 2430268..ed2b4d3 100644
+--- a/ui/dashboard.py
++++ b/ui/dashboard.py
+@@ -22,8 +22,9 @@ from core.person_detector import PersonDetector
+ from core.recognizer import FaceRecognizer
+ from dataclasses import asdict, replace
+ from core.live_state import FrameContext, LiveConfig, LiveState
+-from core.model_readiness import face_readiness
++from core.monitor_models import MonitorModels
+ from core.diagnostics import event
++from core.performance import PERF, measure
+ from core.live_pipeline import LiveProcessor, LiveWorker, MonitorTask, MotionProjection, FaceTrackingProcessor
+ from ui.live_alerts import LiveAlerts
+ from ui.live_overlay import draw_assessments
+@@ -78,7 +79,7 @@ MAX_ALERTS = 50
+ 
+ UNIFORM_VIOLATION_CONF = 0.65  # higher bar before a WRONG-uniform alert is logged (cuts false alarms)
+ CAMERA_IDLE_RELEASE_SECS = 4.0  # release the camera after this long with no consumer (power saver)
+-REID_MIN_GAP_SECS = 0.5      # min spacing between recognition offers (recognition takes ~0.5s)
++REID_MIN_GAP_SECS = 0.5      # spacing between assessment offers; confirmation requires distinct frames
+ 
+ 
+ def _put_latest(q: "queue.Queue", item) -> None:
+@@ -116,8 +117,16 @@ class CBVMSDashboard(WorkspaceWindow):
+         database: "CBVMSDatabase | None" = None,
+         recognizer: "FaceRecognizer | None" = None,
+         person_detector: "PersonDetector | None" = None,
++        monitor_models: "MonitorModels | None" = None,
+     ) -> None:
+         super().__init__()
++        if monitor_models is None and recognizer is not None:
++            existing = getattr(recognizer, "monitor_models", None)
++            if isinstance(existing, MonitorModels):
++                monitor_models = existing
++        if monitor_models is not None:
++            recognizer = monitor_models.recognizer
++            person_detector = monitor_models.person_detector
+         self.withdraw()
+         self.username = username
+         self._logout_requested = False
+@@ -174,7 +183,7 @@ class CBVMSDashboard(WorkspaceWindow):
+         # Real-time notification broker (sound + toast + bell badge + log panel)
+         self._notifier = Notifier()
+         # YOLOv8 classification trainer (uniform / earring modules)
+-        self._trainer = ViolationTrainer()
++        self._trainer = monitor_models.trainer if monitor_models is not None else ViolationTrainer()
+         # Live violation checker (uniform / earring) backed by the trainer models
+         self._checker = LiveViolationChecker(self._trainer, notifier=self._notifier)
+         # Full-body person detector (YOLOv8n) for reliable torso crops
+@@ -188,7 +197,8 @@ class CBVMSDashboard(WorkspaceWindow):
+                 self._person_detector = None
+ 
+         # Preserve the trained classifier and inference-matched colour reference.
+-        self._uniform_matcher = UniformColorMatcher()
++        self._uniform_matcher = (monitor_models.uniform_matcher if monitor_models is not None
++                                 else UniformColorMatcher())
+ 
+         # One analysis owner; camera capture and Tk preview never wait for inference.
+         self._monitor_generation = 0
+@@ -205,7 +215,10 @@ class CBVMSDashboard(WorkspaceWindow):
+         self._tracking_times = deque(maxlen=30)
+         self._metrics_time = 0.0
+         self._closed = threading.Event()
+-        self._readiness = face_readiness(self._recognizer)
++        PERF.start_monitor()
++        self._monitor_models = monitor_models or MonitorModels(
++            self._recognizer, self._person_detector, self._trainer, self._uniform_matcher)
++        self._readiness = self._monitor_models.readiness
+         self._tracking_result = None
+         self._tracking_projections = {}
+         self._tracking_last_offered = None
+@@ -1329,49 +1342,17 @@ class CBVMSDashboard(WorkspaceWindow):
+     # ------------------------------------------------------------------
+ 
+     def _prewarm_models(self) -> None:
+-        def load_body():
+-            if self._person_detector is None:
+-                raise RuntimeError("Body detector unavailable")
+-            self._person_detector._load_failed = False
+-            if self._person_detector._ensure_model() is None:
+-                raise RuntimeError(self._person_detector.last_error or "Body detector failed")
+-            # A saved reference is reused, never rebuilt by camera startup.
+-            self._person_detector.detect_persons(np.zeros((320, 320, 3), np.uint8))
+-            if self._person_detector.last_error:
+-                raise RuntimeError(self._person_detector.last_error)
+-            return True
+-
+-        def load_uniform():
+-            if not self._uniform_matcher.is_loaded():
+-                self._uniform_matcher.load()
+-            if self._trainer.is_trained("uniform"):
+-                if self._trainer._get_model("uniform") is None:
+-                    raise RuntimeError(self._trainer.last_error.get("uniform") or "Uniform classifier failed")
+-                if self._trainer.predict_proba('uniform', np.zeros((224, 224, 3), np.uint8)) is None:
+-                    raise RuntimeError("Uniform classifier inference failed; restore compatible weights and retry")
+-            else:
+-                raise RuntimeError("Train a uniform classifier in Training; colour reference alone cannot assess garments")
+-            return True
+-
+-        def load_earring():
+-            if not self._trainer.is_trained("earring"):
+-                raise RuntimeError("No trained earring weights")
+-            return self._trainer._get_model("earring")
+-
+-        self._readiness.add("body", load_body)
+-        self._readiness.add("uniform", load_uniform)
+-        self._readiness.add("earring", load_earring)
+-        self._readiness.start()
++        self._monitor_models.start()
+ 
+     def _retry_models(self):
+-        self._readiness.start(retry=True)
++        self._monitor_models.start(retry=True)
+ 
+     def _on_localized(self, result):
+         """Tracking worker submits its original pixels, landmarks and ownership token."""
+         if (not result.task.valid() or not self._readiness.ready('recognition')
+                 or result.task.context.captured_at-self._monitor_offer_time < REID_MIN_GAP_SECS):
+             return
+-        self._live_worker.offer(replace(result.task, observations=result.observations))
++        self._live_worker.offer(result.task.with_observations(result.observations))
+         self._monitor_offer_time = result.task.context.captured_at
+ 
+     def _latest_monitor_sample(self):
+@@ -1381,6 +1362,7 @@ class CBVMSDashboard(WorkspaceWindow):
+             and self._camera_state == 'STREAMING') else None
+ 
+     def _invalidate_monitor(self):
++        PERF.start_monitor()
+         notifier = getattr(self, "_notifier", None)
+         if notifier is not None:
+             notifier.audio.cancel_detection()
+@@ -1535,6 +1517,7 @@ class CBVMSDashboard(WorkspaceWindow):
+                     self.camera_feed.show_placeholder(message)
+                 else:
+                     self._last_frame_request = started
++                    PERF.first("first_camera_frame")
+                     tracking = _drain(self._tracking_worker.results)
+                     if (tracking is not None and tracking.task.valid()
+                             and tracking.task.context.generation == self._monitor_generation
+@@ -1577,8 +1560,11 @@ class CBVMSDashboard(WorkspaceWindow):
+                             self._alerts_scroll.update_assessments(rows)
+                             self._monitor_card_key = card_key
+                         self._display_rows = tuple(rows)
+-                        annotated = draw_assessments(sample.frame, rows, mirror=self._mirror.display_mirror())
+-                        if self.camera_feed.render(self._mirror.apply_anim(annotated)):
++                        with measure("ui_render"):
++                            annotated = draw_assessments(sample.frame, rows, mirror=self._mirror.display_mirror())
++                            rendered = self.camera_feed.render(self._mirror.apply_anim(annotated))
++                        if rendered:
++                            PERF.observe("preview_age", time.monotonic()-sample.captured_at)
+                             if sample.frame_id != self._monitor_last_rendered:
+                                 self._preview_times.append(started)
+                             self._monitor_last_rendered = sample.frame_id
+@@ -1606,6 +1592,9 @@ class CBVMSDashboard(WorkspaceWindow):
+                 self._status_fps.configure(text=f"Preview {self._measured_rate(self._preview_times, started):.1f} FPS · "
+                                           f"Tracking {self._measured_rate(self._tracking_times, started):.1f}/s · "
+                                           f"Analysis {self._measured_rate(self._analysis_times, started):.1f}/s")
++                if PERF.enabled and started-getattr(self, "_performance_report_at", 0.) >= 5.:
++                    self._performance_report_at = started
++                    event("performance_summary", timings=PERF.snapshot())
+         except Exception as exc:
+             print(f"[CBVMS] feed error: {exc}")
+         if not self._closed.is_set():
+@@ -1669,6 +1658,9 @@ class CBVMSDashboard(WorkspaceWindow):
+ 
+     def _on_close(self) -> None:
+         self._closed.set()
++        models = getattr(self, "_monitor_models", None)
++        if models is not None:
++            models.cancel_pending()
+         self._notifier.close()
+         self._monitor_cancel.set()
+         self._tracking_worker.stop()
+@@ -1702,6 +1694,7 @@ def open_dashboard(
+     database=None,
+     recognizer=None,
+     person_detector=None,
++    monitor_models=None,
+ ) -> bool:
+     """Run the dashboard. Returns True if the user logged out (vs. closed the app)."""
+     app = CBVMSDashboard(
+@@ -1709,8 +1702,10 @@ def open_dashboard(
+         database=database,
+         recognizer=recognizer,
+         person_detector=person_detector,
++        monitor_models=monitor_models,
+     )
+     app.mainloop()
++    app._monitor_models.cancel_pending()
+     # Let cancelled native calls return before Python tears down ONNX/PyTorch
+     # types. Otherwise closing the window can emit spurious model-type errors.
+     deadline=time.monotonic()+5
+@@ -1727,5 +1722,5 @@ def open_dashboard(
+         event('unknown_sightings_shutdown_incomplete',status=writer.status())
+         print('[Unknown sightings] Shutdown deadline reached: '+writer.status())
+     app._camera_worker_done.wait(max(0,deadline-time.monotonic()))
+-    app._readiness.wait(max(0,deadline-time.monotonic()))
++    app._monitor_models.wait(max(0,deadline-time.monotonic()))
+     return getattr(app, "_logout_requested", False)
+diff --git a/core/monitor_models.py b/core/monitor_models.py
+new file mode 100644
+index 0000000..36b0e9f
+--- /dev/null
++++ b/core/monitor_models.py
+@@ -0,0 +1,100 @@
++"""Shared model resources and bounded startup preparation for live monitoring."""
++from __future__ import annotations
++
++import numpy as np
++import threading
++
++from core.model_readiness import ModelReadiness
++from core.trainer import ViolationTrainer
++from core.uniform_matcher import UniformColorMatcher
++
++
++_BUNDLE_LOCK = threading.Lock()
++
++
++class _SharedBundle(type):
++    def __call__(cls, recognizer, person_detector, trainer=None, uniform_matcher=None):
++        # Publish only a completely bound registry. Concurrent callers cannot
++        # start loaders tied to different trainers/matchers for one recognizer.
++        with _BUNDLE_LOCK:
++            existing = getattr(recognizer, "monitor_models", None)
++            if isinstance(existing, cls):
++                return existing
++            bundle = super().__call__(recognizer, person_detector, trainer, uniform_matcher)
++            recognizer.monitor_models = bundle
++            return bundle
++
++
++class MonitorModels(metaclass=_SharedBundle):
++    """Own the monitor's reusable model objects and their one readiness registry.
++
++    Two native loaders may run at once. Face detection and recognition have the
++    highest queue priority, so optional model work cannot occupy either slot first.
++    Once those are launched, body, uniform, and earring preparation use the slots.
++    """
++    def __init__(self, recognizer, person_detector, trainer=None, uniform_matcher=None):
++        self.recognizer = recognizer
++        self.person_detector = person_detector
++        self.trainer = trainer if trainer is not None else ViolationTrainer()
++        self.uniform_matcher = (uniform_matcher if uniform_matcher is not None
++                                else UniformColorMatcher())
++        self.readiness = getattr(recognizer, "readiness", None)
++        if not isinstance(self.readiness, ModelReadiness):
++            self.readiness = ModelReadiness(max_concurrent=2)
++            self.readiness.add("face", recognizer._ensure_detector, priority=0)
++            self.readiness.add("recognition", recognizer._ensure_recognition, priority=1)
++            recognizer.readiness = self.readiness
++        # If face_readiness was created by an existing caller before this bundle,
++        # preserve that shared registry and apply a bound to future work.
++        with self.readiness._lock:
++            self.readiness.max_concurrent = 2
++        self._bind_optional_loaders()
++
++    def _bind_optional_loaders(self):
++        self.readiness.add("body", self._load_body, priority=10)
++        self.readiness.add("uniform", self._load_uniform, priority=11)
++        self.readiness.add("earring", self._load_earring, priority=12)
++
++    def _load_body(self):
++        if self.person_detector is None:
++            raise RuntimeError("Body detector unavailable")
++        self.person_detector._load_failed = False
++        if self.person_detector._ensure_model() is None:
++            raise RuntimeError(self.person_detector.last_error or "Body detector failed")
++        self.person_detector.detect_persons(np.zeros((320, 320, 3), np.uint8))
++        if self.person_detector.last_error:
++            raise RuntimeError(self.person_detector.last_error)
++        return True
++
++    def _load_uniform(self):
++        # The colour matcher is supplementary; the trained classifier remains
++        # useful on its own when no colour reference has been calibrated.
++        if not self.uniform_matcher.is_loaded():
++            self.uniform_matcher.load()
++        if not self.trainer.is_trained("uniform"):
++            raise RuntimeError("Train a uniform classifier in Training; colour reference alone cannot assess garments")
++        if self.trainer._get_model("uniform") is None:
++            raise RuntimeError(self.trainer.last_error.get("uniform") or "Uniform classifier failed")
++        if self.trainer.predict_proba("uniform", np.zeros((224, 224, 3), np.uint8)) is None:
++            raise RuntimeError("Uniform classifier inference failed; restore compatible weights and retry")
++        if self.uniform_matcher.is_loaded():
++            self.uniform_matcher.is_uniform(np.zeros((224, 224, 3), np.uint8))
++        return True
++
++    def _load_earring(self):
++        if not self.trainer.is_trained("earring"):
++            raise RuntimeError("No trained earring weights")
++        if self.trainer._get_model("earring") is None:
++            raise RuntimeError(self.trainer.last_error.get("earring") or "Earring classifier failed")
++        if self.trainer.predict_proba("earring", np.zeros((224, 224, 3), np.uint8)) is None:
++            raise RuntimeError("Earring classifier inference failed; restore compatible weights and retry")
++        return True
++
++    def start(self, *, retry=False):
++        self.readiness.start(retry=retry)
++
++    def wait(self, timeout=5.):
++        self.readiness.wait(timeout)
++
++    def cancel_pending(self):
++        self.readiness.cancel_pending()
+diff --git a/core/performance.py b/core/performance.py
+new file mode 100644
+index 0000000..6bf8d82
+--- /dev/null
++++ b/core/performance.py
+@@ -0,0 +1,102 @@
++"""Opt-in, bounded numeric pipeline timings; never retain frames or identities.
++
++Set CBVMS_PERF=1 before launch. Each fixed-name metric retains only its latest
++256 samples, plus a lifetime count. Times are monotonic seconds internally.
++"""
++from collections import deque
++from contextlib import contextmanager
++import math
++import os
++import threading
++import time
++
++
++NAMES = frozenset({
++    "face_load", "face_warm", "recognition_load", "recognition_warm",
++    "face_inference", "recognition_inference", "database_read", "body",
++    "uniform", "tracking", "recognition", "queue_tracking", "queue_assessment",
++    "capture_to_tracking", "capture_to_assessment", "preview_age", "ui_render",
++    "lock_detector", "lock_recognition", "lock_person", "lock_trainer",
++    "body_load", "body_inference", "uniform_load", "uniform_inference",
++    "earring_load", "earring_inference", "persistence", "empty_scene",
++    "rejected", "replaced_tracking", "replaced_assessment",
++    "first_camera_frame", "first_face", "first_stable_identity", "first_torso",
++    "first_uniform_assessment",
++})
++
++
++class PerformanceMetrics:
++    def __init__(self, enabled=False, capacity=256):
++        self.enabled = enabled
++        self.capacity = capacity
++        self._lock = threading.Lock()
++        self._samples = {}
++        self._counts = {}
++        self._first = set()
++        self._origin = time.monotonic()
++
++    def observe(self, name, seconds):
++        if not self.enabled or name not in NAMES:
++            return
++        if not isinstance(seconds, (int, float)) or not math.isfinite(seconds) or seconds < 0:
++            return
++        with self._lock:
++            self._samples.setdefault(name, deque(maxlen=self.capacity)).append(float(seconds))
++            self._counts[name] = self._counts.get(name, 0) + 1
++
++    def start_monitor(self):
++        """A new monitor/session gets new first-result milestones, no identity cache."""
++        if self.enabled:
++            with self._lock:
++                self._origin = time.monotonic()
++                self._first.clear()
++
++    def first(self, name):
++        if not self.enabled or name not in NAMES:
++            return
++        with self._lock:
++            if name in self._first:
++                return
++            self._first.add(name)
++            elapsed = time.monotonic()-self._origin
++        self.observe(name, elapsed)
++
++    def snapshot(self):
++        with self._lock:
++            values = {name: (tuple(samples), self._counts[name]) for name, samples in self._samples.items()}
++        result = {}
++        for name, (samples, count) in values.items():
++            ordered = sorted(samples)
++            def percentile(p):
++                at = (len(ordered)-1)*p
++                lower = int(at)
++                return round(1000*(ordered[lower]+(ordered[min(lower+1, len(ordered)-1)]-ordered[lower])*(at-lower)), 3)
++            result[name] = dict(count=count, retained=len(samples), p50_ms=percentile(.5), p95_ms=percentile(.95))
++        return result
++
++
++PERF = PerformanceMetrics(os.environ.get("CBVMS_PERF") == "1")
++
++
++@contextmanager
++def measure(name):
++    if not PERF.enabled:
++        yield
++        return
++    started = time.monotonic()
++    try:
++        yield
++    finally:
++        PERF.observe(name, time.monotonic()-started)
++
++
++@contextmanager
++def timed_lock(lock, name):
++    if not PERF.enabled:
++        with lock:
++            yield
++        return
++    started = time.monotonic()
++    with lock:
++        PERF.observe(name, time.monotonic()-started)
++        yield
+diff --git a/scripts/benchmark_monitor_devices.py b/scripts/benchmark_monitor_devices.py
+new file mode 100644
+index 0000000..23623c7
+--- /dev/null
++++ b/scripts/benchmark_monitor_devices.py
+@@ -0,0 +1,606 @@
++"""Opt-in device benchmark for installed monitor YOLO weights.
++
++Uses fixed synthetic pixels only. Each model/device trial runs in a fresh child
++process; no cameras, database, student records, embeddings, downloads, or writes
++to model assets are involved. Synthetic outcomes are not an accuracy measure.
++"""
++from __future__ import annotations
++
++import argparse
++import importlib.metadata
++import json
++import math
++import os
++from pathlib import Path
++import platform
++import subprocess
++import sys
++import time
++
++ROOT = Path(__file__).resolve().parents[1]
++if str(ROOT) not in sys.path:
++    sys.path.insert(0, str(ROOT))
++
++
++def _version(package):
++    try:
++        return importlib.metadata.version(package)
++    except importlib.metadata.PackageNotFoundError:
++        return None
++
++
++def _environment_probe():
++    machine = {"system": platform.system(), "release": platform.release(),
++               "machine": platform.machine(), "processor": platform.processor(),
++               "python": platform.python_version()}
++    if platform.system() == "Darwin":
++        for key, query in (("cpu_brand", "machdep.cpu.brand_string"), ("memory_bytes", "hw.memsize")):
++            try:
++                value = subprocess.run(["sysctl", "-n", query], check=True,
++                    capture_output=True, text=True, timeout=2).stdout.strip()
++                machine[key] = int(value) if key == "memory_bytes" else value
++            except (OSError, subprocess.SubprocessError, ValueError):
++                machine[key] = None
++    info = {
++        "machine": machine,
++        "packages": {name: _version(name) for name in
++                     ("torch", "ultralytics", "onnxruntime", "numpy", "opencv-python")},
++        "torch": {"available": False, "cuda_available": False,
++                  "mps_built": False, "mps_available": False},
++        "onnxruntime": {"available": False, "installed_providers": [],
++                        "local_sessions": [], "coreml": {"state": "unavailable",
++                            "execution_note": "Provider registration does not prove per-node GPU or ANE execution"}},
++    }
++    try:
++        import torch
++        info["torch"] = {
++            "available": True,
++            "version": torch.__version__,
++            "cuda_available": bool(torch.cuda.is_available()),
++            "mps_built": bool(torch.backends.mps.is_built()),
++            "mps_available": bool(torch.backends.mps.is_available()),
++        }
++    except Exception as exc:
++        info["torch"]["error"] = f"{type(exc).__name__}: {exc}"
++
++    try:
++        import onnxruntime as ort
++        installed = list(ort.get_available_providers())
++        info["onnxruntime"] = {
++            "available": True,
++            "version": ort.__version__,
++            "installed_providers": installed,
++            "local_sessions": [],
++            "coreml": {"state": "installed" if "CoreMLExecutionProvider" in installed
++                       else "unavailable",
++                       "reason": None if "CoreMLExecutionProvider" in installed else
++                       "CoreMLExecutionProvider is not installed",
++                       "execution_note": "Provider registration does not prove per-node GPU or ANE execution"},
++        }
++    except Exception as exc:
++        info["onnxruntime"]["error"] = f"{type(exc).__name__}: {exc}"
++        info["onnxruntime"]["coreml"] = {
++            "state": "unavailable", "reason": "onnxruntime could not be probed",
++            "execution_note": "Provider registration does not prove per-node GPU or ANE execution"}
++    return info
++
++
++def _available_devices(environment):
++    # Include the actual Ultralytics default selection separately from an
++    # explicit CPU control; they are compared from observed predictor devices.
++    devices = ["cpu", "default"]
++    torch_info = environment["torch"]
++    if torch_info.get("cuda_available"):
++        devices.append("cuda")
++    if torch_info.get("mps_available"):
++        devices.append("mps")
++    return devices
++
++
++def _percentiles(values):
++    if not values:
++        return None
++    ordered = sorted(float(v) for v in values)
++    def percentile(p):
++        at = (len(ordered)-1)*p
++        low, high = math.floor(at), math.ceil(at)
++        return ordered[low] if low == high else ordered[low]*(high-at)+ordered[high]*(at-low)
++    return {"n": len(ordered), "p50_ms": round(percentile(.50), 3),
++            "p95_ms": round(percentile(.95), 3)}
++
++
++def _device_matches(expected, observed):
++    if observed is None:
++        return False
++    value = str(observed).lower().split(":", 1)[0]
++    return value == expected.lower()
++
++
++def _synchronize_accelerators(torch):
++    """Wait for queued work on available accelerators before timing ends."""
++    cuda = getattr(torch, "cuda", None)
++    if cuda is not None and cuda.is_available():
++        cuda.synchronize()
++    mps = getattr(getattr(torch, "backends", None), "mps", None)
++    if mps is not None and mps.is_available():
++        torch.mps.synchronize()
++
++
++def _embedding_comparison(left, right):
++    """Return scalar-only comparison of normalized recognition embeddings."""
++    import numpy as np
++    a = np.asarray(left, dtype=np.float64).reshape(-1)
++    b = np.asarray(right, dtype=np.float64).reshape(-1)
++    if a.shape != b.shape or not a.size or not np.isfinite(a).all() or not np.isfinite(b).all():
++        return {"same_shape": a.shape == b.shape, "cosine_similarity": None,
++                "max_abs_normalized_delta": None}
++    norm_a, norm_b = float(np.linalg.norm(a)), float(np.linalg.norm(b))
++    if norm_a == 0.0 or norm_b == 0.0:
++        return {"same_shape": True, "cosine_similarity": None,
++                "max_abs_normalized_delta": None}
++    normalized_a, normalized_b = a / norm_a, b / norm_b
++    return {"same_shape": True,
++            "cosine_similarity": round(float(np.dot(normalized_a, normalized_b)), 10),
++            "max_abs_normalized_delta": round(float(np.max(np.abs(normalized_a-normalized_b))), 10)}
++
++
++def _child(args):
++    import numpy as np
++    import torch
++    from core.person_detector import PersonDetector
++    from core.trainer import MODULES, ViolationTrainer, _letterbox
++
++    try:
++        start_load = time.perf_counter()
++        if args.module == "body":
++            owner = PersonDetector()
++            model = owner._ensure_model()
++            if model is None:
++                raise RuntimeError(owner.last_error or "Body weights did not load")
++            source = Path(owner._MODEL_PATH)
++        elif args.module == "uniform":
++            owner = ViolationTrainer()
++            model = owner._get_model("uniform")
++            if model is None:
++                raise RuntimeError(owner.last_error.get("uniform") or "Uniform weights did not load")
++            source = ROOT / MODULES["uniform"]["model_out"]
++        else:
++            raise ValueError(f"Unsupported module: {args.module}")
++        cold_load_ms = (time.perf_counter()-start_load)*1000
++        if not source.is_file() or source.stat().st_size < 1024:
++            raise RuntimeError(f"Missing/incomplete local weights: {source}")
++
++        frame = np.zeros((720, 1280, 3), dtype=np.uint8)
++        classifier_input = _letterbox(np.zeros((224, 224, 3), dtype=np.uint8))
++
++        def predict(active_device):
++            if args.module == "body":
++                kwargs = {"conf": PersonDetector._CONF, "iou": PersonDetector._IOU,
++                          "classes": [0], "verbose": False}
++                if active_device != "default":
++                    kwargs["device"] = active_device
++                results = model.predict(frame, **kwargs)
++                boxes = results[0].boxes if results else None
++                if boxes is None:
++                    return {"shape": [0, 4], "finite": True, "count": 0,
++                            "classes": [], "top1": None, "probs": None}
++                xyxy = boxes.xyxy.detach().cpu().numpy()
++                classes = sorted({int(v) for v in boxes.cls.detach().cpu().tolist()})
++                names = results[0].names
++                return {"shape": list(xyxy.shape), "finite": bool(np.isfinite(xyxy).all()),
++                        "count": int(xyxy.shape[0]),
++                        "classes": [str(names.get(i, i)) for i in classes],
++                        "top1": None, "probs": None}
++            kwargs = {"verbose": False}
++            if active_device != "default":
++                kwargs["device"] = active_device
++            results = model.predict(classifier_input, **kwargs)
++            if not results or getattr(results[0], "probs", None) is None:
++                return {"shape": None, "finite": False, "count": 0,
++                        "classes": [], "top1": None, "probs": None}
++            result = results[0]
++            tensor = result.probs.data
++            values = tensor.detach().cpu().numpy() if hasattr(tensor, "detach") else np.asarray(tensor)
++            names = result.names
++            label_names = [names[i] for i in range(len(values))]
++            top = int(np.argmax(values))
++            return {"shape": list(values.shape), "finite": bool(np.isfinite(values).all()),
++                    "count": int(values.size), "classes": label_names,
++                    "top1": str(names[top]), "probs": values.astype(float).tolist()}
++
++        _synchronize_accelerators(torch)
++        first_started = time.perf_counter()
++        first = predict(args.device)
++        _synchronize_accelerators(torch)
++        first_call_ms = (time.perf_counter()-first_started)*1000
++        predictor = getattr(model, "predictor", None)
++        backend = getattr(predictor, "model", None)
++        backend_device = getattr(backend, "device", None)
++        parameter_device = None
++        try:
++            parameter_device = str(next(backend.model.parameters()).device)
++        except (AttributeError, StopIteration, TypeError):
++            try:
++                parameter_device = str(next(backend.parameters()).device)
++            except (AttributeError, StopIteration, TypeError):
++                pass
++        observed_device = str(parameter_device or backend_device) if (parameter_device or backend_device) else None
++
++        timings = []
++        last = first
++        for _ in range(args.repeats):
++            _synchronize_accelerators(torch)
++            started = time.perf_counter()
++            last = predict(args.device)
++            _synchronize_accelerators(torch)
++            timings.append((time.perf_counter()-started)*1000)
++
++        comparison = first
++        reference_source = "same_cpu_trial"
++        reference_error = None
++        if args.device != "cpu":
++            try:
++                if args.module == "body":
++                    ref_owner = PersonDetector()
++                    reference_model = ref_owner._ensure_model()
++                    if reference_model is None:
++                        raise RuntimeError(ref_owner.last_error or "CPU reference weights did not load")
++                    original_model = model
++                    model = reference_model
++                    comparison = predict("cpu")
++                    model = original_model
++                else:
++                    ref_owner = ViolationTrainer()
++                    reference_model = ref_owner._get_model("uniform")
++                    if reference_model is None:
++                        raise RuntimeError(ref_owner.last_error.get("uniform") or "CPU reference weights did not load")
++                    original_model = model
++                    model = reference_model
++                    comparison = predict("cpu")
++                    model = original_model
++                reference_source = "fresh_cpu_model_same_process"
++            except Exception as exc:
++                reference_error = f"{type(exc).__name__}: {exc}"
++
++        delta = None
++        same_outcome = None
++        if args.module == "uniform" and comparison.get("probs") is not None and first.get("probs") is not None:
++            if len(comparison["probs"]) == len(first["probs"]):
++                delta = round(max(abs(a-b) for a,b in zip(comparison["probs"], first["probs"])), 8)
++                same_outcome = comparison.get("top1") == first.get("top1")
++        elif args.module == "body" and comparison.get("classes") is not None:
++            same_outcome = comparison.get("classes") == first.get("classes")
++        actual_matches = (bool(parameter_device or backend_device) if args.device == "default"
++                          else _device_matches(args.device, parameter_device or backend_device))
++        state = "ready" if (first.get("finite") and actual_matches and reference_error is None) else "failed"
++        result = {
++            "state": state,
++            "module": args.module,
++            "requested_device": args.device,
++            "actual_device": {"predictor_backend": str(backend_device) if backend_device is not None else None,
++                              "parameter": parameter_device,
++                              "matches_request": actual_matches},
++            "weights": {"name": source.name, "bytes": source.stat().st_size},
++            "cold_load_ms": round(cold_load_ms, 3),
++            "first_call_ms": round(first_call_ms, 3),
++            "steady_state": _percentiles(timings),
++            "output": {"shape": first["shape"], "finite": first["finite"],
++                       "count": first["count"], "synthetic_classes": first["classes"],
++                       "synthetic_top1": first["top1"],
++                       "same_outcome_as_cpu": same_outcome,
++                       "max_abs_probability_delta_vs_cpu": delta,
++                       "cpu_reference": reference_source,
++                       "cpu_reference_error": reference_error},
++        }
++        print("RESULT " + json.dumps(result, allow_nan=False), flush=True)
++        return 0 if state == "ready" else 2
++    except Exception as exc:
++        print("RESULT " + json.dumps({"state": "failed", "module": args.module,
++              "requested_device": args.device, "error": f"{type(exc).__name__}: {exc}"}), flush=True)
++        return 2
++
++
++def _run_child(script_args, timeout):
++    completed = subprocess.run([sys.executable, str(Path(__file__).resolve()), "--child",
++        "--module", script_args["module"], "--device", script_args["device"],
++        "--repeats", str(script_args["repeats"])],
++        cwd=ROOT, capture_output=True, text=True, timeout=timeout)
++    results = [line[len("RESULT "):] for line in completed.stdout.splitlines()
++               if line.startswith("RESULT ")]
++    if not results:
++        return {"state": "failed", **script_args,
++                "error": (completed.stderr or completed.stdout)[-3000:] or
++                         f"Child exited {completed.returncode} without a result"}
++    try:
++        result = json.loads(results[-1])
++    except json.JSONDecodeError as exc:
++        return {"state": "failed", **script_args, "error": f"Invalid child result: {exc}"}
++    result.update({key: value for key, value in script_args.items() if key not in result})
++    if completed.returncode and result.get("state") == "ready":
++        result["state"] = "failed"
++        result["error"] = f"Child exit code {completed.returncode}"
++    return result
++
++
++def _face_model_paths():
++    model_dir = Path(os.environ.get(
++        "CBVMS_FACE_MODEL_DIR", "~/.insightface/models/buffalo_l")).expanduser()
++    return {"face_detection": model_dir / "det_10g.onnx",
++            "face_recognition": model_dir / "w600k_r50.onnx"}
++
++
++def _face_child(args):
++    """Compare CPU prepare reset/no-reset and optional CoreML on local ONNX models."""
++    import cv2
++    import numpy as np
++    import onnxruntime as ort
++    from insightface.model_zoo.model_zoo import ModelRouter
++
++    path = Path(args.face_model)
++    if not path.is_file() or path.stat().st_size < 1024:
++        raise RuntimeError("Local face ONNX weights are missing or incomplete")
++    options = ort.SessionOptions()
++    options.intra_op_num_threads = 2
++    options.inter_op_num_threads = 1
++    options.add_session_config_entry("session.intra_op.allow_spinning", "0")
++    options.add_session_config_entry("session.inter_op.allow_spinning", "0")
++    options.log_severity_level = 3
++    is_detection = args.face_kind == "face_detection"
++    synthetic = (np.zeros((320, 320, 3), dtype=np.uint8) if is_detection
++                 else np.zeros((112, 112, 3), dtype=np.uint8))
++
++    def open_model(providers):
++        started = time.perf_counter()
++        model = ModelRouter(str(path)).get_model(providers=providers, sess_options=options)
++        load_ms = (time.perf_counter()-started)*1000
++        if model is None:
++            raise RuntimeError(f"ModelRouter could not classify {path.name}")
++        return model, load_ms
++
++    def prepare(model, ctx_id):
++        started = time.perf_counter()
++        if is_detection:
++            model.prepare(ctx_id=ctx_id, input_size=(640, 640), det_thresh=.5)
++        else:
++            model.prepare(ctx_id=ctx_id)
++        return (time.perf_counter()-started)*1000
++
++    def infer(model):
++        if is_detection:
++            boxes, _keypoints = model.detect(synthetic, input_size=(320, 320))
++            values = np.asarray(boxes, dtype=np.float32)
++            return values.reshape((-1, values.shape[-1] if values.ndim > 1 else 1))
++        return np.asarray(model.get_feat(synthetic), dtype=np.float32)
++
++    def run_condition(condition, providers):
++        model, router_load_ms = open_model(providers)
++        ctx_id = -1 if condition == "cpu_reset" else 0
++        prepare_ms = prepare(model, ctx_id)
++        first_started = time.perf_counter()
++        first_output = infer(model)
++        first_call_ms = (time.perf_counter()-first_started)*1000
++        steady = []
++        last_output = first_output
++        for _ in range(args.repeats):
++            started = time.perf_counter()
++            last_output = infer(model)
++            steady.append((time.perf_counter()-started)*1000)
++        actual_providers = list(model.session.get_providers())
++        return {
++            "condition": condition,
++            "router_load_ms": round(router_load_ms, 3),
++            "prepare_ms": round(prepare_ms, 3),
++            "first_inference_ms": round(first_call_ms, 3),
++            "steady_state": _percentiles(steady),
++            "actual_model_class": type(model).__name__,
++            "actual_providers_after_prepare_and_inference": actual_providers,
++            "output_shape": list(first_output.shape),
++            "output_finite": bool(np.isfinite(first_output).all()),
++            "output_count": int(first_output.shape[0]) if first_output.ndim else int(first_output.size),
++            "same_as_last_repeat": bool(first_output.shape == last_output.shape and
++                np.allclose(first_output, last_output, rtol=0, atol=0, equal_nan=False)),
++            "_output_internal": first_output,
++        }
++
++    condition = args.face_condition
++    if condition in ("cpu_reset", "cpu_no_reset"):
++        trial = run_condition(condition, ["CPUExecutionProvider"])
++        reference_condition = "cpu_no_reset" if condition == "cpu_reset" else "cpu_reset"
++        reference = run_condition(reference_condition, ["CPUExecutionProvider"])
++    elif condition == "coreml":
++        available = ort.get_available_providers()
++        if "CoreMLExecutionProvider" not in available:
++            raise RuntimeError("CoreMLExecutionProvider is not installed")
++        trial = run_condition(condition, ["CoreMLExecutionProvider", "CPUExecutionProvider"])
++        reference = run_condition("cpu_reset", ["CPUExecutionProvider"])
++    else:
++        raise ValueError(f"Unknown face condition: {condition}")
++    trial_values, ref_values = trial.pop("_output_internal"), reference.pop("_output_internal")
++    same_shape = trial_values.shape == ref_values.shape
++    finite_both = bool(np.isfinite(trial_values).all() and np.isfinite(ref_values).all())
++    same = bool(same_shape and finite_both and
++                np.allclose(trial_values, ref_values, rtol=0, atol=0, equal_nan=False))
++    delta = (float(np.max(np.abs(trial_values-ref_values)))
++             if same_shape and finite_both and trial_values.size else
++             (0. if same_shape and finite_both else None))
++    trial["comparison_to_reference"] = {
++        "same_shape": same_shape,
++        "same_output": same,
++        "max_abs_delta": round(delta, 8) if delta is not None else None,
++        "reference_condition": reference["condition"],
++    }
++    if args.face_kind == "face_recognition":
++        trial["comparison_to_reference"].update(_embedding_comparison(trial_values, ref_values))
++    providers_match = ("CPUExecutionProvider" in trial["actual_providers_after_prepare_and_inference"]
++        if condition != "coreml" else
++        "CoreMLExecutionProvider" in trial["actual_providers_after_prepare_and_inference"])
++    result = {"state": "ready" if trial["output_finite"] and providers_match else "failed",
++              "model": args.face_kind, "weights": path.name,
++              "condition": condition, "trial": trial,
++              "provider_execution_note": ("CoreML provider registration does not prove per-node GPU or ANE execution"
++                  if condition == "coreml" else None)}
++    print("RESULT " + json.dumps(result, allow_nan=False), flush=True)
++    return 0 if result["state"] == "ready" else 2
++
++
++def _run_face_child(model_name, path, condition, repeats, timeout):
++    completed = subprocess.run([sys.executable, str(Path(__file__).resolve()), "--face-child",
++        "--face-kind", model_name, "--face-model", str(path),
++        "--face-condition", condition, "--repeats", str(repeats)],
++        cwd=ROOT, capture_output=True, text=True, timeout=timeout)
++    lines = [line[len("RESULT "):] for line in completed.stdout.splitlines()
++             if line.startswith("RESULT ")]
++    if not lines:
++        return {"state": "failed", "model": model_name, "weights": path.name,
++                "condition": condition,
++                "error": (completed.stderr or completed.stdout)[-3000:] or
++                         f"Child exited {completed.returncode} without a result"}
++    try:
++        result = json.loads(lines[-1])
++        if completed.returncode and result.get("state") == "ready":
++            result["state"] = "failed"
++            result["error"] = f"Child exit code {completed.returncode}"
++        return result
++    except json.JSONDecodeError as exc:
++        return {"state": "failed", "model": model_name, "weights": path.name,
++                "condition": condition, "error": f"Invalid child result: {exc}"}
++
++
++def _local_weight_status():
++    from core.person_detector import PersonDetector
++    from core.trainer import MODULES
++    paths = {"body": Path(PersonDetector._MODEL_PATH),
++             "uniform": ROOT / MODULES["uniform"]["model_out"],
++             "earring": ROOT / MODULES["earring"]["model_out"],
++             **_face_model_paths()}
++    return {name: ({"state": "available", "name": path.name, "bytes": path.stat().st_size}
++                   if path.is_file() and path.stat().st_size >= 1024 else
++                   {"state": "unavailable", "reason": f"Local weights missing or incomplete: {path.name}"})
++            for name, path in paths.items()}
++
++
++def main(argv=None):
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("--output", type=Path,
++                        help="Aggregate JSON output path")
++    parser.add_argument("--repeats", type=int, default=25,
++                        help="Steady-state calls per module/device trial (default: 25)")
++    parser.add_argument("--timeout", type=int, default=180,
++                        help="Per fresh-process trial timeout in seconds")
++    parser.add_argument("--child", action="store_true", help=argparse.SUPPRESS)
++    parser.add_argument("--module", choices=("body", "uniform"), help=argparse.SUPPRESS)
++    parser.add_argument("--device", choices=("cpu", "default", "cuda", "mps"), help=argparse.SUPPRESS)
++    parser.add_argument("--face-child", action="store_true", help=argparse.SUPPRESS)
++    parser.add_argument("--face-kind", choices=("face_detection", "face_recognition"), help=argparse.SUPPRESS)
++    parser.add_argument("--face-model", help=argparse.SUPPRESS)
++    parser.add_argument("--face-condition", choices=("cpu_reset", "cpu_no_reset", "coreml"), help=argparse.SUPPRESS)
++    args = parser.parse_args(argv)
++    if args.face_child:
++        try:
++            return _face_child(args)
++        except Exception as exc:
++            print("RESULT " + json.dumps({"state": "failed", "model": args.face_kind,
++                "condition": args.face_condition,
++                "error": f"{type(exc).__name__}: {exc}"}), flush=True)
++            return 2
++    if args.child:
++        return _child(args)
++    if args.output is None:
++        parser.error("--output is required")
++    if args.repeats < 1 or args.timeout < 1:
++        parser.error("repeats and timeout must be positive")
++    environment = _environment_probe()
++    devices = _available_devices(environment)
++    weights = _local_weight_status()
++    trials = []
++    for module in ("body", "uniform"):
++        if weights[module]["state"] != "available":
++            trials.append({"state": "unavailable", "module": module,
++                           "reason": weights[module]["reason"]})
++            continue
++        for device in devices:
++            config = {"module": module, "device": device, "repeats": args.repeats}
++            try:
++                result = _run_child(config, args.timeout)
++            except subprocess.TimeoutExpired:
++                result = {"state": "failed", **config,
++                          "error": f"Fresh-process trial timed out after {args.timeout}s"}
++            trials.append(result)
++        cpu_result = next((trial for trial in trials if trial.get("module") == module
++                           and trial.get("requested_device") == "cpu"), None)
++        default_result = next((trial for trial in trials if trial.get("module") == module
++                               and trial.get("requested_device") == "default"), None)
++        cpu_actual = None
++        default_actual = None
++        if cpu_result:
++            actual = cpu_result.get("actual_device", {})
++            cpu_actual = actual.get("parameter") or actual.get("predictor_backend")
++        if default_result:
++            actual = default_result.get("actual_device", {})
++            default_actual = actual.get("parameter") or actual.get("predictor_backend")
++            default_result["default_device_comparison"] = {
++                "reference": "fresh explicit CPU trial for this module",
++                "explicit_cpu_actual_device": cpu_actual,
++                "default_actual_device": default_actual,
++                "matches_explicit_cpu": (_device_matches(
++                    str(cpu_actual).split(":", 1)[0], default_actual)
++                    if cpu_actual is not None and default_actual is not None else False),
++            }
++    for device in ("mps", "cuda"):
++        if device not in devices:
++            trials.append({"state": "skipped", "device": device,
++                "reason": "torch reports this device unavailable; no fallback trial was substituted"})
++    face_trials = []
++    face_paths = _face_model_paths()
++    ort_info = environment["onnxruntime"]
++    coreml_installed = "CoreMLExecutionProvider" in ort_info.get("installed_providers", [])
++    for model_name, model_path in face_paths.items():
++        if not model_path.is_file() or model_path.stat().st_size < 1024:
++            face_trials.append({"state": "unavailable", "model": model_name,
++                "reason": f"Local ONNX weights missing: {model_path.name}"})
++            continue
++        for condition in ("cpu_reset", "cpu_no_reset"):
++            try:
++                face_trials.append(_run_face_child(model_name, model_path, condition,
++                                                   args.repeats, args.timeout))
++            except subprocess.TimeoutExpired:
++                face_trials.append({"state": "failed", "model": model_name,
++                    "condition": condition, "error": f"Face provider trial timed out after {args.timeout}s"})
++        if coreml_installed:
++            try:
++                face_trials.append(_run_face_child(model_name, model_path, "coreml",
++                                                   args.repeats, args.timeout))
++            except subprocess.TimeoutExpired:
++                face_trials.append({"state": "failed", "model": model_name,
++                    "condition": "coreml", "error": f"CoreML trial timed out after {args.timeout}s"})
++        else:
++            reason = "CoreMLExecutionProvider is not installed"
++            face_trials.append({"state": "skipped", "model": model_name,
++                                "condition": "coreml", "reason": reason})
++    report = {
++        "probe": "monitor_model_device_benchmark",
++        "created_at_local": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
++        "synthetic_inputs_only": True,
++        "camera": False, "database": False, "student_data": False,
++        "downloads": False, "accuracy_evaluated": False,
++        "machine_and_providers": environment,
++        "local_weights": weights,
++        "trials": trials,
++        "face_provider_trials": face_trials,
++        "limits": ["Synthetic class outcomes are not model accuracy.",
++                   "Fresh processes do not clear filesystem caches.",
++                   "Only installed local weights are opened."],
++    }
++    args.output.parent.mkdir(parents=True, exist_ok=True)
++    args.output.write_text(json.dumps(report, indent=2, allow_nan=False)+"\n")
++    print(json.dumps({"output": str(args.output), "machine": environment["machine"],
++        "providers": environment["onnxruntime"], "trials": [
++            {key: trial.get(key) for key in ("module", "device", "requested_device", "state", "steady_state")}
++            for trial in trials], "face_provider_trials": [
++            {key: trial.get(key) for key in ("model", "condition", "state", "trial")}
++            for trial in face_trials]}, indent=2))
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/scripts/benchmark_monitor_pipeline.py b/scripts/benchmark_monitor_pipeline.py
+new file mode 100644
+index 0000000..aa5e234
+--- /dev/null
++++ b/scripts/benchmark_monitor_pipeline.py
+@@ -0,0 +1,122 @@
++"""Same-input handoff/empty-scene probes and a sustained synthetic preview run.
++
++These isolate orchestration costs; they do not measure model accuracy or physical
++camera performance. The empty scene uses real SQLite in a temporary directory.
++"""
++from dataclasses import replace
++import argparse
++import json
++from pathlib import Path
++import subprocess
++import sys
++import tempfile
++import threading
++import time
++from types import ModuleType, SimpleNamespace
++
++import numpy as np
++
++ROOT = Path(__file__).resolve().parents[1]
++sys.path.insert(0, str(ROOT))
++
++from core import live_pipeline as current
++from core.live_state import FrameContext
++from database.db_manager import CBVMSDatabase
++
++
++def load_baseline(ref):
++    module = ModuleType("monitor_pipeline_baseline")
++    sys.modules[module.__name__] = module
++    source = subprocess.check_output(["git", "show", f"{ref}:core/live_pipeline.py"], cwd=ROOT, text=True)
++    exec(compile(source, "baseline_live_pipeline", "exec"), module.__dict__)
++    return module
++
++
++def summary(samples):
++    return {"n": len(samples), "p50_ms": round(float(np.percentile(samples, 50)), 4),
++            "p95_ms": round(float(np.percentile(samples, 95)), 4)}
++
++
++def probe(module, policy, db, iterations):
++    frame = np.zeros((720, 1280, 3), np.uint8)
++    task = module.MonitorTask(FrameContext(1, ("synthetic", 0), time.monotonic()),
++                              frame, time.time(), threading.Event())
++    handoffs = []
++    for _ in range(iterations):
++        started = time.perf_counter()
++        value = replace(task, observations=()) if policy == "baseline" else task.with_observations(())
++        handoffs.append((time.perf_counter()-started)*1000)
++    shared_pixels = value.frame is task.frame
++    processor = module.LiveProcessor(db, SimpleNamespace(recognize_faces=lambda *a, **k: [], last_error=None),
++        None, SimpleNamespace(is_trained=lambda _: False), None, None)
++    costs = []
++    for index in range(iterations):
++        task = module.MonitorTask(FrameContext(1, ("synthetic", index), time.monotonic()),
++                                  frame, time.time(), threading.Event())
++        started = time.perf_counter()
++        result = processor.analyze(task)
++        costs.append((time.perf_counter()-started)*1000)
++        assert result is not None and not result.assessments
++    return {"policy": policy, "handoff": summary(handoffs), "handoff_shares_owned_pixels": shared_pixels,
++            "empty_scene_analysis": summary(costs), "resolution": [1280, 720]}
++
++
++def main():
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("--baseline-ref", default="244d6805ee00c5f8b3bf60f9fecf0d288dc70b7c")
++    parser.add_argument("--runs", type=int, default=3)
++    parser.add_argument("--iterations", type=int, default=500)
++    parser.add_argument("--sustained-seconds", type=float, default=60.)
++    parser.add_argument("--output", type=Path, required=True)
++    args = parser.parse_args()
++    if args.runs < 1 or args.iterations < 1 or args.sustained_seconds <= 0:
++        parser.error("runs, iterations and sustained-seconds must be positive")
++    baseline = load_baseline(args.baseline_ref)
++    runs = []
++    with tempfile.TemporaryDirectory(prefix="cbvms_monitor_benchmark_") as folder:
++        db = CBVMSDatabase(Path(folder)/"disposable.db")
++        db.initialize(process_deadlines=False)
++        for run in range(args.runs):
++            # Alternate order to limit warm-cache/order bias.
++            conditions = [(baseline, "baseline"), (current, "candidate")]
++            if run % 2:
++                conditions.reverse()
++            for module, policy in conditions:
++                result = probe(module, policy, db, args.iterations)
++                runs.append(result)
++                print(json.dumps(result), flush=True)
++    import psutil
++    import cv2
++    from core.performance import PERF
++    from scripts.benchmark_live_monitor import run as preview
++    PERF.enabled = True
++    cv2.setNumThreads(2)  # Same preview policy as the application.
++    process = psutil.Process()
++    memory = []
++    stop_sampling = threading.Event()
++    def sample_memory():
++        while not stop_sampling.wait(1):
++            memory.append(round(process.memory_info().rss/2**20, 2))
++    sampler = threading.Thread(target=sample_memory, daemon=True)
++    sampler.start()
++    rss_before = process.memory_info().rss/2**20
++    cpu_before = process.cpu_times()
++    try:
++        sustained = preview(args.sustained_seconds, 5, True, "after", (None, None, None), 200)
++    finally:
++        stop_sampling.set()
++        sampler.join(2)
++    cpu_after = process.cpu_times()
++    sustained.update(rss_before_mb=round(rss_before, 2), rss_after_mb=round(process.memory_info().rss/2**20, 2),
++        cpu_percent_one_core=round(100*((cpu_after.user-cpu_before.user)+(cpu_after.system-cpu_before.system))/sustained["elapsed_seconds"], 2),
++        rss_sampled_mb=memory,
++        bounded_timings=PERF.snapshot())
++    results = {"kind": "controlled_synthetic_no_camera", "baseline_ref": args.baseline_ref,
++               "accuracy_evaluated": False, "comparisons": runs, "sustained_preview": sustained}
++    args.output.parent.mkdir(parents=True, exist_ok=True)
++    args.output.write_text(json.dumps(results, indent=2)+"\n")
++    print(json.dumps(sustained), flush=True)
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/scripts/benchmark_monitor_startup.py b/scripts/benchmark_monitor_startup.py
+new file mode 100644
+index 0000000..2a7756d
+--- /dev/null
++++ b/scripts/benchmark_monitor_startup.py
+@@ -0,0 +1,174 @@
++"""Paired, fresh-process local-model probe, using synthetic pixels and no database.
++
++The login delay is controlled, not a measurement of a human login or native UI.
++Application-cold means a new Python process; filesystem caches are NOT flushed.
++No camera, student data, business writes, downloads, or accuracy claims.
++"""
++from __future__ import annotations
++
++import argparse
++import ast
++import json
++from pathlib import Path
++import subprocess
++import sys
++import time
++
++ROOT = Path(__file__).resolve().parents[1]
++sys.path.insert(0, str(ROOT))
++
++
++def baseline_registry(recognizer, detector, trainer, matcher, ref):
++    import types
++    import numpy as np
++    module = types.ModuleType("benchmark_baseline_readiness")
++    sys.modules[module.__name__] = module
++    source = subprocess.check_output(["git", "show", f"{ref}:core/model_readiness.py"], cwd=ROOT, text=True)
++    exec(compile(source, "baseline_readiness", "exec"), module.__dict__)
++    registry = module.face_readiness(recognizer)
++    source = subprocess.check_output(["git", "show", f"{ref}:ui/dashboard.py"], cwd=ROOT, text=True)
++    cls = next(n for n in ast.parse(source).body if isinstance(n, ast.ClassDef) and n.name == "CBVMSDashboard")
++    method = next(n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == "_prewarm_models")
++    namespace = {"np": np}
++    exec(compile(ast.fix_missing_locations(ast.Module(body=[method], type_ignores=[])), "baseline_dashboard", "exec"), namespace)
++    owner = types.SimpleNamespace(_readiness=registry, _person_detector=detector,
++                                  _trainer=trainer, _uniform_matcher=matcher)
++    return registry, lambda: namespace["_prewarm_models"](owner)
++
++
++def child(args):
++    started = time.monotonic()
++    import importlib.metadata
++    import platform
++    import resource
++    from types import SimpleNamespace
++    import cv2
++    import numpy as np
++    import psutil
++    from core.recognizer import FaceRecognizer
++    from core.person_detector import PersonDetector
++    from core.trainer import ViolationTrainer
++    from core.uniform_matcher import UniformColorMatcher
++    from core.performance import PERF
++    PERF.enabled = True
++
++    # Match dashboard OpenCV policy for both conditions, before any inference.
++    cv2.setNumThreads(2)
++    recognizer = FaceRecognizer(SimpleNamespace(get_all_students=lambda: [], recognition_capture_encodings=lambda: {}))
++    detector, trainer, matcher = PersonDetector(), ViolationTrainer(), UniformColorMatcher()
++    if args.policy == "baseline":
++        registry, dashboard_start = baseline_registry(recognizer, detector, trainer, matcher, args.baseline_ref)
++        start = registry.start
++    else:
++        from core.monitor_models import MonitorModels
++        models = MonitorModels(recognizer, detector, trainer, matcher)
++        registry, start, dashboard_start = models.readiness, models.start, models.start
++    imported = time.monotonic()
++    prepared = imported
++    start()
++    ready_at = {}
++    at_login = None
++    login = None
++    while time.monotonic() - prepared < 65:
++        now = time.monotonic()
++        statuses = registry.snapshot()
++        for name, status in statuses.items():
++            if status.state == "ready":
++                ready_at.setdefault(name, now - prepared)
++        if login is None and now - prepared >= args.login_delay:
++            at_login = {name: status.state for name, status in statuses.items()}
++            login = now
++            dashboard_start()
++        if login is not None and all(s.state in ("ready", "failed") for s in registry.snapshot().values()):
++            break
++        time.sleep(.005)
++    registry.wait(2)
++    statuses = registry.snapshot()
++    # Re-read final transition before reporting; no native owner is cancelled/retried.
++    now = time.monotonic()
++    for name, status in statuses.items():
++        if status.state == "ready":
++            ready_at.setdefault(name, now-prepared)
++    stages = {"face": [], "embedding": [], "body": [], "uniform": [], "cycle": []}
++    frame = np.zeros((720, 1280, 3), np.uint8)
++    crop = np.zeros((224, 224, 3), np.uint8)
++    face_crop = np.zeros((112, 112, 3), np.uint8)
++    process = psutil.Process()
++    rss = [process.memory_info().rss]
++    cpu_start = process.cpu_times()
++    steady_start = time.monotonic()
++    counts = {"faces": 0, "bodies": 0, "cycles": 0}
++    while time.monotonic()-steady_start < args.seconds:
++        cycle = time.monotonic()
++        calls = (("face", "face", lambda: recognizer.detect_faces(frame)),
++                 ("embedding", "recognition", lambda: recognizer._ensure_recognition().get_feat(face_crop)),
++                 ("body", "body", lambda: detector.detect_persons(frame)),
++                 ("uniform", "uniform", lambda: trainer.predict_proba("uniform", crop)))
++        for name, component, call in calls:
++            if registry.ready(component):
++                at = time.monotonic()
++                result = call()
++                stages[name].append((time.monotonic()-at)*1000)
++                if name in ("face", "body"):
++                    counts["faces" if name == "face" else "bodies"] += len(result)
++        stages["cycle"].append((time.monotonic()-cycle)*1000)
++        counts["cycles"] += 1
++        rss.append(process.memory_info().rss)
++    elapsed = time.monotonic()-steady_start
++    cpu_end = process.cpu_times()
++    summary = lambda values: {"n": len(values), "p50_ms": round(float(np.percentile(values, 50)), 3),
++                              "p95_ms": round(float(np.percentile(values, 95)), 3)} if values else None
++    result = dict(policy=args.policy, baseline_ref=args.baseline_ref, process_cold=True, uncached=False,
++        synthetic_blank_pixels=True, camera=False, native_ui=False, database=False,
++        environment={"python": platform.python_version(), "platform": platform.platform(),
++                     "machine": platform.machine(), "processor": platform.processor(),
++                     "packages": {name: importlib.metadata.version(name) for name in
++                                  ("numpy", "opencv-python", "onnxruntime", "torch", "ultralytics", "insightface")}},
++        setup_seconds=round(imported-started, 3), simulated_login_delay=args.login_delay,
++        states_at_login=at_login, ready_from_prepare_seconds={k: round(v, 3) for k,v in ready_at.items()},
++        remaining_after_login_seconds={k: round(max(0, v-(login-prepared)), 3) for k,v in ready_at.items()} if login else {},
++        components={k: {"state": v.state, "load_and_warm_seconds": round(v.elapsed, 3), "error": v.error} for k,v in statuses.items()},
++        steady_seconds=round(elapsed, 3), serial_probe_hz=round(counts["cycles"]/elapsed, 3),
++        stage_timings={k: summary(v) for k,v in stages.items()},
++        rss_start_mb=round(rss[0]/2**20, 2), rss_end_mb=round(rss[-1]/2**20, 2),
++        rss_peak_mb=round(max(rss)/2**20, 2), process_peak_rss_mb=round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss/2**20, 2),
++        cpu_percent_one_core=round(100*((cpu_end.user-cpu_start.user)+(cpu_end.system-cpu_start.system))/elapsed, 1),
++        blank_scene_detections=counts, accuracy_evaluated=False, bounded_timings=PERF.snapshot())
++    print("RESULT " + json.dumps(result), flush=True)
++    return 0 if all(registry.ready(name) for name in ("face", "recognition", "body", "uniform")) else 2
++
++
++def main():
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("--policy", choices=("baseline", "candidate"), required=True)
++    parser.add_argument("--baseline-ref", default="244d6805ee00c5f8b3bf60f9fecf0d288dc70b7c")
++    parser.add_argument("--login-delay", type=float, default=5.)
++    parser.add_argument("--seconds", type=float, default=10.)
++    parser.add_argument("--runs", type=int, default=3)
++    parser.add_argument("--output", type=Path, required=True)
++    parser.add_argument("--child", action="store_true", help=argparse.SUPPRESS)
++    args = parser.parse_args()
++    if args.seconds <= 0 or args.login_delay < 0 or args.runs < 1:
++        parser.error("seconds/runs must be positive; login-delay cannot be negative")
++    if args.child:
++        return child(args)
++    results = []
++    for run in range(args.runs):
++        completed = subprocess.run([sys.executable, __file__, *sys.argv[1:], "--child"],
++                                   cwd=ROOT, text=True, capture_output=True, timeout=100+args.seconds+args.login_delay)
++        lines = [line[7:] for line in completed.stdout.splitlines() if line.startswith("RESULT ")]
++        args.output.parent.mkdir(parents=True, exist_ok=True)
++        args.output.with_suffix(f".run{run+1}.log").write_text(completed.stdout+completed.stderr)
++        if completed.returncode or not lines:
++            # Libraries can be noisy; these probes never read personal records.
++            raise RuntimeError(f"Probe failed ({completed.returncode}): {completed.stderr[-3000:]} {completed.stdout[-1000:]}")
++        result = json.loads(lines[-1])
++        results.append(result)
++        args.output.parent.mkdir(parents=True, exist_ok=True)
++        args.output.write_text(json.dumps(results, indent=2)+"\n")
++        print(json.dumps({"run": run+1, "policy": args.policy, "ready": result["remaining_after_login_seconds"],
++                          "stages": result["stage_timings"]}), flush=True)
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/scripts/probe_monitor_camera.py b/scripts/probe_monitor_camera.py
+new file mode 100644
+index 0000000..c239d35
+--- /dev/null
++++ b/scripts/probe_monitor_camera.py
+@@ -0,0 +1,190 @@
++"""Consented MacBook/USB camera probe with an ephemeral in-memory test identity.
++
++No database, persistence worker, alerts, image files, or embedding files. Only
++aggregate numeric measurements are written. This is not an accuracy evaluation.
++"""
++import argparse
++from collections import Counter, deque
++import json
++from pathlib import Path
++import queue
++import sys
++import threading
++import time
++
++ROOT = Path(__file__).resolve().parents[1]
++sys.path.insert(0, str(ROOT))
++
++
++class ProbeRoster:
++    student = dict(student_id="SYNTHETIC-CAMERA-PROBE", name="Test participant",
++                   gender="Unspecified", student_status="Enrolled", registration_pending=False)
++    def get_all_students(self): return []
++    def recognition_capture_encodings(self): return {}
++    def attendance_term_snapshot(self, **kwargs): return {}
++    def get_student_by_student_id(self, sid): return dict(self.student) if sid == self.student["student_id"] else None
++    def enrollment_context(self, sid, **kwargs):
++        return dict(eligible=True, status="Synthetic test eligibility", enrollment={}, term={})
++    def get_active_suspension(self, sid): return None
++
++
++def main():
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("--consenting-participant", action="store_true", required=True)
++    parser.add_argument("--seconds", type=float, default=35.)
++    parser.add_argument("--camera-index", type=int, default=0)
++    parser.add_argument("--output", type=Path, required=True)
++    args = parser.parse_args()
++    if args.seconds <= 0:
++        parser.error("seconds must be positive")
++    import tkinter as tk
++    import cv2
++    import numpy as np
++    import psutil
++    from core.camera import CameraCapture
++    from core.live_pipeline import LiveProcessor, FaceTrackingProcessor, LiveWorker, MonitorTask
++    from core.live_state import FrameContext
++    from core.monitor_models import MonitorModels
++    from core.recognizer import FaceRecognizer
++    from core.person_detector import PersonDetector
++    from core.performance import PERF, measure
++    from ui.camera_feed import CameraFeed
++
++    cv2.setNumThreads(2)
++    PERF.enabled = True
++    PERF.start_monitor()
++    started = time.monotonic()
++    cancelled = threading.Event()
++    capture_done = threading.Event()
++    capture = CameraCapture(camera_index=args.camera_index, width=1280, height=720,
++                            fps_cap=30, cancel_event=cancelled)
++    captured = deque(maxlen=4096)
++    camera_first = [None]
++    def camera_loop():
++        try:
++            if not capture.open(): return
++            camera_first[0] = time.monotonic()-started
++            while not cancelled.is_set():
++                if capture.read() is not None: captured.append(time.monotonic())
++        finally:
++            capture.release()
++            capture_done.set()
++    reader = threading.Thread(target=camera_loop, daemon=True)
++    reader.start()
++    roster = ProbeRoster()
++    recognizer, detector = FaceRecognizer(roster), PersonDetector()
++    models = MonitorModels(recognizer, detector)
++    models.start()
++    calibrated = threading.Event()
++    calibration_done = threading.Event()
++    first_detection = [None]
++    calibration_at = [None]
++    def calibrate():
++        try:
++            while not cancelled.wait(.02):
++                if not (models.readiness.ready("face") and models.readiness.ready("recognition")): continue
++                sample = capture.get_latest_sample()
++                if sample is None or time.monotonic()-sample.captured_at > 1: continue
++                rows = recognizer.detect_faces(sample.frame)
++                if rows and first_detection[0] is None: first_detection[0] = time.monotonic()-started
++                if len(rows) != 1: continue
++                embeddings = recognizer._embed_detections(sample.frame, rows)
++                if not embeddings or time.monotonic()-sample.captured_at > 3: continue
++                with recognizer._lock:
++                    recognizer._known = [(dict(roster.student), np.asarray([embeddings[0][1]], np.float32))]
++                calibration_at[0] = time.monotonic()-started
++                calibrated.set()
++                return
++        finally:
++            calibration_done.set()
++    calibration = threading.Thread(target=calibrate, daemon=True)
++    calibration.start()
++    processor = LiveProcessor(roster, recognizer, detector, models.trainer, models.uniform_matcher, None)
++    processor.readiness = models.readiness
++    # No side-effect API is invoked, including unknown sightings or attendance.
++    processor.persist = lambda result: None
++    assessment = LiveWorker(processor)
++    last_offer = [0.]
++    def localized(result):
++        if result.task.context.captured_at-last_offer[0] >= .5:
++            assessment.offer(result.task.with_observations(result.observations))
++            last_offer[0] = result.task.context.captured_at
++    tracking = LiveWorker(FaceTrackingProcessor(recognizer, detector, models.readiness, localized))
++    assessment.start(); tracking.start()
++    root = tk.Tk()
++    root.title("CBVMS temporary camera check — no records or images saved")
++    root.geometry("960x650")
++    feed = CameraFeed(root); feed.pack(fill="both", expand=True)
++    status = tk.Label(root, text="Preparing models; stay centered with shoulders visible")
++    status.pack(fill="x")
++    root.protocol("WM_DELETE_WINDOW", cancelled.set)
++    last_frame = None
++    offered = None
++    next_offer = 0.
++    rendered = deque(maxlen=4096)
++    counts = dict(tracking=0, assessments=0, stable_identity_frames=0, valid_torso_frames=0,
++                  uniform_assessment_frames=0, identity_uncertain_frames=0)
++    first = {}
++    reasons = Counter()
++    resolution = None
++    process = psutil.Process()
++    rss = []
++    try:
++        while not cancelled.is_set() and time.monotonic()-started < args.seconds:
++            now = time.monotonic()
++            root.update()
++            sample = capture.get_latest_sample()
++            if sample is not None and sample.frame_id != last_frame:
++                resolution = [sample.frame.shape[1], sample.frame.shape[0]]
++                with measure("ui_render"):
++                    feed.render(cv2.flip(sample.frame, 1))
++                rendered.append(time.monotonic())
++                PERF.observe("preview_age", time.monotonic()-sample.captured_at)
++                last_frame = sample.frame_id
++            if calibrated.is_set() and sample is not None and now >= next_offer and sample.frame_id != offered:
++                task = MonitorTask(FrameContext(1, sample.frame_id, sample.captured_at), sample.frame,
++                                   sample.captured_wall_time or time.time(), cancelled, earring_enabled=False)
++                tracking.offer(task)
++                offered, next_offer = sample.frame_id, now+.1
++            for kind, worker in (("tracking", tracking), ("assessments", assessment)):
++                try: result = worker.results.get_nowait()
++                except queue.Empty: continue
++                counts[kind] += 1
++                if kind == "tracking": continue
++                items = result.assessments
++                reasons.update(a.reason for a in items)
++                flags = {"stable_identity": any(a.reliable_identity for a in items),
++                         "valid_torso": any(a.torso_box for a in items),
++                         "uniform_assessment": any(a.uniform_label for a in items),
++                         "identity_uncertain": any(not a.reliable_identity for a in items)}
++                for name, present in flags.items():
++                    if present:
++                        counts[name+"_frames"] += 1
++                        first.setdefault(name, round(time.monotonic()-started, 3))
++                status.configure(text=" · ".join(dict.fromkeys(a.state for a in items)) or result.detail)
++            rss.append(process.memory_info().rss/2**20)
++            time.sleep(.01)
++    finally:
++        cancelled.set(); tracking.stop(); assessment.stop(); models.cancel_pending()
++        tracking.done.wait(5); assessment.done.wait(5); calibration_done.wait(5); capture_done.wait(5); models.wait(5)
++        with recognizer._lock: recognizer._known = []
++        feed.cleanup(); root.destroy()
++    elapsed = time.monotonic()-started
++    rate = lambda values: round((len(values)-1)/(values[-1]-values[0]), 2) if len(values)>1 else 0.
++    report = dict(kind="consented_physical_camera_temporary_identity", elapsed_seconds=round(elapsed, 3),
++        camera_first_frame_seconds=camera_first[0], first_face_seconds=first_detection[0],
++        temporary_identity_seconds=calibration_at[0], first_results_seconds=first,
++        capture_fps=rate(captured), preview_unique_fps=rate(rendered), counts=counts,
++        resolution=resolution, assessment_reasons=dict(reasons),
++        models={k: v.state for k,v in models.readiness.snapshot().items()},
++        camera_error=capture.last_error, worker_errors=[tracking.last_error, assessment.last_error],
++        workers_stopped=tracking.done.is_set() and assessment.done.is_set() and capture_done.is_set() and calibration_done.is_set(),
++        rss_peak_mb=round(max(rss), 2) if rss else None, timings=PERF.snapshot(),
++        business_writes=0, images_saved=0, embeddings_saved=0, accuracy_evaluated=False)
++    args.output.parent.mkdir(parents=True, exist_ok=True)
++    args.output.write_text(json.dumps(report, indent=2)+"\n")
++    print(json.dumps(report), flush=True)
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/tests/test_monitor_devices.py b/tests/test_monitor_devices.py
+new file mode 100644
+index 0000000..0a33ad6
+--- /dev/null
++++ b/tests/test_monitor_devices.py
+@@ -0,0 +1,59 @@
++"""Lightweight tests for the device benchmark's report helpers."""
++import importlib.util
++from pathlib import Path
++from types import SimpleNamespace
++import unittest
++
++
++SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "benchmark_monitor_devices.py"
++SPEC = importlib.util.spec_from_file_location("benchmark_monitor_devices", SCRIPT)
++benchmark = importlib.util.module_from_spec(SPEC)
++SPEC.loader.exec_module(benchmark)
++
++
++class MonitorDeviceBenchmarkTests(unittest.TestCase):
++    def test_percentiles_are_compact_and_order_independent(self):
++        self.assertEqual(benchmark._percentiles([9, 1, 5]),
++                         {"n": 3, "p50_ms": 5.0, "p95_ms": 8.6})
++        self.assertIsNone(benchmark._percentiles([]))
++
++    def test_device_check_normalizes_torch_device_index(self):
++        self.assertTrue(benchmark._device_matches("mps", "mps:0"))
++        self.assertTrue(benchmark._device_matches("cpu", "cpu"))
++        self.assertFalse(benchmark._device_matches("mps", "cpu"))
++        self.assertFalse(benchmark._device_matches("cuda", None))
++
++    def test_unavailable_accelerators_are_not_replaced_by_cpu(self):
++        environment = {"torch": {"cuda_available": False, "mps_available": False}}
++        self.assertEqual(benchmark._available_devices(environment), ["cpu", "default"])
++
++    def test_default_mode_is_compared_to_observed_cpu_control(self):
++        self.assertTrue(benchmark._device_matches("cpu", "cpu:0"))
++        self.assertFalse(benchmark._device_matches("cpu", "mps:0"))
++
++    def test_embedding_comparison_reports_only_scalar_metrics(self):
++        result = benchmark._embedding_comparison([3.0, 4.0], [6.0, 8.0])
++        self.assertEqual(result, {"same_shape": True, "cosine_similarity": 1.0,
++                                  "max_abs_normalized_delta": 0.0})
++        self.assertIsNone(benchmark._embedding_comparison([0.0], [1.0])["cosine_similarity"])
++
++    def test_synchronize_waits_for_available_accelerators(self):
++        calls = []
++        torch = SimpleNamespace(
++            cuda=SimpleNamespace(is_available=lambda: True,
++                                 synchronize=lambda: calls.append("cuda")),
++            backends=SimpleNamespace(mps=SimpleNamespace(is_available=lambda: True)),
++            mps=SimpleNamespace(synchronize=lambda: calls.append("mps")))
++        benchmark._synchronize_accelerators(torch)
++        self.assertEqual(calls, ["cuda", "mps"])
++
++    def test_synchronization_failure_cannot_report_valid_timing(self):
++        def fail():
++            raise RuntimeError("device synchronization failed")
++        torch = SimpleNamespace(cuda=SimpleNamespace(is_available=lambda: True, synchronize=fail))
++        with self.assertRaisesRegex(RuntimeError, "synchronization failed"):
++            benchmark._synchronize_accelerators(torch)
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/tests/test_monitor_performance.py b/tests/test_monitor_performance.py
+new file mode 100644
+index 0000000..1e28050
+--- /dev/null
++++ b/tests/test_monitor_performance.py
+@@ -0,0 +1,75 @@
++"""Performance regressions that also protect frame ownership and state expiry."""
++from dataclasses import replace
++import threading
++import time
++import unittest
++from unittest.mock import patch
++
++import numpy as np
++
++from core.live_pipeline import MonitorTask, TrackedFace
++from core.live_state import FrameContext
++from tests.test_live_pipeline import PipelineFixture
++from core.performance import PerformanceMetrics
++
++
++class MonitorPerformanceTests(unittest.TestCase):
++    def test_localized_handoff_reuses_owned_pixels_and_cancellation(self):
++        source = np.ones((720, 1280, 3), np.uint8)
++        task = MonitorTask(FrameContext(1, ("synthetic", 1), time.monotonic()),
++                           source, time.time(), threading.Event())
++        observation = TrackedFace((10, 10, 40, 50), .9, (), 1, "synthetic:1")
++        localized = task.with_observations((observation,))
++        self.assertIsNot(localized, task)
++        self.assertIs(localized.frame, task.frame)
++        self.assertIs(localized.cancelled, task.cancelled)
++        self.assertEqual(localized.context, task.context)
++        self.assertIsNone(task.observations)
++        source[:] = 0
++        self.assertTrue(np.all(localized.frame == 1))
++        with self.assertRaises(ValueError):
++            localized.frame[0, 0] = 0
++        task.cancelled.set()
++        self.assertFalse(localized.valid())
++        # Arbitrary construction/replacement must still take an owned snapshot.
++        replacement = replace(task, frame=source)
++        source[:] = 2
++        self.assertTrue(np.all(replacement.frame == 0))
++
++    def test_empty_scene_does_not_read_student_term_or_audio_settings(self):
++        fx = PipelineFixture()
++        fx.recognizer.recognize_faces.return_value = []
++        result = fx.analyze(1)
++        self.assertEqual(result.assessments, ())
++        fx.database.attendance_term_snapshot.assert_not_called()
++        fx.database.connect.assert_not_called()
++        fx.database.get_student_by_student_id.assert_not_called()
++        fx.database.enrollment_context.assert_not_called()
++        fx.database.get_active_suspension.assert_not_called()
++
++    def test_metrics_are_opt_in_bounded_and_reject_unapproved_fields(self):
++        disabled = PerformanceMetrics()
++        disabled.observe("tracking", .1)
++        self.assertEqual(disabled.snapshot(), {})
++        metrics = PerformanceMetrics(enabled=True, capacity=4)
++        for value in range(10):
++            metrics.observe("tracking", value/1000)
++            metrics.observe("student-private-id", value)
++        metrics.observe("tracking", float("nan"))
++        metrics.observe("tracking", -1)
++        metrics.observe("tracking", b"image")
++        result = metrics.snapshot()
++        self.assertEqual(set(result), {"tracking"})
++        self.assertEqual(result["tracking"]["count"], 10)
++        self.assertEqual(result["tracking"]["retained"], 4)
++        self.assertEqual(result["tracking"]["p50_ms"], 7.5)
++        self.assertEqual(result["tracking"]["p95_ms"], 8.85)
++
++    def test_metrics_do_not_capture_task_or_identity_fields(self):
++        metrics = PerformanceMetrics(enabled=True)
++        with patch("core.diagnostics.PERF", metrics), patch("core.diagnostics.LOG"):
++            from core.diagnostics import event
++            event("stage_complete", stage="recognition", elapsed=.2,
++                  student_id="PRIVATE", embedding=[1, 2], frame=b"PRIVATE_IMAGE")
++        self.assertEqual(set(metrics.snapshot()), {"recognition"})
++        self.assertNotIn("PRIVATE", str(metrics.snapshot()))
+diff --git a/tests/test_monitor_startup.py b/tests/test_monitor_startup.py
+new file mode 100644
+index 0000000..f1201c6
+--- /dev/null
++++ b/tests/test_monitor_startup.py
+@@ -0,0 +1,223 @@
++"""Synthetic checks for the shared, bounded monitor startup bundle."""
++import threading
++import time
++import unittest
++from concurrent.futures import ThreadPoolExecutor
++from unittest.mock import MagicMock
++
++import numpy as np
++
++from core.monitor_models import MonitorModels
++
++
++def wait_until(predicate, timeout=2.):
++    deadline = time.monotonic() + timeout
++    while time.monotonic() < deadline:
++        if predicate():
++            return
++        time.sleep(.005)
++    raise AssertionError("Timed out waiting for model preparation")
++
++
++class MonitorStartupTests(unittest.TestCase):
++    def test_concurrent_bundle_construction_publishes_one_complete_registry(self):
++        recognizer = MagicMock()
++        detector, trainer, matcher = MagicMock(), MagicMock(), MagicMock()
++        with ThreadPoolExecutor(max_workers=4) as pool:
++            bundles = list(pool.map(lambda _: MonitorModels(recognizer, detector, trainer, matcher), range(12)))
++        self.assertTrue(all(bundle is bundles[0] for bundle in bundles))
++        self.assertEqual(set(bundles[0].readiness.snapshot()), {"face", "recognition", "body", "uniform", "earring"})
++
++    def make_bundle(self):
++        recognizer = MagicMock()
++        recognizer._ensure_detector.return_value = True
++        recognizer._ensure_recognition.return_value = True
++        detector = MagicMock()
++        detector._ensure_model.return_value = object()
++        detector.detect_persons.return_value = []
++        detector.last_error = None
++        trainer = MagicMock()
++        trainer.is_trained.side_effect = lambda module: module == "uniform"
++        trainer._get_model.return_value = object()
++        trainer.predict_proba.return_value = {"correct_uniform": .5}
++        matcher = MagicMock()
++        matcher.is_loaded.return_value = True
++        return MonitorModels(recognizer, detector, trainer, matcher), recognizer, detector, trainer, matcher
++
++    def test_optional_preparation_is_available_at_login_start_and_resources_are_reused(self):
++        bundle, recognizer, detector, trainer, matcher = self.make_bundle()
++        second = MonitorModels(recognizer, detector, trainer, matcher)
++        self.assertIs(bundle.readiness, second.readiness)
++        self.assertIs(bundle.trainer, second.trainer)
++        self.assertIs(bundle.uniform_matcher, second.uniform_matcher)
++        bundle.start()
++        wait_until(lambda: all(bundle.readiness.snapshot()[name].state in ("ready", "failed")
++                               for name in ("face", "recognition", "body", "uniform", "earring")))
++        self.assertTrue(bundle.readiness.ready("body"))
++        self.assertTrue(bundle.readiness.ready("uniform"))
++        self.assertEqual(bundle.readiness.snapshot()["earring"].state, "failed")
++        detector.detect_persons.assert_called_once()
++        trainer.predict_proba.assert_called_once_with("uniform", unittest.mock.ANY)
++        matcher.is_uniform.assert_called_once()
++        recognizer._ensure_detector.assert_called_once()
++        recognizer._ensure_recognition.assert_called_once()
++
++    def test_face_priority_and_optional_concurrency_are_bounded(self):
++        bundle, recognizer, detector, trainer, matcher = self.make_bundle()
++        gate = threading.Event()
++        face_entered = threading.Event()
++        recognition_entered = threading.Event()
++        optional_entered = []
++        def face():
++            face_entered.set()
++            gate.wait(1)
++            return True
++        def recognition():
++            recognition_entered.set()
++            gate.wait(1)
++            return True
++        recognizer._ensure_detector.side_effect = face
++        recognizer._ensure_recognition.side_effect = recognition
++        detector._ensure_model.side_effect = lambda: optional_entered.append("body") or object()
++        bundle.start()
++        try:
++            self.assertTrue(face_entered.wait(1))
++            self.assertTrue(recognition_entered.wait(1))
++            time.sleep(.03)
++            self.assertEqual(optional_entered, [])
++            self.assertLessEqual(len(bundle.readiness._running), 2)
++        finally:
++            gate.set()
++        wait_until(lambda: all(s.state in ("ready", "failed")
++                               for s in bundle.readiness.snapshot().values()))
++        self.assertTrue(optional_entered)
++
++    def test_stalled_optional_owner_cannot_be_retried_concurrently(self):
++        bundle, _, detector, _, _ = self.make_bundle()
++        entered, release = threading.Event(), threading.Event()
++        detector._ensure_model.side_effect = lambda: (entered.set(), release.wait(1), object())[2]
++        # Make this the only queued model so the synchronization tests ownership itself.
++        bundle.readiness._status.update({name: type(status)("ready")
++                                         for name, status in bundle.readiness.snapshot().items()
++                                         if name != "body"})
++        bundle.readiness.timeout = .01
++        bundle.start()
++        try:
++            self.assertTrue(entered.wait(1))
++            wait_until(lambda: bundle.readiness.snapshot()["body"].state == "stalled")
++            bundle.start(retry=True)
++            self.assertEqual(detector._ensure_model.call_count, 1)
++        finally:
++            release.set()
++        wait_until(lambda: bundle.readiness.ready("body"))
++
++    def test_classifier_warms_without_optional_colour_reference(self):
++        bundle, _, _, trainer, matcher = self.make_bundle()
++        matcher.is_loaded.return_value = False
++        matcher.load.return_value = False
++        self.assertTrue(bundle._load_uniform())
++        trainer.predict_proba.assert_called_once()
++        matcher.is_uniform.assert_not_called()
++
++    def test_second_default_bundle_construction_reuses_original_resources(self):
++        bundle, recognizer, detector, _, _ = self.make_bundle()
++        second = MonitorModels(recognizer, detector)
++        self.assertIs(second, bundle)
++        self.assertIs(second.trainer, bundle.trainer)
++        self.assertIs(second.uniform_matcher, bundle.uniform_matcher)
++        self.assertIs(second.readiness, bundle.readiness)
++
++    def test_shutdown_cancels_active_loader_successors(self):
++        bundle, _, detector, trainer, _ = self.make_bundle()
++        registry = bundle.readiness
++        registry.max_concurrent = 1
++        with registry._lock:
++            for name in ("face", "recognition"):
++                registry._status[name] = type(registry._status[name])("ready")
++        entered, release = threading.Event(), threading.Event()
++        detector._ensure_model.side_effect = lambda: (entered.set(), release.wait(1), object())[2]
++        bundle.start()
++        self.assertTrue(entered.wait(1))
++        bundle.cancel_pending()
++        release.set()
++        bundle.wait(1)
++        self.assertEqual(registry.snapshot()["body"].state, "ready")
++        self.assertEqual(registry.snapshot()["uniform"].state, "cancelled")
++        self.assertEqual(registry.snapshot()["earring"].state, "cancelled")
++        trainer.predict_proba.assert_not_called()
++
++    def test_retry_queues_every_failure_and_prioritizes_face_when_slot_opens(self):
++        from core.model_readiness import ModelReadiness
++        registry = ModelReadiness(max_concurrent=2)
++        optional_gate, optional_entered, release_optional = threading.Event(), threading.Event(), threading.Event()
++        attempts = {"face": 0, "body": 0, "uniform": 0}
++        def loader(name):
++            def run():
++                attempts[name] += 1
++                if attempts[name] == 1:
++                    raise RuntimeError("initial failure")
++                if name == "body" and optional_gate.is_set():
++                    optional_entered.set()
++                    release_optional.wait(1)
++                return True
++            return run
++        # First run all fail; then retry with two occupied/released slots to prove
++        # failures beyond capacity remain queued and face is selected first.
++        registry.add("face", loader("face"), priority=0)
++        registry.add("body", loader("body"), priority=10)
++        registry.add("uniform", loader("uniform"), priority=11)
++        registry.start()
++        wait_until(lambda: all(status.state == "failed" for status in registry.snapshot().values()))
++        optional_gate.set()
++        registry.start(retry=True)
++        wait_until(lambda: registry.ready("face") and registry.ready("uniform")
++                   and registry.ready("body"))
++        self.assertEqual(attempts, {"face": 2, "body": 2, "uniform": 2})
++
++    def test_thread_start_failure_is_a_failed_component_not_permanent_loading(self):
++        from core.model_readiness import ModelReadiness
++        registry = ModelReadiness(max_concurrent=1)
++        registry.add("face", lambda: True, priority=0)
++        with unittest.mock.patch("threading.Thread.start", side_effect=RuntimeError("thread denied")):
++            registry.start()
++        self.assertEqual(registry.snapshot()["face"].state, "failed")
++        self.assertFalse(registry._running)
++
++    def test_missing_optional_weights_are_explicit_failures(self):
++        bundle, _, _, trainer, _ = self.make_bundle()
++        trainer.is_trained.side_effect = lambda module: False
++        with self.assertRaisesRegex(RuntimeError, "No trained earring weights"):
++            bundle._load_earring()
++
++    def test_shutdown_wait_does_not_start_preparation_after_login_abort(self):
++        bundle, recognizer, detector, _, _ = self.make_bundle()
++        bundle.wait(.01)
++        recognizer._ensure_detector.assert_not_called()
++        recognizer._ensure_recognition.assert_not_called()
++        detector._ensure_model.assert_not_called()
++        self.assertTrue(all(status.state == "waiting"
++                            for status in bundle.readiness.snapshot().values()))
++
++    def test_dashboard_entrypoint_accepts_shared_bundle_and_standalone_defaults(self):
++        from ui import dashboard as dashboard_module
++        def fake_app():
++            app = MagicMock()
++            app._live_worker.attendance_writer = None
++            app._live_worker.processor.security_writer = None
++            app._logout_requested = False
++            return app
++        bundle, recognizer, detector, _, _ = self.make_bundle()
++        app = fake_app()
++        with unittest.mock.patch.object(dashboard_module, "CBVMSDashboard", return_value=app) as ctor:
++            self.assertFalse(dashboard_module.open_dashboard(
++                "admin", recognizer=recognizer, person_detector=detector,
++                monitor_models=bundle))
++            self.assertIs(ctor.call_args.kwargs["monitor_models"], bundle)
++        app = fake_app()
++        with unittest.mock.patch.object(dashboard_module, "CBVMSDashboard", return_value=app) as ctor:
++            self.assertFalse(dashboard_module.open_dashboard())
++            self.assertIsNone(ctor.call_args.kwargs["monitor_models"])
++
++
++if __name__ == "__main__":
++    unittest.main()

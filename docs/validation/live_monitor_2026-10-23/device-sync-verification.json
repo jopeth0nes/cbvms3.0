@@ -1,0 +1,78 @@
+[
+  {
+    "state": "ready",
+    "module": "body",
+    "requested_device": "mps",
+    "actual_device": {
+      "predictor_backend": "mps",
+      "parameter": "mps:0",
+      "matches_request": true
+    },
+    "weights": {
+      "name": "yolov8n.pt",
+      "bytes": 6549796
+    },
+    "cold_load_ms": 528.23,
+    "first_call_ms": 1875.161,
+    "steady_state": {
+      "n": 25,
+      "p50_ms": 11.699,
+      "p95_ms": 23.202
+    },
+    "output": {
+      "shape": [
+        0,
+        4
+      ],
+      "finite": true,
+      "count": 0,
+      "synthetic_classes": [],
+      "synthetic_top1": null,
+      "same_outcome_as_cpu": true,
+      "max_abs_probability_delta_vs_cpu": null,
+      "cpu_reference": "fresh_cpu_model_same_process",
+      "cpu_reference_error": null
+    },
+    "device": "mps",
+    "repeats": 25
+  },
+  {
+    "state": "ready",
+    "module": "uniform",
+    "requested_device": "mps",
+    "actual_device": {
+      "predictor_backend": "mps",
+      "parameter": "mps:0",
+      "matches_request": true
+    },
+    "weights": {
+      "name": "uniform_cls.pt",
+      "bytes": 2975105
+    },
+    "cold_load_ms": 1135.432,
+    "first_call_ms": 466.146,
+    "steady_state": {
+      "n": 25,
+      "p50_ms": 4.43,
+      "p95_ms": 4.942
+    },
+    "output": {
+      "shape": [
+        2
+      ],
+      "finite": true,
+      "count": 2,
+      "synthetic_classes": [
+        "correct_uniform",
+        "wrong_uniform"
+      ],
+      "synthetic_top1": "correct_uniform",
+      "same_outcome_as_cpu": true,
+      "max_abs_probability_delta_vs_cpu": 2.56e-06,
+      "cpu_reference": "fresh_cpu_model_same_process",
+      "cpu_reference_error": null
+    },
+    "device": "mps",
+    "repeats": 25
+  }
+]

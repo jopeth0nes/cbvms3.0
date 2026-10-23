@@ -1,0 +1,569 @@
+[
+  {
+    "policy": "baseline",
+    "baseline_ref": "244d6805ee00c5f8b3bf60f9fecf0d288dc70b7c",
+    "process_cold": true,
+    "uncached": false,
+    "synthetic_blank_pixels": true,
+    "camera": false,
+    "native_ui": false,
+    "database": false,
+    "environment": {
+      "python": "3.12.13",
+      "platform": "macOS-26.5-arm64-arm-64bit",
+      "machine": "arm64",
+      "processor": "arm",
+      "packages": {
+        "numpy": "1.26.4",
+        "opencv-python": "4.10.0.84",
+        "onnxruntime": "1.19.2",
+        "torch": "2.2.2",
+        "ultralytics": "8.3.27",
+        "insightface": "0.7.3"
+      }
+    },
+    "setup_seconds": 0.25,
+    "simulated_login_delay": 5.0,
+    "states_at_login": {
+      "face": "ready",
+      "recognition": "ready"
+    },
+    "ready_from_prepare_seconds": {
+      "face": 2.274,
+      "recognition": 2.38,
+      "uniform": 5.879,
+      "body": 5.921
+    },
+    "remaining_after_login_seconds": {
+      "face": 0,
+      "recognition": 0,
+      "uniform": 0.876,
+      "body": 0.919
+    },
+    "components": {
+      "face": {
+        "state": "ready",
+        "load_and_warm_seconds": 2.268,
+        "error": ""
+      },
+      "recognition": {
+        "state": "ready",
+        "load_and_warm_seconds": 2.375,
+        "error": ""
+      },
+      "body": {
+        "state": "ready",
+        "load_and_warm_seconds": 0.915,
+        "error": ""
+      },
+      "uniform": {
+        "state": "ready",
+        "load_and_warm_seconds": 0.871,
+        "error": ""
+      },
+      "earring": {
+        "state": "failed",
+        "load_and_warm_seconds": 0.0,
+        "error": "No trained earring weights"
+      }
+    },
+    "steady_seconds": 10.178,
+    "serial_probe_hz": 3.242,
+    "stage_timings": {
+      "face": {
+        "n": 33,
+        "p50_ms": 94.696,
+        "p95_ms": 101.215
+      },
+      "embedding": {
+        "n": 33,
+        "p50_ms": 179.975,
+        "p95_ms": 195.879
+      },
+      "body": {
+        "n": 33,
+        "p50_ms": 29.314,
+        "p95_ms": 32.64
+      },
+      "uniform": {
+        "n": 33,
+        "p50_ms": 4.844,
+        "p95_ms": 5.578
+      },
+      "cycle": {
+        "n": 33,
+        "p50_ms": 309.395,
+        "p95_ms": 324.059
+      }
+    },
+    "rss_start_mb": 1020.91,
+    "rss_end_mb": 1013.33,
+    "rss_peak_mb": 1020.91,
+    "process_peak_rss_mb": 1025.67,
+    "cpu_percent_one_core": 628.9,
+    "blank_scene_detections": {
+      "faces": 0,
+      "bodies": 0,
+      "cycles": 33
+    },
+    "accuracy_evaluated": false,
+    "bounded_timings": {
+      "lock_detector": {
+        "count": 67,
+        "retained": 67,
+        "p50_ms": 0.0,
+        "p95_ms": 0.001
+      },
+      "lock_recognition": {
+        "count": 34,
+        "retained": 34,
+        "p50_ms": 0.001,
+        "p95_ms": 0.001
+      },
+      "face_load": {
+        "count": 1,
+        "retained": 1,
+        "p50_ms": 2109.365,
+        "p95_ms": 2109.365
+      },
+      "recognition_load": {
+        "count": 1,
+        "retained": 1,
+        "p50_ms": 2242.189,
+        "p95_ms": 2242.189
+      },
+      "face_warm": {
+        "count": 1,
+        "retained": 1,
+        "p50_ms": 133.91,
+        "p95_ms": 133.91
+      },
+      "recognition_warm": {
+        "count": 1,
+        "retained": 1,
+        "p50_ms": 132.489,
+        "p95_ms": 132.489
+      },
+      "lock_person": {
+        "count": 69,
+        "retained": 69,
+        "p50_ms": 0.001,
+        "p95_ms": 0.001
+      },
+      "lock_trainer": {
+        "count": 69,
+        "retained": 69,
+        "p50_ms": 0.0,
+        "p95_ms": 0.001
+      },
+      "body_load": {
+        "count": 1,
+        "retained": 1,
+        "p50_ms": 165.83,
+        "p95_ms": 165.83
+      },
+      "uniform_load": {
+        "count": 1,
+        "retained": 1,
+        "p50_ms": 838.211,
+        "p95_ms": 838.211
+      },
+      "uniform_inference": {
+        "count": 34,
+        "retained": 34,
+        "p50_ms": 4.777,
+        "p95_ms": 5.576
+      },
+      "body_inference": {
+        "count": 34,
+        "retained": 34,
+        "p50_ms": 28.741,
+        "p95_ms": 33.276
+      },
+      "face_inference": {
+        "count": 33,
+        "retained": 33,
+        "p50_ms": 94.664,
+        "p95_ms": 101.181
+      }
+    }
+  },
+  {
+    "policy": "baseline",
+    "baseline_ref": "244d6805ee00c5f8b3bf60f9fecf0d288dc70b7c",
+    "process_cold": true,
+    "uncached": false,
+    "synthetic_blank_pixels": true,
+    "camera": false,
+    "native_ui": false,
+    "database": false,
+    "environment": {
+      "python": "3.12.13",
+      "platform": "macOS-26.5-arm64-arm-64bit",
+      "machine": "arm64",
+      "processor": "arm",
+      "packages": {
+        "numpy": "1.26.4",
+        "opencv-python": "4.10.0.84",
+        "onnxruntime": "1.19.2",
+        "torch": "2.2.2",
+        "ultralytics": "8.3.27",
+        "insightface": "0.7.3"
+      }
+    },
+    "setup_seconds": 0.257,
+    "simulated_login_delay": 5.0,
+    "states_at_login": {
+      "face": "ready",
+      "recognition": "ready"
+    },
+    "ready_from_prepare_seconds": {
+      "face": 2.063,
+      "recognition": 2.169,
+      "uniform": 5.825,
+      "body": 5.863
+    },
+    "remaining_after_login_seconds": {
+      "face": 0,
+      "recognition": 0,
+      "uniform": 0.824,
+      "body": 0.861
+    },
+    "components": {
+      "face": {
+        "state": "ready",
+        "load_and_warm_seconds": 2.063,
+        "error": ""
+      },
+      "recognition": {
+        "state": "ready",
+        "load_and_warm_seconds": 2.167,
+        "error": ""
+      },
+      "body": {
+        "state": "ready",
+        "load_and_warm_seconds": 0.86,
+        "error": ""
+      },
+      "uniform": {
+        "state": "ready",
+        "load_and_warm_seconds": 0.82,
+        "error": ""
+      },
+      "earring": {
+        "state": "failed",
+        "load_and_warm_seconds": 0.0,
+        "error": "No trained earring weights"
+      }
+    },
+    "steady_seconds": 10.108,
+    "serial_probe_hz": 3.265,
+    "stage_timings": {
+      "face": {
+        "n": 33,
+        "p50_ms": 94.802,
+        "p95_ms": 99.071
+      },
+      "embedding": {
+        "n": 33,
+        "p50_ms": 180.614,
+        "p95_ms": 183.003
+      },
+      "body": {
+        "n": 33,
+        "p50_ms": 28.367,
+        "p95_ms": 32.061
+      },
+      "uniform": {
+        "n": 33,
+        "p50_ms": 4.634,
+        "p95_ms": 6.546
+      },
+      "cycle": {
+        "n": 33,
+        "p50_ms": 309.119,
+        "p95_ms": 313.316
+      }
+    },
+    "rss_start_mb": 1124.84,
+    "rss_end_mb": 1128.59,
+    "rss_peak_mb": 1128.59,
+    "process_peak_rss_mb": 1128.89,
+    "cpu_percent_one_core": 649.1,
+    "blank_scene_detections": {
+      "faces": 0,
+      "bodies": 0,
+      "cycles": 33
+    },
+    "accuracy_evaluated": false,
+    "bounded_timings": {
+      "lock_detector": {
+        "count": 67,
+        "retained": 67,
+        "p50_ms": 0.0,
+        "p95_ms": 0.001
+      },
+      "lock_recognition": {
+        "count": 34,
+        "retained": 34,
+        "p50_ms": 0.001,
+        "p95_ms": 0.001
+      },
+      "face_load": {
+        "count": 1,
+        "retained": 1,
+        "p50_ms": 1945.693,
+        "p95_ms": 1945.693
+      },
+      "recognition_load": {
+        "count": 1,
+        "retained": 1,
+        "p50_ms": 2037.966,
+        "p95_ms": 2037.966
+      },
+      "face_warm": {
+        "count": 1,
+        "retained": 1,
+        "p50_ms": 93.131,
+        "p95_ms": 93.131
+      },
+      "recognition_warm": {
+        "count": 1,
+        "retained": 1,
+        "p50_ms": 129.382,
+        "p95_ms": 129.382
+      },
+      "lock_person": {
+        "count": 69,
+        "retained": 69,
+        "p50_ms": 0.001,
+        "p95_ms": 0.001
+      },
+      "lock_trainer": {
+        "count": 69,
+        "retained": 69,
+        "p50_ms": 0.0,
+        "p95_ms": 0.001
+      },
+      "body_load": {
+        "count": 1,
+        "retained": 1,
+        "p50_ms": 139.105,
+        "p95_ms": 139.105
+      },
+      "uniform_load": {
+        "count": 1,
+        "retained": 1,
+        "p50_ms": 787.96,
+        "p95_ms": 787.96
+      },
+      "uniform_inference": {
+        "count": 34,
+        "retained": 34,
+        "p50_ms": 4.557,
+        "p95_ms": 6.477
+      },
+      "body_inference": {
+        "count": 34,
+        "retained": 34,
+        "p50_ms": 28.072,
+        "p95_ms": 31.776
+      },
+      "face_inference": {
+        "count": 33,
+        "retained": 33,
+        "p50_ms": 94.775,
+        "p95_ms": 99.017
+      }
+    }
+  },
+  {
+    "policy": "baseline",
+    "baseline_ref": "244d6805ee00c5f8b3bf60f9fecf0d288dc70b7c",
+    "process_cold": true,
+    "uncached": false,
+    "synthetic_blank_pixels": true,
+    "camera": false,
+    "native_ui": false,
+    "database": false,
+    "environment": {
+      "python": "3.12.13",
+      "platform": "macOS-26.5-arm64-arm-64bit",
+      "machine": "arm64",
+      "processor": "arm",
+      "packages": {
+        "numpy": "1.26.4",
+        "opencv-python": "4.10.0.84",
+        "onnxruntime": "1.19.2",
+        "torch": "2.2.2",
+        "ultralytics": "8.3.27",
+        "insightface": "0.7.3"
+      }
+    },
+    "setup_seconds": 0.25,
+    "simulated_login_delay": 5.0,
+    "states_at_login": {
+      "face": "ready",
+      "recognition": "ready"
+    },
+    "ready_from_prepare_seconds": {
+      "face": 2.051,
+      "recognition": 2.158,
+      "uniform": 5.746,
+      "body": 5.777
+    },
+    "remaining_after_login_seconds": {
+      "face": 0,
+      "recognition": 0,
+      "uniform": 0.741,
+      "body": 0.772
+    },
+    "components": {
+      "face": {
+        "state": "ready",
+        "load_and_warm_seconds": 2.05,
+        "error": ""
+      },
+      "recognition": {
+        "state": "ready",
+        "load_and_warm_seconds": 2.156,
+        "error": ""
+      },
+      "body": {
+        "state": "ready",
+        "load_and_warm_seconds": 0.77,
+        "error": ""
+      },
+      "uniform": {
+        "state": "ready",
+        "load_and_warm_seconds": 0.735,
+        "error": ""
+      },
+      "earring": {
+        "state": "failed",
+        "load_and_warm_seconds": 0.0,
+        "error": "No trained earring weights"
+      }
+    },
+    "steady_seconds": 10.208,
+    "serial_probe_hz": 3.233,
+    "stage_timings": {
+      "face": {
+        "n": 33,
+        "p50_ms": 95.077,
+        "p95_ms": 100.843
+      },
+      "embedding": {
+        "n": 33,
+        "p50_ms": 180.903,
+        "p95_ms": 186.305
+      },
+      "body": {
+        "n": 33,
+        "p50_ms": 28.896,
+        "p95_ms": 32.936
+      },
+      "uniform": {
+        "n": 33,
+        "p50_ms": 4.81,
+        "p95_ms": 6.298
+      },
+      "cycle": {
+        "n": 33,
+        "p50_ms": 309.539,
+        "p95_ms": 321.843
+      }
+    },
+    "rss_start_mb": 1078.94,
+    "rss_end_mb": 1087.72,
+    "rss_peak_mb": 1087.72,
+    "process_peak_rss_mb": 1088.02,
+    "cpu_percent_one_core": 636.8,
+    "blank_scene_detections": {
+      "faces": 0,
+      "bodies": 0,
+      "cycles": 33
+    },
+    "accuracy_evaluated": false,
+    "bounded_timings": {
+      "lock_detector": {
+        "count": 67,
+        "retained": 67,
+        "p50_ms": 0.0,
+        "p95_ms": 0.001
+      },
+      "lock_recognition": {
+        "count": 34,
+        "retained": 34,
+        "p50_ms": 0.001,
+        "p95_ms": 0.001
+      },
+      "face_load": {
+        "count": 1,
+        "retained": 1,
+        "p50_ms": 1930.161,
+        "p95_ms": 1930.161
+      },
+      "recognition_load": {
+        "count": 1,
+        "retained": 1,
+        "p50_ms": 2026.117,
+        "p95_ms": 2026.117
+      },
+      "face_warm": {
+        "count": 1,
+        "retained": 1,
+        "p50_ms": 96.809,
+        "p95_ms": 96.809
+      },
+      "recognition_warm": {
+        "count": 1,
+        "retained": 1,
+        "p50_ms": 129.873,
+        "p95_ms": 129.873
+      },
+      "lock_person": {
+        "count": 69,
+        "retained": 69,
+        "p50_ms": 0.001,
+        "p95_ms": 0.001
+      },
+      "lock_trainer": {
+        "count": 69,
+        "retained": 69,
+        "p50_ms": 0.001,
+        "p95_ms": 0.001
+      },
+      "body_load": {
+        "count": 1,
+        "retained": 1,
+        "p50_ms": 129.395,
+        "p95_ms": 129.395
+      },
+      "uniform_load": {
+        "count": 1,
+        "retained": 1,
+        "p50_ms": 706.692,
+        "p95_ms": 706.692
+      },
+      "uniform_inference": {
+        "count": 34,
+        "retained": 34,
+        "p50_ms": 4.738,
+        "p95_ms": 6.495
+      },
+      "body_inference": {
+        "count": 34,
+        "retained": 34,
+        "p50_ms": 28.306,
+        "p95_ms": 33.389
+      },
+      "face_inference": {
+        "count": 33,
+        "retained": 33,
+        "p50_ms": 95.048,
+        "p95_ms": 100.81
+      }
+    }
+  }
+]

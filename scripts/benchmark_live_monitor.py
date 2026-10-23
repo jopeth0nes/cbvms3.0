@@ -156,7 +156,9 @@ def run(seconds, people, processing, version, old, analysis_ms, native_tk=False)
     deadline = started
     try:
         image_upload = (nullcontext() if native_tk else
-                        patch.object(ImageTk, "PhotoImage", side_effect=lambda *args, **kwargs: object()))
+                        # A Mock with side_effect retains every PIL image in its
+                        # call history, creating artificial growth on long runs.
+                        patch.object(ImageTk, "PhotoImage", new=lambda *args, **kwargs: object()))
         with image_upload:
             while time.monotonic() - started < seconds:
                 delay = deadline - time.monotonic()

@@ -23,6 +23,7 @@ from core.person_detector import MAX_TORSO_SKIN_FRACTION, skin_fraction
 from core.student_status import standing_label, suspension_label
 from core.uniform_matcher import fuse_uniform_prob
 from core.diagnostics import event
+from core.performance import PERF, measure
 
 
 def put_latest(q, item):
@@ -69,6 +70,17 @@ class MonitorTask:
         frame = self.frame.copy()
         frame.setflags(write=False)
         object.__setattr__(self, 'frame', frame)
+
+    def with_observations(self, observations):
+        """Handoff of THIS task's localization; retain its owned, frozen pixels.
+
+        Ordinary construction/replacement still copies untrusted caller buffers.
+        Only this metadata handoff shares the existing task's frame and provenance.
+        """
+        from copy import copy
+        result = copy(self)
+        object.__setattr__(result, "observations", tuple(observations))
+        return result
 
     def valid(self, now=None):
         now = time.monotonic() if now is None else now
@@ -213,8 +225,9 @@ class LiveProcessor:
             event("frame_rejected", stage="recognition", reason=task.rejection())
             return None
         read_database = self.read_database or self.database
-        term = read_database.attendance_term_snapshot(occurred_at=task.observed_at)
-        if hasattr(self.notifier,'audio'):
+        database_started = time.monotonic()
+        term = read_database.attendance_term_snapshot(occurred_at=task.observed_at) if rows else {}
+        if rows and hasattr(self.notifier,'audio'):
             with read_database.connect() as conn:
                 self.notifier.audio.enrollment_cooldown = conn.execute('SELECT alarm_cooldown FROM enrollment_settings WHERE id=1').fetchone()[0]
         if not isinstance(term, dict):
@@ -237,6 +250,7 @@ class LiveProcessor:
                 suspension=read_database.get_active_suspension(student['student_id'])
                 row['active_suspension'] = bool(suspension)
                 row['suspension_tag']=suspension_label(suspension) if suspension else ''
+        PERF.observe("database_read", time.monotonic()-database_started)
         if task.observations is None and self.publish_identity is not None and task.valid():
             identities = self.identity_state.update(task.context, rows, now=time.monotonic())
             self.publish_identity(MonitorResult(task, identities, time.monotonic(),
@@ -345,6 +359,10 @@ class LiveProcessor:
             event("frame_rejected", stage="uniform", reason=task.rejection())
             return None
         assessments=self.state.update(task.context,rows,now=time.monotonic())
+        if any(a.reliable_identity for a in assessments):
+            PERF.first("first_stable_identity")
+        if any(r.get("uniform_available") for r in rows):
+            PERF.first("first_uniform_assessment")
         if task.observations is not None:
             assessments=tuple(replace(a, track_id=o.track_id, presence_id=o.presence_id)
                               for a,o in zip(assessments,task.observations))
@@ -634,6 +652,8 @@ class FaceTrackingProcessor:
     def analyze(self, task):
         started = time.monotonic()
         rows = [dict(row, identity_uncertain=True) for row in self.recognizer.detect_faces(task.frame)]
+        if rows:
+            PERF.first("first_face")
         bodies=[]
         ready = self.person_detector is not None and (self.readiness is None or self.readiness.ready('body'))
         if rows and ready:
@@ -669,6 +689,8 @@ class FaceTrackingProcessor:
         observations=tuple(TrackedFace(tuple(r['box']),float(r.get('score',1.)),tuple(r.get('keypoints',())),
             a.track_id,a.presence_id,a.body_index,a.body_box,a.torso_box,r['reason'])
             for r,a in zip(rows,tracks))
+        if any(a.torso_box for a in tracks):
+            PERF.first("first_torso")
         event("stage_complete", stage="tracking", frame_id=task.context.frame_id,
               elapsed=time.monotonic()-started, faces=len(tracks))
         result=MonitorResult(task, tracks, time.monotonic(),
@@ -697,6 +719,9 @@ class LiveWorker:
             processor.read_database = copy(processor.database)
             processor.read_database.timeout = .1
         self.requests=queue.Queue(maxsize=1)
+        self._queue_clock_lock = threading.Lock()
+        self._queue_clock = {}
+        self._metric_kind = "tracking" if isinstance(processor, FaceTrackingProcessor) else "assessment"
         self.results=queue.Queue(maxsize=1)
         self.stop_event=threading.Event()
         self.done=threading.Event()
@@ -736,7 +761,8 @@ class LiveWorker:
                 self.active_write = result.task
                 try:
                     if not self.stop_event.is_set() and result.task.valid():
-                        self.processor.persist(result)
+                        with measure("persistence"):
+                            self.processor.persist(result)
                     else:
                         event("frame_rejected", stage="persistence", reason="stopped_or_expired")
                 except Exception as exc:
@@ -749,7 +775,15 @@ class LiveWorker:
     def offer(self,task):
         if not self.stop_event.is_set():
             event("frame_submitted", worker=type(self.processor).__name__, frame_id=task.context.frame_id)
-            put_latest(self.requests,task)
+            if not PERF.enabled:
+                put_latest(self.requests, task)
+                return
+            with self._queue_clock_lock:
+                if not self.requests.empty():
+                    PERF.observe("replaced_"+self._metric_kind, 0.)
+                self._queue_clock.clear()
+                self._queue_clock[id(task)] = time.monotonic()
+                put_latest(self.requests,task)
 
     def stop(self):
         self.stop_event.set()
@@ -782,10 +816,16 @@ class LiveWorker:
                         event("frame_rejected", stage="queue", reason=task.rejection())
                     continue
                 try:
+                    if PERF.enabled:
+                        with self._queue_clock_lock:
+                            offered_at = self._queue_clock.pop(id(task), None)
+                        if offered_at is not None:
+                            PERF.observe("queue_"+self._metric_kind, time.monotonic()-offered_at)
                     self.active_task = task
                     self.active_since = time.monotonic()
                     result=self.processor.analyze(task)
                     if result is not None and task.valid() and not self.stop_event.is_set():
+                        PERF.observe("capture_to_"+self._metric_kind, time.monotonic()-task.context.captured_at)
                         self.last_error = ""
                         if self.persistence_worker:
                             if self.attendance_writer is not None:

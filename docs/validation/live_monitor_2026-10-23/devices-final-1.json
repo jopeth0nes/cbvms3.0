@@ -1,0 +1,518 @@
+{
+  "probe": "monitor_model_device_benchmark",
+  "created_at_local": "2026-10-23T23:23:34+0800",
+  "synthetic_inputs_only": true,
+  "camera": false,
+  "database": false,
+  "student_data": false,
+  "downloads": false,
+  "accuracy_evaluated": false,
+  "machine_and_providers": {
+    "machine": {
+      "system": "Darwin",
+      "release": "25.5.0",
+      "machine": "arm64",
+      "processor": "arm",
+      "python": "3.12.13",
+      "cpu_brand": "Apple M4",
+      "memory_bytes": 17179869184
+    },
+    "packages": {
+      "torch": "2.2.2",
+      "ultralytics": "8.3.27",
+      "onnxruntime": "1.19.2",
+      "numpy": "1.26.4",
+      "opencv-python": "4.10.0.84"
+    },
+    "torch": {
+      "available": true,
+      "version": "2.2.2",
+      "cuda_available": false,
+      "mps_built": true,
+      "mps_available": true
+    },
+    "onnxruntime": {
+      "available": true,
+      "version": "1.19.2",
+      "installed_providers": [
+        "CoreMLExecutionProvider",
+        "AzureExecutionProvider",
+        "CPUExecutionProvider"
+      ],
+      "local_sessions": [],
+      "coreml": {
+        "state": "installed",
+        "reason": null,
+        "execution_note": "Provider registration does not prove per-node GPU or ANE execution"
+      }
+    }
+  },
+  "local_weights": {
+    "body": {
+      "state": "available",
+      "name": "yolov8n.pt",
+      "bytes": 6549796
+    },
+    "uniform": {
+      "state": "available",
+      "name": "uniform_cls.pt",
+      "bytes": 2975105
+    },
+    "earring": {
+      "state": "unavailable",
+      "reason": "Local weights missing or incomplete: earring_cls.pt"
+    },
+    "face_detection": {
+      "state": "available",
+      "name": "det_10g.onnx",
+      "bytes": 16923827
+    },
+    "face_recognition": {
+      "state": "available",
+      "name": "w600k_r50.onnx",
+      "bytes": 174383860
+    }
+  },
+  "trials": [
+    {
+      "state": "ready",
+      "module": "body",
+      "requested_device": "cpu",
+      "actual_device": {
+        "predictor_backend": "cpu",
+        "parameter": "cpu",
+        "matches_request": true
+      },
+      "weights": {
+        "name": "yolov8n.pt",
+        "bytes": 6549796
+      },
+      "cold_load_ms": 519.009,
+      "first_call_ms": 825.364,
+      "steady_state": {
+        "n": 25,
+        "p50_ms": 28.246,
+        "p95_ms": 41.075
+      },
+      "output": {
+        "shape": [
+          0,
+          4
+        ],
+        "finite": true,
+        "count": 0,
+        "synthetic_classes": [],
+        "synthetic_top1": null,
+        "same_outcome_as_cpu": true,
+        "max_abs_probability_delta_vs_cpu": null,
+        "cpu_reference": "same_cpu_trial",
+        "cpu_reference_error": null
+      },
+      "device": "cpu",
+      "repeats": 25
+    },
+    {
+      "state": "ready",
+      "module": "body",
+      "requested_device": "default",
+      "actual_device": {
+        "predictor_backend": "cpu",
+        "parameter": "cpu",
+        "matches_request": true
+      },
+      "weights": {
+        "name": "yolov8n.pt",
+        "bytes": 6549796
+      },
+      "cold_load_ms": 500.037,
+      "first_call_ms": 697.432,
+      "steady_state": {
+        "n": 25,
+        "p50_ms": 26.08,
+        "p95_ms": 28.118
+      },
+      "output": {
+        "shape": [
+          0,
+          4
+        ],
+        "finite": true,
+        "count": 0,
+        "synthetic_classes": [],
+        "synthetic_top1": null,
+        "same_outcome_as_cpu": true,
+        "max_abs_probability_delta_vs_cpu": null,
+        "cpu_reference": "fresh_cpu_model_same_process",
+        "cpu_reference_error": null
+      },
+      "device": "default",
+      "repeats": 25,
+      "default_device_comparison": {
+        "reference": "fresh explicit CPU trial for this module",
+        "explicit_cpu_actual_device": "cpu",
+        "default_actual_device": "cpu",
+        "matches_explicit_cpu": true
+      }
+    },
+    {
+      "state": "ready",
+      "module": "body",
+      "requested_device": "mps",
+      "actual_device": {
+        "predictor_backend": "mps",
+        "parameter": "mps:0",
+        "matches_request": true
+      },
+      "weights": {
+        "name": "yolov8n.pt",
+        "bytes": 6549796
+      },
+      "cold_load_ms": 484.646,
+      "first_call_ms": 1745.211,
+      "steady_state": {
+        "n": 25,
+        "p50_ms": 20.758,
+        "p95_ms": 23.22
+      },
+      "output": {
+        "shape": [
+          0,
+          4
+        ],
+        "finite": true,
+        "count": 0,
+        "synthetic_classes": [],
+        "synthetic_top1": null,
+        "same_outcome_as_cpu": true,
+        "max_abs_probability_delta_vs_cpu": null,
+        "cpu_reference": "fresh_cpu_model_same_process",
+        "cpu_reference_error": null
+      },
+      "device": "mps",
+      "repeats": 25
+    },
+    {
+      "state": "ready",
+      "module": "uniform",
+      "requested_device": "cpu",
+      "actual_device": {
+        "predictor_backend": "cpu",
+        "parameter": "cpu",
+        "matches_request": true
+      },
+      "weights": {
+        "name": "uniform_cls.pt",
+        "bytes": 2975105
+      },
+      "cold_load_ms": 1124.437,
+      "first_call_ms": 21.442,
+      "steady_state": {
+        "n": 25,
+        "p50_ms": 4.025,
+        "p95_ms": 5.408
+      },
+      "output": {
+        "shape": [
+          2
+        ],
+        "finite": true,
+        "count": 2,
+        "synthetic_classes": [
+          "correct_uniform",
+          "wrong_uniform"
+        ],
+        "synthetic_top1": "correct_uniform",
+        "same_outcome_as_cpu": true,
+        "max_abs_probability_delta_vs_cpu": 0.0,
+        "cpu_reference": "same_cpu_trial",
+        "cpu_reference_error": null
+      },
+      "device": "cpu",
+      "repeats": 25
+    },
+    {
+      "state": "ready",
+      "module": "uniform",
+      "requested_device": "default",
+      "actual_device": {
+        "predictor_backend": "cpu",
+        "parameter": "cpu",
+        "matches_request": true
+      },
+      "weights": {
+        "name": "uniform_cls.pt",
+        "bytes": 2975105
+      },
+      "cold_load_ms": 1127.31,
+      "first_call_ms": 23.214,
+      "steady_state": {
+        "n": 25,
+        "p50_ms": 4.148,
+        "p95_ms": 5.18
+      },
+      "output": {
+        "shape": [
+          2
+        ],
+        "finite": true,
+        "count": 2,
+        "synthetic_classes": [
+          "correct_uniform",
+          "wrong_uniform"
+        ],
+        "synthetic_top1": "correct_uniform",
+        "same_outcome_as_cpu": true,
+        "max_abs_probability_delta_vs_cpu": 0.0,
+        "cpu_reference": "fresh_cpu_model_same_process",
+        "cpu_reference_error": null
+      },
+      "device": "default",
+      "repeats": 25,
+      "default_device_comparison": {
+        "reference": "fresh explicit CPU trial for this module",
+        "explicit_cpu_actual_device": "cpu",
+        "default_actual_device": "cpu",
+        "matches_explicit_cpu": true
+      }
+    },
+    {
+      "state": "ready",
+      "module": "uniform",
+      "requested_device": "mps",
+      "actual_device": {
+        "predictor_backend": "mps",
+        "parameter": "mps:0",
+        "matches_request": true
+      },
+      "weights": {
+        "name": "uniform_cls.pt",
+        "bytes": 2975105
+      },
+      "cold_load_ms": 1122.697,
+      "first_call_ms": 441.367,
+      "steady_state": {
+        "n": 25,
+        "p50_ms": 4.747,
+        "p95_ms": 5.985
+      },
+      "output": {
+        "shape": [
+          2
+        ],
+        "finite": true,
+        "count": 2,
+        "synthetic_classes": [
+          "correct_uniform",
+          "wrong_uniform"
+        ],
+        "synthetic_top1": "correct_uniform",
+        "same_outcome_as_cpu": true,
+        "max_abs_probability_delta_vs_cpu": 2.56e-06,
+        "cpu_reference": "fresh_cpu_model_same_process",
+        "cpu_reference_error": null
+      },
+      "device": "mps",
+      "repeats": 25
+    },
+    {
+      "state": "skipped",
+      "device": "cuda",
+      "reason": "torch reports this device unavailable; no fallback trial was substituted"
+    }
+  ],
+  "face_provider_trials": [
+    {
+      "state": "ready",
+      "model": "face_detection",
+      "weights": "det_10g.onnx",
+      "condition": "cpu_reset",
+      "trial": {
+        "condition": "cpu_reset",
+        "router_load_ms": 20.789,
+        "prepare_ms": 14.856,
+        "first_inference_ms": 73.21,
+        "steady_state": {
+          "n": 25,
+          "p50_ms": 70.617,
+          "p95_ms": 71.174
+        },
+        "actual_model_class": "RetinaFace",
+        "actual_providers_after_prepare_and_inference": [
+          "CPUExecutionProvider"
+        ],
+        "output_shape": [
+          0,
+          5
+        ],
+        "output_finite": true,
+        "output_count": 0,
+        "same_as_last_repeat": true,
+        "comparison_to_reference": {
+          "same_shape": true,
+          "same_output": true,
+          "max_abs_delta": 0.0,
+          "reference_condition": "cpu_no_reset"
+        }
+      },
+      "provider_execution_note": null
+    },
+    {
+      "state": "ready",
+      "model": "face_detection",
+      "weights": "det_10g.onnx",
+      "condition": "cpu_no_reset",
+      "trial": {
+        "condition": "cpu_no_reset",
+        "router_load_ms": 19.326,
+        "prepare_ms": 0.003,
+        "first_inference_ms": 73.014,
+        "steady_state": {
+          "n": 25,
+          "p50_ms": 70.767,
+          "p95_ms": 71.675
+        },
+        "actual_model_class": "RetinaFace",
+        "actual_providers_after_prepare_and_inference": [
+          "CPUExecutionProvider"
+        ],
+        "output_shape": [
+          0,
+          5
+        ],
+        "output_finite": true,
+        "output_count": 0,
+        "same_as_last_repeat": true,
+        "comparison_to_reference": {
+          "same_shape": true,
+          "same_output": true,
+          "max_abs_delta": 0.0,
+          "reference_condition": "cpu_reset"
+        }
+      },
+      "provider_execution_note": null
+    },
+    {
+      "state": "failed",
+      "model": "face_detection",
+      "condition": "coreml",
+      "error": "Fail: [ONNXRuntimeError] : 1 : FAIL : Non-zero status code returned while running CoreML_7653664518472345864_6 node. Name:'CoreMLExecutionProvider_CoreML_7653664518472345864_6_6' Status Message: Exception: /Users/runner/work/1/s/onnxruntime/core/providers/coreml/model/model.mm:66 InlinedVector<int64_t> (anonymous namespace)::GetStaticOutputShape(gsl::span<const int64_t>, gsl::span<const int64_t>, const logging::Logger &) inferred_shape.size() == coreml_static_shape.size() was false. CoreML static output shape ({1,1,1,800,1}) and inferred shape ({3200,1}) have different ranks.\n"
+    },
+    {
+      "state": "ready",
+      "model": "face_recognition",
+      "weights": "w600k_r50.onnx",
+      "condition": "cpu_reset",
+      "trial": {
+        "condition": "cpu_reset",
+        "router_load_ms": 244.18,
+        "prepare_ms": 86.399,
+        "first_inference_ms": 130.813,
+        "steady_state": {
+          "n": 25,
+          "p50_ms": 127.68,
+          "p95_ms": 128.697
+        },
+        "actual_model_class": "ArcFaceONNX",
+        "actual_providers_after_prepare_and_inference": [
+          "CPUExecutionProvider"
+        ],
+        "output_shape": [
+          1,
+          512
+        ],
+        "output_finite": true,
+        "output_count": 1,
+        "same_as_last_repeat": true,
+        "comparison_to_reference": {
+          "same_shape": true,
+          "same_output": true,
+          "max_abs_delta": 0.0,
+          "reference_condition": "cpu_no_reset",
+          "cosine_similarity": 1.0,
+          "max_abs_normalized_delta": 0.0
+        }
+      },
+      "provider_execution_note": null
+    },
+    {
+      "state": "ready",
+      "model": "face_recognition",
+      "weights": "w600k_r50.onnx",
+      "condition": "cpu_no_reset",
+      "trial": {
+        "condition": "cpu_no_reset",
+        "router_load_ms": 175.618,
+        "prepare_ms": 0.007,
+        "first_inference_ms": 134.258,
+        "steady_state": {
+          "n": 25,
+          "p50_ms": 127.571,
+          "p95_ms": 128.078
+        },
+        "actual_model_class": "ArcFaceONNX",
+        "actual_providers_after_prepare_and_inference": [
+          "CPUExecutionProvider"
+        ],
+        "output_shape": [
+          1,
+          512
+        ],
+        "output_finite": true,
+        "output_count": 1,
+        "same_as_last_repeat": true,
+        "comparison_to_reference": {
+          "same_shape": true,
+          "same_output": true,
+          "max_abs_delta": 0.0,
+          "reference_condition": "cpu_reset",
+          "cosine_similarity": 1.0,
+          "max_abs_normalized_delta": 0.0
+        }
+      },
+      "provider_execution_note": null
+    },
+    {
+      "state": "ready",
+      "model": "face_recognition",
+      "weights": "w600k_r50.onnx",
+      "condition": "coreml",
+      "trial": {
+        "condition": "coreml",
+        "router_load_ms": 2864.833,
+        "prepare_ms": 0.006,
+        "first_inference_ms": 6.551,
+        "steady_state": {
+          "n": 25,
+          "p50_ms": 4.099,
+          "p95_ms": 5.567
+        },
+        "actual_model_class": "ArcFaceONNX",
+        "actual_providers_after_prepare_and_inference": [
+          "CoreMLExecutionProvider",
+          "CPUExecutionProvider"
+        ],
+        "output_shape": [
+          1,
+          512
+        ],
+        "output_finite": true,
+        "output_count": 1,
+        "same_as_last_repeat": true,
+        "comparison_to_reference": {
+          "same_shape": true,
+          "same_output": false,
+          "max_abs_delta": 0.05122843,
+          "reference_condition": "cpu_reset",
+          "cosine_similarity": 0.9976904745,
+          "max_abs_normalized_delta": 0.0086941414
+        }
+      },
+      "provider_execution_note": "CoreML provider registration does not prove per-node GPU or ANE execution"
+    }
+  ],
+  "limits": [
+    "Synthetic class outcomes are not model accuracy.",
+    "Fresh processes do not clear filesystem caches.",
+    "Only installed local weights are opened."
+  ]
+}

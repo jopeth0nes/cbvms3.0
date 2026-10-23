@@ -1,0 +1,68 @@
+{
+  "runs": {
+    "core": {
+      "log_name": "cbvms-monitor-core-tests.log",
+      "summary": [
+        "Ran 123 tests in 1.917s",
+        "OK"
+      ]
+    },
+    "final_focused": {
+      "log_name": "cbvms-monitor-final-focused.log",
+      "summary": [
+        "Ran 20 tests in 1.241s",
+        "OK"
+      ]
+    },
+    "integration": {
+      "log_name": "cbvms-monitor-integration-tests.log",
+      "summary": [
+        "Ran 157 tests in 22.268s",
+        "FAILED (errors=2)"
+      ]
+    },
+    "audio": {
+      "log_name": "cbvms-monitor-audio-tests.log",
+      "summary": [
+        "Ran 30 tests in 0.463s",
+        "OK"
+      ]
+    },
+    "downstream": {
+      "log_name": "cbvms-monitor-downstream-tests.log",
+      "summary": [
+        "Ran 62 tests in 12.787s",
+        "OK"
+      ]
+    },
+    "native_ui": {
+      "log_name": "cbvms-monitor-native-tests.log",
+      "summary": [
+        "Ran 4 tests in 6.186s",
+        "OK"
+      ]
+    },
+    "devices": {
+      "log_name": "cbvms-monitor-device-tests.log",
+      "summary": [
+        "Ran 7 tests in 0.088s",
+        "OK"
+      ]
+    },
+    "original_portal": {
+      "log_name": "cbvms-monitor-existing-portal-baseline.log",
+      "summary": [
+        "Ran 5 tests in 1.565s",
+        "FAILED (failures=2)"
+      ]
+    },
+    "original_persistence": {
+      "log_name": "cbvms-monitor-existing-failures-baseline.log",
+      "summary": [
+        "Ran 2 tests in 0.259s",
+        "FAILED (errors=2)"
+      ]
+    }
+  },
+  "note": "Separate runs; counts are not unique. Original persistence log also contains the initial incomplete source-export import error; see report for resolved provenance."
+}

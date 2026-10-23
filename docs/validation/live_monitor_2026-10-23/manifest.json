@@ -1,0 +1,26 @@
+{
+  "baseline_commit": "244d6805ee00c5f8b3bf60f9fecf0d288dc70b7c",
+  "source_sha256": {
+    "core/diagnostics.py": "116b1b9aad09652f33702225abf0338d3be235ca7d150f1d679e43b766270087",
+    "core/live_pipeline.py": "79cad4ee150355dffe7792bf82770fd1fe190dd4e10b2d7a71cf1af908060d99",
+    "core/model_readiness.py": "4ceb64d7c899658a7f3e74c278fcd76deeed5279578053d791e42eb0ce6c8c8b",
+    "core/model_safety.py": "b49f13fd43b77995d364f04fe743347e139f3a47678aa426f26bfa81c74e9333",
+    "core/monitor_models.py": "919a938dd9922aa20ad26ac8c4ec8c95e7a0c084eafe736ec273202948a0eb58",
+    "core/performance.py": "f03a3570a444271a73ff8e79e038a78e85b7efe28dc9aec671f808d956d3239a",
+    "core/person_detector.py": "8093f254766330c2932b04e045aab3f47a701b49dbf35252f80d9e67a3635214",
+    "core/recognizer.py": "e8488781cd7b8b98666a23b9e702df26ea5ccbfaed615054a5eaa0257c97556e",
+    "core/trainer.py": "3dbfa60531a4c6872682ef2584780924aa7562936c4aebde8363d1f876902586",
+    "main.py": "97f55de1acf5bcac0fe03eb7e09672703df5fa24058333c566522a3daa232651",
+    "scripts/benchmark_live_monitor.py": "85f2926d7d75b2268132a0c563bd414fa8876bfb719a2752157970e1787b0eea",
+    "scripts/benchmark_monitor_devices.py": "9c89da13b2c5cfa11ccacd7ba1713f7721455294f21624eb3ce1edfd041b905a",
+    "scripts/benchmark_monitor_pipeline.py": "8afa642a7ab553dd82b06c3e5466b567e83c4a49ef607bcee4b459192b599bbb",
+    "scripts/benchmark_monitor_startup.py": "1fdd4baeaf55097411cc0a66ef7651910349620dd35501c3235682d19f0610a9",
+    "scripts/probe_monitor_camera.py": "25b18ae62027c5f9d4e9279e7c6f4b38b43cebb8bea9a8c7a34af88cfa69453a",
+    "tests/test_monitor_devices.py": "81a41d35a4237635bc06b0edba8f46701529400c8aede4d08de217300d4a09cd",
+    "tests/test_monitor_performance.py": "56db3a04031d3053f13bea5577f00144b198a175af6ff006379c7412e0a2c025",
+    "tests/test_monitor_startup.py": "f7f82256b777b30a5ed587278164513331337ca2ee3a880d38508076ff3c5a89",
+    "ui/dashboard.py": "f53958aea054c173ebd4d146f80b54ec241c0c6a639c67636673891471764e73"
+  },
+  "implementation_patch_sha256": "d52a400601917d18a4084486a903e0f7c8493f153c8773554a29aa175d638c75",
+  "notes": "Local uncommitted source at delivery; timings are aggregate synthetic/consented probes, not accuracy metrics."
+}

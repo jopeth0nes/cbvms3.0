@@ -18,6 +18,7 @@ import cv2
 import numpy as np
 
 from core.model_safety import locked_model
+from core.performance import measure
 from core.diagnostics import event
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -343,8 +344,9 @@ class ViolationTrainer:
             if not path.is_file() or path.stat().st_size < 1024:
                 raise RuntimeError(f"Missing or incomplete classifier weights: {path}")
             event("model_asset", component=module, path=str(path), provider="cpu")
-            from ultralytics import YOLO
-            model = YOLO(str(path))
+            with measure(module+"_load"):
+                from ultralytics import YOLO
+                model = YOLO(str(path))
             if getattr(model, "task", "classify") != "classify":
                 raise RuntimeError(f"Expected a classification model: {path}")
             names = getattr(model, "names", None)
@@ -370,7 +372,8 @@ class ViolationTrainer:
             # ultralytics' classification preprocess does cv2.cvtColor(im, BGR2RGB)
             # internally — converting here would double-swap R/B channels.
             proc = _letterbox(image_bgr, IMG_SIZE)
-            results = model.predict(proc, verbose=False)
+            with measure(module+"_inference"):
+                results = model.predict(proc, verbose=False)
             if not results:
                 return None, 0.0
             res = results[0]
@@ -398,7 +401,8 @@ class ViolationTrainer:
             return None
         try:
             proc = _letterbox(image_bgr, IMG_SIZE)
-            results = model.predict(proc, verbose=False)
+            with measure(module+"_inference"):
+                results = model.predict(proc, verbose=False)
             if not results:
                 return None
             res = results[0]

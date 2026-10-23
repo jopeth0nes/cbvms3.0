@@ -17,6 +17,7 @@ import os
 from pathlib import Path
 from types import SimpleNamespace
 from core.diagnostics import event
+from core.performance import measure, timed_lock
 import pickle
 import threading
 from typing import TYPE_CHECKING
@@ -38,8 +39,8 @@ IDENTITY_MARGIN = 0.05
 # Drop weak SCRFD detections (real faces score well above this).
 DET_SCORE_MIN = 0.5
 
-# Input size for the fast detection-only pass (detect_faces). Smaller than the
-# 640x640 recognition pass → ~52ms vs ~196ms, enough headroom for ~15 FPS tracking.
+# The live path detects at 320 and reuses these landmarks for recognition.
+# Enrollment also uses the 640 path; throughput depends on hardware and scene.
 DET_FAST_SIZE = (320, 320)
 
 
@@ -117,10 +118,12 @@ class FaceRecognizer:
         return model
 
     def _ensure_detector(self):
-        with self._detector_lock:
+        with timed_lock(self._detector_lock, "lock_detector"):
             if self._detector is None:
-                model = self._local_model("det_10g.onnx", "detection")
-                model.detect(np.zeros((320, 320, 3), np.uint8), input_size=DET_FAST_SIZE)
+                with measure("face_load"):
+                    model = self._local_model("det_10g.onnx", "detection")
+                with measure("face_warm"):
+                    model.detect(np.zeros((320, 320, 3), np.uint8), input_size=DET_FAST_SIZE)
                 self._detector = model
                 self._app = SimpleNamespace(det_model=model)
                 for attr, filename in (("_frontal_cascade", "haarcascade_frontalface_default.xml"),
@@ -130,10 +133,12 @@ class FaceRecognizer:
             return self._detector
 
     def _ensure_recognition(self):
-        with self._recognition_lock:
+        with timed_lock(self._recognition_lock, "lock_recognition"):
             if self._recognition is None:
-                model = self._local_model("w600k_r50.onnx", "recognition")
-                model.get_feat(np.zeros((112, 112, 3), np.uint8))
+                with measure("recognition_load"):
+                    model = self._local_model("w600k_r50.onnx", "recognition")
+                with measure("recognition_warm"):
+                    model.get_feat(np.zeros((112, 112, 3), np.uint8))
                 self._recognition = model
             return self._recognition
 
@@ -196,16 +201,17 @@ class FaceRecognizer:
     def detect_faces(self, frame_bgr: np.ndarray) -> list[dict]:
         """Fast detection-only pass (no embedding) for the live tracker.
 
-        Runs SCRFD at a smaller input size (~52 ms vs ~520 ms for full recognition),
-        so the overlay can refresh box positions ~10-15x more often than identity.
+        Runs the installed detector at the live input size. The assessment worker reuses these
+        same-frame landmarks rather than running another detector pass.
         Returns [{"box": [x1,y1,x2,y2], "score": float}] for confident detections.
         """
         if frame_bgr is None or frame_bgr.size == 0:
             return []
         try:
             detector = self._ensure_detector()
-            with self._detector_lock:
-                bboxes, _kpss = detector.detect(frame_bgr, input_size=DET_FAST_SIZE)
+            with timed_lock(self._detector_lock, "lock_detector"):
+                with measure("face_inference"):
+                    bboxes, _kpss = detector.detect(frame_bgr, input_size=DET_FAST_SIZE)
             self.detector_error = None
         except Exception as exc:
             self.detector_error = str(exc)
@@ -224,7 +230,7 @@ class FaceRecognizer:
         """Embed the tracker's exact same-frame landmarks, without redetecting faces."""
         from insightface.app.common import Face
         result = []
-        with self._recognition_lock:
+        with timed_lock(self._recognition_lock, "lock_recognition"), measure("recognition_inference"):
             for row in detections:
                 points = np.asarray(row['keypoints'], dtype=np.float32)
                 if points.shape != (5, 2) or not np.isfinite(points).all():

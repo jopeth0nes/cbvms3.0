@@ -1,0 +1,222 @@
+{
+  "kind": "consented_physical_camera_temporary_identity",
+  "elapsed_seconds": 35.156,
+  "camera_first_frame_seconds": 1.478892708022613,
+  "first_face_seconds": 3.6115183330257423,
+  "temporary_identity_seconds": 4.107688333024271,
+  "first_results_seconds": {
+    "identity_uncertain": 4.744,
+    "stable_identity": 5.161,
+    "valid_torso": 6.578
+  },
+  "capture_fps": 29.54,
+  "preview_unique_fps": 14.23,
+  "counts": {
+    "tracking": 94,
+    "assessments": 46,
+    "stable_identity_frames": 45,
+    "valid_torso_frames": 43,
+    "uniform_assessment_frames": 0,
+    "identity_uncertain_frames": 1
+  },
+  "models": {
+    "face": "ready",
+    "recognition": "ready",
+    "body": "ready",
+    "uniform": "ready",
+    "earring": "failed"
+  },
+  "camera_error": null,
+  "worker_errors": [
+    "",
+    ""
+  ],
+  "workers_stopped": true,
+  "rss_peak_mb": 1320.53,
+  "timings": {
+    "lock_detector": {
+      "count": 194,
+      "retained": 194,
+      "p50_ms": 0.0,
+      "p95_ms": 0.001
+    },
+    "lock_recognition": {
+      "count": 49,
+      "retained": 49,
+      "p50_ms": 0.001,
+      "p95_ms": 0.001
+    },
+    "ui_render": {
+      "count": 478,
+      "retained": 256,
+      "p50_ms": 9.545,
+      "p95_ms": 10.976
+    },
+    "preview_age": {
+      "count": 478,
+      "retained": 256,
+      "p50_ms": 23.187,
+      "p95_ms": 41.383
+    },
+    "face_load": {
+      "count": 1,
+      "retained": 1,
+      "p50_ms": 3103.44,
+      "p95_ms": 3103.44
+    },
+    "recognition_load": {
+      "count": 1,
+      "retained": 1,
+      "p50_ms": 3250.97,
+      "p95_ms": 3250.97
+    },
+    "face_warm": {
+      "count": 1,
+      "retained": 1,
+      "p50_ms": 149.136,
+      "p95_ms": 149.136
+    },
+    "lock_person": {
+      "count": 181,
+      "retained": 181,
+      "p50_ms": 0.0,
+      "p95_ms": 0.001
+    },
+    "recognition_warm": {
+      "count": 1,
+      "retained": 1,
+      "p50_ms": 199.844,
+      "p95_ms": 199.844
+    },
+    "lock_trainer": {
+      "count": 3,
+      "retained": 3,
+      "p50_ms": 0.001,
+      "p95_ms": 0.002
+    },
+    "body_load": {
+      "count": 1,
+      "retained": 1,
+      "p50_ms": 273.825,
+      "p95_ms": 273.825
+    },
+    "face_inference": {
+      "count": 96,
+      "retained": 96,
+      "p50_ms": 159.202,
+      "p95_ms": 213.601
+    },
+    "recognition_inference": {
+      "count": 47,
+      "retained": 47,
+      "p50_ms": 334.068,
+      "p95_ms": 412.333
+    },
+    "queue_tracking": {
+      "count": 95,
+      "retained": 95,
+      "p50_ms": 71.404,
+      "p95_ms": 123.88
+    },
+    "first_face": {
+      "count": 1,
+      "retained": 1,
+      "p50_ms": 4312.208,
+      "p95_ms": 4312.208
+    },
+    "tracking": {
+      "count": 94,
+      "retained": 94,
+      "p50_ms": 304.385,
+      "p95_ms": 461.153
+    },
+    "capture_to_tracking": {
+      "count": 94,
+      "retained": 94,
+      "p50_ms": 411.385,
+      "p95_ms": 563.094
+    },
+    "queue_assessment": {
+      "count": 46,
+      "retained": 46,
+      "p50_ms": 0.132,
+      "p95_ms": 0.733
+    },
+    "recognition": {
+      "count": 46,
+      "retained": 46,
+      "p50_ms": 334.505,
+      "p95_ms": 402.855
+    },
+    "database_read": {
+      "count": 46,
+      "retained": 46,
+      "p50_ms": 0.015,
+      "p95_ms": 0.027
+    },
+    "body": {
+      "count": 46,
+      "retained": 46,
+      "p50_ms": 0.001,
+      "p95_ms": 0.002
+    },
+    "uniform": {
+      "count": 46,
+      "retained": 46,
+      "p50_ms": 0.956,
+      "p95_ms": 3.036
+    },
+    "capture_to_assessment": {
+      "count": 46,
+      "retained": 46,
+      "p50_ms": 700.932,
+      "p95_ms": 838.059
+    },
+    "first_stable_identity": {
+      "count": 1,
+      "retained": 1,
+      "p50_ms": 5148.014,
+      "p95_ms": 5148.014
+    },
+    "uniform_load": {
+      "count": 1,
+      "retained": 1,
+      "p50_ms": 1708.959,
+      "p95_ms": 1708.959
+    },
+    "uniform_inference": {
+      "count": 1,
+      "retained": 1,
+      "p50_ms": 66.029,
+      "p95_ms": 66.029
+    },
+    "body_inference": {
+      "count": 90,
+      "retained": 90,
+      "p50_ms": 149.711,
+      "p95_ms": 283.165
+    },
+    "replaced_tracking": {
+      "count": 129,
+      "retained": 129,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0
+    },
+    "first_torso": {
+      "count": 1,
+      "retained": 1,
+      "p50_ms": 6221.269,
+      "p95_ms": 6221.269
+    },
+    "rejected": {
+      "count": 1,
+      "retained": 1,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0
+    }
+  },
+  "business_writes": 0,
+  "images_saved": 0,
+  "embeddings_saved": 0,
+  "accuracy_evaluated": false
+}

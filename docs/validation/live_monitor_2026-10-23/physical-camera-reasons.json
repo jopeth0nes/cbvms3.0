@@ -1,0 +1,231 @@
+{
+  "kind": "consented_physical_camera_temporary_identity",
+  "elapsed_seconds": 20.191,
+  "camera_first_frame_seconds": 1.5867289999732748,
+  "first_face_seconds": 3.6747265000012703,
+  "temporary_identity_seconds": 4.2459381250082515,
+  "first_results_seconds": {
+    "identity_uncertain": 4.76,
+    "stable_identity": 5.292,
+    "valid_torso": 6.18
+  },
+  "capture_fps": 29.44,
+  "preview_unique_fps": 14.22,
+  "counts": {
+    "tracking": 48,
+    "assessments": 22,
+    "stable_identity_frames": 21,
+    "valid_torso_frames": 20,
+    "uniform_assessment_frames": 0,
+    "identity_uncertain_frames": 1
+  },
+  "resolution": [
+    1280,
+    720
+  ],
+  "assessment_reasons": {
+    "Confirming identity across fresh frames": 1,
+    "Uniform model unavailable": 1,
+    "Shirt obscured or mostly skin; show more of your shirt": 20
+  },
+  "models": {
+    "face": "ready",
+    "recognition": "ready",
+    "body": "ready",
+    "uniform": "ready",
+    "earring": "failed"
+  },
+  "camera_error": null,
+  "worker_errors": [
+    "",
+    ""
+  ],
+  "workers_stopped": true,
+  "rss_peak_mb": 1191.3,
+  "timings": {
+    "lock_detector": {
+      "count": 102,
+      "retained": 102,
+      "p50_ms": 0.0,
+      "p95_ms": 0.001
+    },
+    "lock_recognition": {
+      "count": 25,
+      "retained": 25,
+      "p50_ms": 0.001,
+      "p95_ms": 0.001
+    },
+    "ui_render": {
+      "count": 263,
+      "retained": 256,
+      "p50_ms": 9.449,
+      "p95_ms": 19.198
+    },
+    "preview_age": {
+      "count": 263,
+      "retained": 256,
+      "p50_ms": 23.995,
+      "p95_ms": 55.809
+    },
+    "face_load": {
+      "count": 1,
+      "retained": 1,
+      "p50_ms": 3150.585,
+      "p95_ms": 3150.585
+    },
+    "recognition_load": {
+      "count": 1,
+      "retained": 1,
+      "p50_ms": 3317.196,
+      "p95_ms": 3317.196
+    },
+    "face_warm": {
+      "count": 1,
+      "retained": 1,
+      "p50_ms": 169.392,
+      "p95_ms": 169.392
+    },
+    "lock_person": {
+      "count": 87,
+      "retained": 87,
+      "p50_ms": 0.0,
+      "p95_ms": 0.001
+    },
+    "recognition_warm": {
+      "count": 1,
+      "retained": 1,
+      "p50_ms": 205.687,
+      "p95_ms": 205.687
+    },
+    "lock_trainer": {
+      "count": 3,
+      "retained": 3,
+      "p50_ms": 0.001,
+      "p95_ms": 0.001
+    },
+    "body_load": {
+      "count": 1,
+      "retained": 1,
+      "p50_ms": 260.432,
+      "p95_ms": 260.432
+    },
+    "face_inference": {
+      "count": 50,
+      "retained": 50,
+      "p50_ms": 168.812,
+      "p95_ms": 209.933
+    },
+    "recognition_inference": {
+      "count": 23,
+      "retained": 23,
+      "p50_ms": 343.302,
+      "p95_ms": 508.715
+    },
+    "queue_tracking": {
+      "count": 49,
+      "retained": 49,
+      "p50_ms": 65.494,
+      "p95_ms": 127.332
+    },
+    "first_face": {
+      "count": 1,
+      "retained": 1,
+      "p50_ms": 4330.795,
+      "p95_ms": 4330.795
+    },
+    "tracking": {
+      "count": 48,
+      "retained": 48,
+      "p50_ms": 313.939,
+      "p95_ms": 489.724
+    },
+    "capture_to_tracking": {
+      "count": 48,
+      "retained": 48,
+      "p50_ms": 421.933,
+      "p95_ms": 614.46
+    },
+    "queue_assessment": {
+      "count": 22,
+      "retained": 22,
+      "p50_ms": 0.136,
+      "p95_ms": 0.212
+    },
+    "recognition": {
+      "count": 22,
+      "retained": 22,
+      "p50_ms": 350.218,
+      "p95_ms": 502.713
+    },
+    "database_read": {
+      "count": 22,
+      "retained": 22,
+      "p50_ms": 0.015,
+      "p95_ms": 0.026
+    },
+    "body": {
+      "count": 22,
+      "retained": 22,
+      "p50_ms": 0.001,
+      "p95_ms": 0.004
+    },
+    "uniform": {
+      "count": 22,
+      "retained": 22,
+      "p50_ms": 1.185,
+      "p95_ms": 1.832
+    },
+    "capture_to_assessment": {
+      "count": 22,
+      "retained": 22,
+      "p50_ms": 719.693,
+      "p95_ms": 902.04
+    },
+    "uniform_load": {
+      "count": 1,
+      "retained": 1,
+      "p50_ms": 1493.703,
+      "p95_ms": 1493.703
+    },
+    "first_stable_identity": {
+      "count": 1,
+      "retained": 1,
+      "p50_ms": 5232.451,
+      "p95_ms": 5232.451
+    },
+    "uniform_inference": {
+      "count": 1,
+      "retained": 1,
+      "p50_ms": 225.374,
+      "p95_ms": 225.374
+    },
+    "body_inference": {
+      "count": 43,
+      "retained": 43,
+      "p50_ms": 173.812,
+      "p95_ms": 356.993
+    },
+    "replaced_tracking": {
+      "count": 68,
+      "retained": 68,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0
+    },
+    "first_torso": {
+      "count": 1,
+      "retained": 1,
+      "p50_ms": 5594.262,
+      "p95_ms": 5594.262
+    },
+    "rejected": {
+      "count": 1,
+      "retained": 1,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0
+    }
+  },
+  "business_writes": 0,
+  "images_saved": 0,
+  "embeddings_saved": 0,
+  "accuracy_evaluated": false
+}

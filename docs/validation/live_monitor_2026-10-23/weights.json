@@ -1,0 +1,18 @@
+{
+  "yolov8n.pt": {
+    "bytes": 6549796,
+    "sha256": "f59b3d833e2ff32e194b5bb8e08d211dc7c5bdf144b90d2c8412c47ccfc83b36"
+  },
+  "uniform_cls.pt": {
+    "bytes": 2975105,
+    "sha256": "8fba6e1da0c11c97873b16049b940ce21d5699838cc2040f069d5d5249a15680"
+  },
+  "det_10g.onnx": {
+    "bytes": 16923827,
+    "sha256": "5838f7fe053675b1c7a08b633df49e7af5495cee0493c7dcf6697200b85b5b91"
+  },
+  "w600k_r50.onnx": {
+    "bytes": 174383860,
+    "sha256": "4c06341c33c2ca1f86781dab0e829f88ad5b64be9fba56e56bc9ebdefc619e43"
+  }
+}

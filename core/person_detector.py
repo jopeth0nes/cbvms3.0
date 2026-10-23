@@ -15,6 +15,7 @@ import cv2
 import numpy as np
 
 from core.model_safety import locked_model
+from core.performance import measure
 
 # Vertical slice of the person box used as the torso (fractions of body height).
 _TORSO_TOP_FRAC = 0.20   # skip head/neck
@@ -129,8 +130,9 @@ class PersonDetector:
             if not Path(self._MODEL_PATH).is_file() or Path(self._MODEL_PATH).stat().st_size < 1024:
                 raise RuntimeError(f"Missing or incomplete body weights: {self._MODEL_PATH}")
             event("model_asset", component="body", path=self._MODEL_PATH, provider="cpu")
-            from ultralytics import YOLO
-            self._model = YOLO(self._MODEL_PATH)  # ~6 MB, auto-downloads once
+            with measure("body_load"):
+                from ultralytics import YOLO
+                self._model = YOLO(self._MODEL_PATH)  # validated local weights only
             return self._model
         except Exception as exc:
             print(f"[PersonDetector] model load failed: {exc}")
@@ -167,9 +169,10 @@ class PersonDetector:
             return []
         try:
             # Pass BGR directly — ultralytics expects BGR numpy frames.
-            results = model.predict(
-                frame_bgr, conf=self._CONF, iou=self._IOU, classes=[0], verbose=False
-            )
+            with measure("body_inference"):
+                results = model.predict(
+                    frame_bgr, conf=self._CONF, iou=self._IOU, classes=[0], verbose=False
+                )
             boxes: list[list[int]] = []
             if results:
                 for b in results[0].boxes:

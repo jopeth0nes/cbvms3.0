@@ -1,0 +1,194 @@
+[
+  {
+    "policy": "candidate",
+    "baseline_ref": "244d6805ee00c5f8b3bf60f9fecf0d288dc70b7c",
+    "process_cold": true,
+    "uncached": false,
+    "synthetic_blank_pixels": true,
+    "camera": false,
+    "native_ui": false,
+    "database": false,
+    "environment": {
+      "python": "3.12.13",
+      "platform": "macOS-26.5-arm64-arm-64bit",
+      "machine": "arm64",
+      "processor": "arm",
+      "packages": {
+        "numpy": "1.26.4",
+        "opencv-python": "4.10.0.84",
+        "onnxruntime": "1.19.2",
+        "torch": "2.2.2",
+        "ultralytics": "8.3.27",
+        "insightface": "0.7.3"
+      }
+    },
+    "setup_seconds": 0.203,
+    "simulated_login_delay": 5.0,
+    "states_at_login": {
+      "face": "ready",
+      "recognition": "ready",
+      "body": "ready",
+      "uniform": "ready",
+      "earring": "failed"
+    },
+    "ready_from_prepare_seconds": {
+      "face": 2.094,
+      "recognition": 2.205,
+      "uniform": 2.82,
+      "body": 2.858
+    },
+    "remaining_after_login_seconds": {
+      "face": 0,
+      "recognition": 0,
+      "uniform": 0,
+      "body": 0
+    },
+    "components": {
+      "face": {
+        "state": "ready",
+        "load_and_warm_seconds": 2.092,
+        "error": ""
+      },
+      "recognition": {
+        "state": "ready",
+        "load_and_warm_seconds": 2.202,
+        "error": ""
+      },
+      "body": {
+        "state": "ready",
+        "load_and_warm_seconds": 0.766,
+        "error": ""
+      },
+      "uniform": {
+        "state": "ready",
+        "load_and_warm_seconds": 0.614,
+        "error": ""
+      },
+      "earring": {
+        "state": "failed",
+        "load_and_warm_seconds": 0.0,
+        "error": "No trained earring weights"
+      }
+    },
+    "steady_seconds": 60.189,
+    "serial_probe_hz": 3.19,
+    "stage_timings": {
+      "face": {
+        "n": 192,
+        "p50_ms": 96.367,
+        "p95_ms": 111.001
+      },
+      "embedding": {
+        "n": 192,
+        "p50_ms": 180.077,
+        "p95_ms": 185.988
+      },
+      "body": {
+        "n": 192,
+        "p50_ms": 28.676,
+        "p95_ms": 33.971
+      },
+      "uniform": {
+        "n": 192,
+        "p50_ms": 4.832,
+        "p95_ms": 6.079
+      },
+      "cycle": {
+        "n": 192,
+        "p50_ms": 310.387,
+        "p95_ms": 331.38
+      }
+    },
+    "rss_start_mb": 1068.05,
+    "rss_end_mb": 725.12,
+    "rss_peak_mb": 1073.11,
+    "process_peak_rss_mb": 1073.11,
+    "cpu_percent_one_core": 619.4,
+    "blank_scene_detections": {
+      "faces": 0,
+      "bodies": 0,
+      "cycles": 192
+    },
+    "accuracy_evaluated": false,
+    "bounded_timings": {
+      "lock_detector": {
+        "count": 385,
+        "retained": 256,
+        "p50_ms": 0.0,
+        "p95_ms": 0.0
+      },
+      "lock_recognition": {
+        "count": 193,
+        "retained": 193,
+        "p50_ms": 0.0,
+        "p95_ms": 0.001
+      },
+      "face_load": {
+        "count": 1,
+        "retained": 1,
+        "p50_ms": 1959.486,
+        "p95_ms": 1959.486
+      },
+      "recognition_load": {
+        "count": 1,
+        "retained": 1,
+        "p50_ms": 2069.036,
+        "p95_ms": 2069.036
+      },
+      "face_warm": {
+        "count": 1,
+        "retained": 1,
+        "p50_ms": 110.524,
+        "p95_ms": 110.524
+      },
+      "lock_person": {
+        "count": 387,
+        "retained": 256,
+        "p50_ms": 0.0,
+        "p95_ms": 0.001
+      },
+      "body_load": {
+        "count": 1,
+        "retained": 1,
+        "p50_ms": 101.616,
+        "p95_ms": 101.616
+      },
+      "recognition_warm": {
+        "count": 1,
+        "retained": 1,
+        "p50_ms": 132.678,
+        "p95_ms": 132.678
+      },
+      "lock_trainer": {
+        "count": 387,
+        "retained": 256,
+        "p50_ms": 0.0,
+        "p95_ms": 0.0
+      },
+      "uniform_load": {
+        "count": 1,
+        "retained": 1,
+        "p50_ms": 584.912,
+        "p95_ms": 584.912
+      },
+      "uniform_inference": {
+        "count": 193,
+        "retained": 193,
+        "p50_ms": 4.75,
+        "p95_ms": 6.037
+      },
+      "body_inference": {
+        "count": 193,
+        "retained": 193,
+        "p50_ms": 28.092,
+        "p95_ms": 33.619
+      },
+      "face_inference": {
+        "count": 192,
+        "retained": 192,
+        "p50_ms": 96.332,
+        "p95_ms": 110.955
+      }
+    }
+  }
+]

@@ -22,8 +22,9 @@ from core.person_detector import PersonDetector
 from core.recognizer import FaceRecognizer
 from dataclasses import asdict, replace
 from core.live_state import FrameContext, LiveConfig, LiveState
-from core.model_readiness import face_readiness
+from core.monitor_models import MonitorModels
 from core.diagnostics import event
+from core.performance import PERF, measure
 from core.live_pipeline import LiveProcessor, LiveWorker, MonitorTask, MotionProjection, FaceTrackingProcessor
 from ui.live_alerts import LiveAlerts
 from ui.live_overlay import draw_assessments
@@ -78,7 +79,7 @@ MAX_ALERTS = 50
 
 UNIFORM_VIOLATION_CONF = 0.65  # higher bar before a WRONG-uniform alert is logged (cuts false alarms)
 CAMERA_IDLE_RELEASE_SECS = 4.0  # release the camera after this long with no consumer (power saver)
-REID_MIN_GAP_SECS = 0.5      # min spacing between recognition offers (recognition takes ~0.5s)
+REID_MIN_GAP_SECS = 0.5      # spacing between assessment offers; confirmation requires distinct frames
 
 
 def _put_latest(q: "queue.Queue", item) -> None:
@@ -116,8 +117,16 @@ class CBVMSDashboard(WorkspaceWindow):
         database: "CBVMSDatabase | None" = None,
         recognizer: "FaceRecognizer | None" = None,
         person_detector: "PersonDetector | None" = None,
+        monitor_models: "MonitorModels | None" = None,
     ) -> None:
         super().__init__()
+        if monitor_models is None and recognizer is not None:
+            existing = getattr(recognizer, "monitor_models", None)
+            if isinstance(existing, MonitorModels):
+                monitor_models = existing
+        if monitor_models is not None:
+            recognizer = monitor_models.recognizer
+            person_detector = monitor_models.person_detector
         self.withdraw()
         self.username = username
         self._logout_requested = False
@@ -174,7 +183,7 @@ class CBVMSDashboard(WorkspaceWindow):
         # Real-time notification broker (sound + toast + bell badge + log panel)
         self._notifier = Notifier()
         # YOLOv8 classification trainer (uniform / earring modules)
-        self._trainer = ViolationTrainer()
+        self._trainer = monitor_models.trainer if monitor_models is not None else ViolationTrainer()
         # Live violation checker (uniform / earring) backed by the trainer models
         self._checker = LiveViolationChecker(self._trainer, notifier=self._notifier)
         # Full-body person detector (YOLOv8n) for reliable torso crops
@@ -188,7 +197,8 @@ class CBVMSDashboard(WorkspaceWindow):
                 self._person_detector = None
 
         # Preserve the trained classifier and inference-matched colour reference.
-        self._uniform_matcher = UniformColorMatcher()
+        self._uniform_matcher = (monitor_models.uniform_matcher if monitor_models is not None
+                                 else UniformColorMatcher())
 
         # One analysis owner; camera capture and Tk preview never wait for inference.
         self._monitor_generation = 0
@@ -205,7 +215,10 @@ class CBVMSDashboard(WorkspaceWindow):
         self._tracking_times = deque(maxlen=30)
         self._metrics_time = 0.0
         self._closed = threading.Event()
-        self._readiness = face_readiness(self._recognizer)
+        PERF.start_monitor()
+        self._monitor_models = monitor_models or MonitorModels(
+            self._recognizer, self._person_detector, self._trainer, self._uniform_matcher)
+        self._readiness = self._monitor_models.readiness
         self._tracking_result = None
         self._tracking_projections = {}
         self._tracking_last_offered = None
@@ -1329,49 +1342,17 @@ class CBVMSDashboard(WorkspaceWindow):
     # ------------------------------------------------------------------
 
     def _prewarm_models(self) -> None:
-        def load_body():
-            if self._person_detector is None:
-                raise RuntimeError("Body detector unavailable")
-            self._person_detector._load_failed = False
-            if self._person_detector._ensure_model() is None:
-                raise RuntimeError(self._person_detector.last_error or "Body detector failed")
-            # A saved reference is reused, never rebuilt by camera startup.
-            self._person_detector.detect_persons(np.zeros((320, 320, 3), np.uint8))
-            if self._person_detector.last_error:
-                raise RuntimeError(self._person_detector.last_error)
-            return True
-
-        def load_uniform():
-            if not self._uniform_matcher.is_loaded():
-                self._uniform_matcher.load()
-            if self._trainer.is_trained("uniform"):
-                if self._trainer._get_model("uniform") is None:
-                    raise RuntimeError(self._trainer.last_error.get("uniform") or "Uniform classifier failed")
-                if self._trainer.predict_proba('uniform', np.zeros((224, 224, 3), np.uint8)) is None:
-                    raise RuntimeError("Uniform classifier inference failed; restore compatible weights and retry")
-            else:
-                raise RuntimeError("Train a uniform classifier in Training; colour reference alone cannot assess garments")
-            return True
-
-        def load_earring():
-            if not self._trainer.is_trained("earring"):
-                raise RuntimeError("No trained earring weights")
-            return self._trainer._get_model("earring")
-
-        self._readiness.add("body", load_body)
-        self._readiness.add("uniform", load_uniform)
-        self._readiness.add("earring", load_earring)
-        self._readiness.start()
+        self._monitor_models.start()
 
     def _retry_models(self):
-        self._readiness.start(retry=True)
+        self._monitor_models.start(retry=True)
 
     def _on_localized(self, result):
         """Tracking worker submits its original pixels, landmarks and ownership token."""
         if (not result.task.valid() or not self._readiness.ready('recognition')
                 or result.task.context.captured_at-self._monitor_offer_time < REID_MIN_GAP_SECS):
             return
-        self._live_worker.offer(replace(result.task, observations=result.observations))
+        self._live_worker.offer(result.task.with_observations(result.observations))
         self._monitor_offer_time = result.task.context.captured_at
 
     def _latest_monitor_sample(self):
@@ -1381,6 +1362,7 @@ class CBVMSDashboard(WorkspaceWindow):
             and self._camera_state == 'STREAMING') else None
 
     def _invalidate_monitor(self):
+        PERF.start_monitor()
         notifier = getattr(self, "_notifier", None)
         if notifier is not None:
             notifier.audio.cancel_detection()
@@ -1535,6 +1517,7 @@ class CBVMSDashboard(WorkspaceWindow):
                     self.camera_feed.show_placeholder(message)
                 else:
                     self._last_frame_request = started
+                    PERF.first("first_camera_frame")
                     tracking = _drain(self._tracking_worker.results)
                     if (tracking is not None and tracking.task.valid()
                             and tracking.task.context.generation == self._monitor_generation
@@ -1577,8 +1560,11 @@ class CBVMSDashboard(WorkspaceWindow):
                             self._alerts_scroll.update_assessments(rows)
                             self._monitor_card_key = card_key
                         self._display_rows = tuple(rows)
-                        annotated = draw_assessments(sample.frame, rows, mirror=self._mirror.display_mirror())
-                        if self.camera_feed.render(self._mirror.apply_anim(annotated)):
+                        with measure("ui_render"):
+                            annotated = draw_assessments(sample.frame, rows, mirror=self._mirror.display_mirror())
+                            rendered = self.camera_feed.render(self._mirror.apply_anim(annotated))
+                        if rendered:
+                            PERF.observe("preview_age", time.monotonic()-sample.captured_at)
                             if sample.frame_id != self._monitor_last_rendered:
                                 self._preview_times.append(started)
                             self._monitor_last_rendered = sample.frame_id
@@ -1606,6 +1592,9 @@ class CBVMSDashboard(WorkspaceWindow):
                 self._status_fps.configure(text=f"Preview {self._measured_rate(self._preview_times, started):.1f} FPS · "
                                           f"Tracking {self._measured_rate(self._tracking_times, started):.1f}/s · "
                                           f"Analysis {self._measured_rate(self._analysis_times, started):.1f}/s")
+                if PERF.enabled and started-getattr(self, "_performance_report_at", 0.) >= 5.:
+                    self._performance_report_at = started
+                    event("performance_summary", timings=PERF.snapshot())
         except Exception as exc:
             print(f"[CBVMS] feed error: {exc}")
         if not self._closed.is_set():
@@ -1669,6 +1658,9 @@ class CBVMSDashboard(WorkspaceWindow):
 
     def _on_close(self) -> None:
         self._closed.set()
+        models = getattr(self, "_monitor_models", None)
+        if models is not None:
+            models.cancel_pending()
         self._notifier.close()
         self._monitor_cancel.set()
         self._tracking_worker.stop()
@@ -1702,6 +1694,7 @@ def open_dashboard(
     database=None,
     recognizer=None,
     person_detector=None,
+    monitor_models=None,
 ) -> bool:
     """Run the dashboard. Returns True if the user logged out (vs. closed the app)."""
     app = CBVMSDashboard(
@@ -1709,8 +1702,10 @@ def open_dashboard(
         database=database,
         recognizer=recognizer,
         person_detector=person_detector,
+        monitor_models=monitor_models,
     )
     app.mainloop()
+    app._monitor_models.cancel_pending()
     # Let cancelled native calls return before Python tears down ONNX/PyTorch
     # types. Otherwise closing the window can emit spurious model-type errors.
     deadline=time.monotonic()+5
@@ -1727,5 +1722,5 @@ def open_dashboard(
         event('unknown_sightings_shutdown_incomplete',status=writer.status())
         print('[Unknown sightings] Shutdown deadline reached: '+writer.status())
     app._camera_worker_done.wait(max(0,deadline-time.monotonic()))
-    app._readiness.wait(max(0,deadline-time.monotonic()))
+    app._monitor_models.wait(max(0,deadline-time.monotonic()))
     return getattr(app, "_logout_requested", False)

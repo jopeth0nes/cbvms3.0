@@ -19,40 +19,83 @@ class ComponentStatus:
 
 
 class ModelReadiness:
-    def __init__(self, timeout=45.):
+    def __init__(self, timeout=45., max_concurrent=None):
         self.timeout = timeout
-        self._lock = threading.Lock()
+        self.max_concurrent = max_concurrent
+        self._lock = threading.RLock()
         self._loaders = {}
         self._status = {}
         self._running = set()
         self._threads = {}
+        self._priority = {}
+        self._sequence = 0
+        self._closed = False
 
-    def add(self, name, loader):
+    def add(self, name, loader, *, priority=100):
         with self._lock:
             if name not in self._loaders:
                 self._loaders[name] = loader
                 self._status[name] = ComponentStatus()
+                self._priority[name] = (priority, self._sequence)
+                self._sequence += 1
+
+    def _launch_locked(self, retry=False):
+        if self._closed:
+            return
+        if retry:
+            # Queue every failed component for this explicit cycle. As each slot
+            # opens, face-priority ordering chooses the next item. A failed retry
+            # returns to failed and is never automatically requeued.
+            for name, status in tuple(self._status.items()):
+                if status.state == "failed":
+                    self._status[name] = ComponentStatus()
+        while self.max_concurrent is None or len(self._running) < self.max_concurrent:
+            candidates = [n for n, status in self._status.items()
+                          if n not in self._running and status.state == "waiting"]
+            if not candidates:
+                return
+            name = min(candidates, key=lambda n: self._priority[n])
+            started = time.monotonic()
+            self._running.add(name)
+            self._status[name] = ComponentStatus("loading", started=started)
+            worker = threading.Thread(target=self._load, args=(name,), daemon=True,
+                                      name=f"model-{name}")
+            self._threads[name] = worker
+            try:
+                # Start under the registry lock so wait/close can never observe a
+                # reserved loading component whose thread has not started yet.
+                worker.start()
+            except Exception as exc:
+                self._running.remove(name)
+                self._status[name] = ComponentStatus("failed", str(exc), started,
+                                                     time.monotonic()-started)
 
     def start(self, *, retry=False):
         with self._lock:
-            names = [n for n, s in self._status.items() if n not in self._running
-                     and (s.state == "waiting" or (retry and s.state == "failed"))]
-            for name in names:
-                self._running.add(name)
-                self._status[name] = ComponentStatus("loading", started=time.monotonic())
-        for name in names:
-            worker=threading.Thread(target=self._load,args=(name,),daemon=True,name=f'model-{name}')
-            with self._lock:
-                self._threads[name]=worker
-                worker.start()
+            self._launch_locked(retry=retry)
+
+    def cancel_pending(self):
+        """Prevent queued work from launching; running native calls retain ownership."""
+        with self._lock:
+            self._closed = True
+            for name, status in tuple(self._status.items()):
+                if name not in self._running and status.state == "waiting":
+                    self._status[name] = ComponentStatus(
+                        "cancelled", "Preparation cancelled before this component started.")
 
     def wait(self, timeout=5.):
         """Bounded shutdown grace; never claims to cancel a running native call."""
-        deadline=time.monotonic()+timeout
-        with self._lock:
-            workers=tuple(self._threads.values())
-        for worker in workers:
-            worker.join(max(0,deadline-time.monotonic()))
+        deadline = time.monotonic()+timeout
+        while time.monotonic() < deadline:
+            with self._lock:
+                workers = tuple(self._threads[n] for n in self._running
+                                if n in self._threads)
+                if not workers:
+                    return
+            for worker in workers:
+                if worker.ident is not None:
+                    worker.join(max(0, deadline-time.monotonic()))
+            time.sleep(.001)
 
     def _load(self, name):
         event("component_load_start", component=name)
@@ -68,6 +111,7 @@ class ModelReadiness:
         with self._lock:
             self._status[name] = ComponentStatus(state, error, started, elapsed)
             self._running.remove(name)
+            self._launch_locked()
         event("component_load_complete" if state == "ready" else "component_load_failed",
               component=name, elapsed=round(elapsed, 3), error=error)
 
@@ -105,7 +149,7 @@ def face_readiness(recognizer):
     # The same registry travels with the shared recognizer from login to dashboard.
     if not hasattr(recognizer, "readiness"):
         registry = ModelReadiness()
-        registry.add("face", recognizer._ensure_detector)
-        registry.add("recognition", recognizer._ensure_recognition)
+        registry.add("face", recognizer._ensure_detector, priority=0)
+        registry.add("recognition", recognizer._ensure_recognition, priority=1)
         recognizer.readiness = registry
     return recognizer.readiness
