@@ -277,6 +277,29 @@ class ProtocolTests(CloudSyncTests):
             self.assertEqual(conn.execute('SELECT COUNT(*) FROM system_reports').fetchone()[0], 30)
             self.assertEqual(conn.execute('SELECT generation FROM campus_sync_identity').fetchone()[0], 2)
 
+    def test_cloud_only_command_stays_queued_without_receipt_or_watermark(self):
+        from core.cloud_sync import sync_once
+        self.register()
+        cloud = FakeCloud()
+        cloud.meta.update(ids=['S1', 'S2', 'CLOUD'], published_student_count=2)
+        cloud.actions = [dict(self.action('password', {}, aid='cloud-only-password'), student_id='CLOUD', sequence=1),
+                         dict(self.action('reports', {'title': 'Test', 'description': 'Details', 'category': 'Other'}, aid='local-report'), sequence=2)]
+        original_call = cloud.call
+
+        def checked_call(path, data=None):
+            if path == 'publish':
+                self.assertNotIn('cloud-only-password', {r['id'] for r in data['receipts']})
+            return original_call(path, data)
+
+        cloud.call = checked_call
+        for _ in range(2):
+            self.assertEqual(sync_once(self.db, cloud), 2)
+        self.assertEqual([a['id'] for a in cloud.actions], ['cloud-only-password'])
+        with self.db.connect() as conn:
+            self.assertEqual(conn.execute('SELECT COUNT(*) FROM system_reports').fetchone()[0], 1)
+            self.assertEqual(conn.execute('SELECT COUNT(*) FROM cloud_portal_receipts').fetchone()[0], 1)
+            self.assertIsNone(conn.execute('SELECT verified_through FROM campus_sync_identity').fetchone()[0])
+
     def test_missing_remote_evidence_repaired_even_with_corrupt_cache(self):
         from core.cloud_sync import sync_once
         self.register()

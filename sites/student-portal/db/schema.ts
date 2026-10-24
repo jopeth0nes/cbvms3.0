@@ -41,3 +41,11 @@ export const syncControl = sqliteTable('campus_sync_control', {
 export const syncPublications = sqliteTable('campus_sync_publications', {
   generation: integer('generation').primaryKey(), runId: text('run_id').notNull().unique(),
 });
+
+// Administrative additive imports are separate from campus writer publications.
+export const campusPortalImports = sqliteTable('campus_portal_imports', {
+  importId: text('import_id').primaryKey(), sourceCheckpoint: text('source_checkpoint').notNull(),
+  payloadSha256: text('payload_sha256').notNull(), importedAt: text('imported_at').notNull(),
+  studentCount: integer('student_count').notNull(), evidenceCount: integer('evidence_count').notNull(),
+  mappingJson: text('mapping_json').notNull(),
+});

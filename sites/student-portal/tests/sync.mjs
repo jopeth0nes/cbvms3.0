@@ -97,5 +97,25 @@ try {
   assert.equal((await publish()).status,200); generation++;
   const collision=structuredClone(students);collision[1].snapshot.violations[0].id=1;
   assert.equal((await publish(collision)).status,400);
+  // Administrative imports keep campus case numbers separate from portal keys.
+  // Actions must use the server-owned mapping, including pending/term views.
+  const imported=structuredClone(students[0].snapshot);
+  imported.violations[0]={...imported.violations[0],id:-1,campus_record_id:1,has_snapshot:false,semester_id:7};
+  imported.academic_terms=[{id:7,semester_name:'First Semester',school_year:'2026-2027'}];
+  await db.prepare('UPDATE portal_students SET snapshot=? WHERE id=?').bind(JSON.stringify(imported),'S1').run();
+  session=await call('/api/login',{username:'S1',password:'Campus reset passphrase'});
+  assert.equal(session.status,200);
+  headers={Cookie:session.cookie,'X-CSRF-Token':session.data.csrf};
+  const importedAppeal=await call('/api/appeals',{violation_id:-1,portal_violation_id:999,campus_violation_id:999,reason:'Please review this imported campus case carefully.',filename:'fixture.jpg',file:bytes.toString('base64')},headers);
+  assert.equal(importedAppeal.status,201);
+  const importedPayload=JSON.parse((await db.prepare('SELECT payload FROM portal_actions WHERE id=?').bind(importedAppeal.data.id).first()).payload);
+  assert.equal(importedPayload.violation_id,1);
+  assert.equal(importedPayload.portal_violation_id,-1);
+  assert.equal(importedPayload.campus_violation_id,1);
+  assert.equal(importedPayload.violation_identity,students[0].snapshot.violations[0].identity);
+  const importedPage=await call('/api/page?page=violations&semester_id=7',undefined,headers);
+  assert.equal(importedPage.data._violations[0].can_appeal,false);
+  const importedAppealsPage=await call('/api/page?page=appeals&semester_id=7',undefined,headers);
+  assert.ok(importedAppealsPage.data._appeals.some(a=>a.id===importedAppeal.data.id));
   console.log('PASS: protocol/source gates, old clients, empty roster, racing/stale writers, auth/CSRF/isolation, profile bases, bounded queue, missing evidence, password reset, atomic ack, R2 repair, ID collision.');
 } finally { await mf?.dispose(); await rm(directory,{recursive:true,force:true}); }

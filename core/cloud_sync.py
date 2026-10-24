@@ -40,12 +40,14 @@ class CloudClient:
         if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password or parsed.path or parsed.query or parsed.fragment:
             raise ValueError('Cloud sync requires an exact HTTPS Site origin.')
         self.headers = {'Authorization': 'Bearer ' + config['sync_key'],
-                        'OAI-Sites-Authorization': 'Bearer ' + config['service_token'],
                         'Content-Type': 'application/json',
                         'User-Agent': 'CBVMS-Campus-Sync/2',
                         'X-CBVMS-Protocol': '2',
                         'X-CBVMS-Source': config.get('source_id', ''),
                         'X-CBVMS-Writer': config.get('writer_id', '')}
+        # Direct Cloudflare uses SYNC_KEY; retain the optional Sites gateway.
+        if config.get('service_token'):
+            self.headers['OAI-Sites-Authorization'] = 'Bearer ' + config['service_token']
         self.opener = build_opener(NoRedirect)
 
     def call(self, path, data=None):
@@ -273,7 +275,8 @@ def _sync_once(database, client, state_path=None):
         else:
             raise ValueError('Sync paused: stale database copy or competing writer.')
     with database.connect() as conn:
-        count = conn.execute('SELECT COUNT(*) FROM students').fetchone()[0]
+        local_ids = {r[0] for r in conn.execute('SELECT student_id FROM students')}
+        count = len(local_ids)
     baseline = remote.get('published_student_count')
     if baseline is None:
         baseline = len(remote['ids'])
@@ -290,6 +293,12 @@ def _sync_once(database, client, state_path=None):
             cursor = max(cursor, action['sequence'])
             sid = action.get('student_id')
             ordering_key = (sid, action.get('kind', 'unknown'))
+            # A retained cloud-only identity is not an unauthorized local student.
+            # Preserve its command for verified enrollment/reconciliation; a receipt
+            # without an owned student snapshot cannot be published atomically.
+            if sid not in local_ids:
+                blocked.add(ordering_key)
+                continue
             if ordering_key in blocked:
                 continue
             if action.get('error'):

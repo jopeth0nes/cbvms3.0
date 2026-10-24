@@ -33,7 +33,7 @@ def prepare(source, restored, output, migrations):
         files = sorted(migrations.glob('*.sql'))
         if [p.name for p in files] != ['0000_furry_moira_mactaggert.sql', '0001_overrated_medusa.sql',
                                       '0002_sync_protocol.sql', '0003_academic_snapshots.sql',
-                                      '0004_publication_roster.sql']:
+                                      '0004_publication_roster.sql', '0005_campus_portal_imports.sql']:
             raise ValueError('Review the migration set before transferring')
         for migration in files[:2]:
             conn.executescript(migration.read_text(encoding='utf-8'))

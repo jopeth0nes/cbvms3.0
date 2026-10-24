@@ -47,7 +47,7 @@ async function route(request: Request) {
   const readAll = read.filter(a => !JSON.parse(a.payload).id).map(a => a.created_at).sort().pop();
   const notifications = (snapshot.notifications || []).map((n: Obj) => ({ ...n, is_read: n.is_read || readIds.has(String(n.id)) || (readAll && new Date(n.created_at.replace(' ', 'T') + 'Z') <= new Date(readAll)) }));
   const violations = (snapshot.violations || []).map((v: Obj) => {
-    const pending = queued.some(a => a.kind === 'appeals' && String(JSON.parse(a.payload).violation_id) === String(v.id));
+    const pending = queued.some(a => { if (a.kind !== 'appeals') return false; const p = JSON.parse(a.payload); return String(p.portal_violation_id ?? p.violation_id) === String(v.id); });
     const deadline = v.appeal_deadline && new Date(v.appeal_deadline.replace(' ', 'T') + 'Z').getTime();
     return { ...v, can_appeal: v.can_appeal && !pending && (!deadline || deadline > Date.now()), appeal_eligibility_reason: pending ? 'Appeal saved; awaiting campus sync.' : v.appeal_eligibility_reason };
   });
@@ -71,7 +71,7 @@ async function route(request: Request) {
     } else if (page === 'notifications') { data._notifications = notifications.slice(offset, offset + 10); data._has_more = notifications.length > offset + 10; }
     else if (page === 'appeals') {
       const pending = result.results.filter(a => a.kind === 'appeals' && a.status !== 'applied').map(a => ({ ...JSON.parse(a.payload), id: a.id, status: a.status === 'queued' ? 'Awaiting campus sync' : 'Campus review needed', admin_notes: a.result, submitted_at: a.created_at.replace('T', ' ').slice(0, 19) }));
-      const rows = [...pending, ...(snapshot.appeals || [])].filter((a: Obj) => !selectedTerm || violations.some((v: Obj) => String(v.id) === String(a.violation_id) && termMatches(v.semester_id))); data._appeals = rows.slice(offset, offset + 10); data._has_more = rows.length > offset + 10;
+      const rows = [...pending, ...(snapshot.appeals || [])].filter((a: Obj) => !selectedTerm || violations.some((v: Obj) => String(v.id) === String(a.portal_violation_id ?? a.violation_id) && termMatches(v.semester_id))); data._appeals = rows.slice(offset, offset + 10); data._has_more = rows.length > offset + 10;
     } else if (!['profile', 'settings', 'report'].includes(page)) return json({ error: 'Unknown page' }, 400);
     return json(data);
   }
@@ -99,6 +99,17 @@ async function route(request: Request) {
     if (typeof payload.reason !== 'string' || payload.reason.trim().length < 20 || payload.reason.length > 1000) throw Error('Explanation required.');
     const bytes = picture(payload.file, payload.filename);
     payload.violation_identity = v.identity;
+    // Administrative imports retain the campus case identity while allocating a
+    // separate portal key. Capture both from the owned snapshot, never the form.
+    if (v.campus_record_id !== undefined) {
+      if (!Number.isSafeInteger(v.campus_record_id) || v.campus_record_id <= 0) throw Error('Invalid campus case mapping.');
+      payload.portal_violation_id = v.id;
+      payload.violation_id = v.campus_record_id;
+      payload.campus_violation_id = v.campus_record_id;
+    } else {
+      delete payload.portal_violation_id;
+      delete payload.campus_violation_id;
+    }
     payload.evidence_sha256 = createHash('sha256').update(bytes).digest('hex');
     key = `appeals/${id}`; dedupe = `appeal:${sid}:${v.id}`;
     await bucket().put(key, bytes); payload.evidence_key = key; delete payload.file;

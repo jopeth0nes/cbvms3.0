@@ -1,3 +1,14 @@
+> Latest MacBook update — 24 October 2026: an authenticated, additive administrative
+> portal import added all five current MacBook students/accounts and their 58 owned
+> violations, eight appeals, and 65 private evidence objects. The two preexisting
+> cloud accounts and pending actions remain unchanged. Username `2023-00883` is
+> now present with its original credential hash/revision. Actual password login
+> awaits user confirmation. Windows source/writer and generation 3 were preserved;
+> MacBook background sync and shared desktop editing are **not enabled**. The 24
+> local violations lacking a current student identity remain safe locally/backed up.
+> Details and recovery: `MACBOOK_CLOUD_SYNC_CHECKPOINT_2026-10-24.md` and
+> `CAMPUS_PORTAL_IMPORT.md`. Earlier sections below retain historical context.
+
 # Student portal connection — 24 October 2026
 
 > Free-plan password checks are now handled by an internal SQLite-backed Durable

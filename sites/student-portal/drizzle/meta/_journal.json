@@ -36,6 +36,13 @@
       "when": 1792818000000,
       "tag": "0004_publication_roster",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1792854000000,
+      "tag": "0005_campus_portal_imports",
+      "breakpoints": true
     }
   ]
 }
