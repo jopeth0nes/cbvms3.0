@@ -20,6 +20,11 @@ class CloudSyncTests(unittest.TestCase):
         self.addCleanup(patcher.stop)
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
+        # Test deadline behavior must not depend on this checkout's real sync
+        # configuration. Resolve the fixture's campus config under its temp root.
+        config_root = patch('database.db_manager.__file__', str(Path(self.temp.name) / 'database/db_manager.py'))
+        config_root.start()
+        self.addCleanup(config_root.stop)
         self.db = CBVMSDatabase(Path(self.temp.name) / 'test.db')
         self.db.initialize()
         for sid in ('S1', 'S2'):
@@ -244,6 +249,19 @@ class ProtocolTests(CloudSyncTests):
             with self.assertRaises(ValueError):
                 sync_once(self.db, cloud)
             self.assertEqual(cloud.writes, [])
+
+    def test_preserved_cloud_only_accounts_do_not_block_registered_roster(self):
+        from core.cloud_sync import sync_once
+        self.register()
+        cloud = FakeCloud()
+        cloud.meta.update(ids=['S1', 'S2'] + [f'CLOUD{i}' for i in range(10)], published_student_count=2)
+        self.assertEqual(sync_once(self.db, cloud), 2)
+        self.assertEqual(sync_once(self.db, cloud), 2)
+        cloud.meta['published_student_count'] = 100
+        cloud.writes.clear()
+        with self.assertRaises(ValueError):
+            sync_once(self.db, cloud)
+        self.assertEqual(cloud.writes, [])
 
     def test_backlog_bad_action_and_ack_crash_recovery(self):
         from core.cloud_sync import sync_once

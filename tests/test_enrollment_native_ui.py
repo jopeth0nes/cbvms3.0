@@ -144,6 +144,23 @@ class EnrollmentNativeTests(unittest.TestCase):
         self.state['cap_btn'].invoke()
         return frozen
 
+    def test_registration_without_a_published_term(self):
+        from ui.enrollment import REGISTER_WITHOUT_TERM
+        self.panel.username='superadmin'
+        self.begin('NEW-REGISTRATION')
+        self.assertEqual(self.panel._enrollment_term_var.get(),REGISTER_WITHOUT_TERM)
+        self.assertEqual(self.panel._enrollment_terms,{})
+        captures=[self.capture(step) for step in range(3)]
+        self.state['cap_btn'].invoke()
+        self.until(lambda:self.state.get('saved',False))
+        student=self.db.get_student_by_student_id('NEW-REGISTRATION')
+        self.assertEqual(student['photo'],captures[0].photo)
+        self.assertEqual(len(pickle.loads(student['encoding'])),3)
+        self.assertFalse(self.db.enrollment_context('NEW-REGISTRATION')['eligible'])
+        self.assertEqual(self.db.term_history('NEW-REGISTRATION')['enrollments'],[])
+        self.assertIn('Academic term not assigned yet',self.panel._status_label.cget('text'))
+        self.assertEqual(self.errors,[])
+
     def test_three_repeated_full_enrollments_without_flow_then_real_gallery_match(self):
         for attempt in range(3):
             self.camera.step=0

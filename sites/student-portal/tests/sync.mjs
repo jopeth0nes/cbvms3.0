@@ -5,14 +5,14 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
+import { createHash, pbkdf2Sync } from 'node:crypto';
 const directory = await mkdtemp(join(tmpdir(), 'cbvms-sync-test-'));
 let mf;
 try {
-  await build({stdin: {contents: `import {GET,POST} from './app/api/[...path]/route.ts'; export default {fetch(r) {return r.method === 'GET' ? GET(r) : POST(r)}};`, resolveDir: resolve('.')}, bundle: true, format: 'esm', platform: 'browser', external: ['cloudflare:workers', 'node:*'], outfile: join(directory, 'worker.mjs')});
-  mf = new Miniflare({modulesRoot: directory, rootPath: directory, modules: true, scriptPath: join(directory, 'worker.mjs'), compatibilityDate: '2026-05-15', compatibilityFlags: ['nodejs_compat'], bindings: {SYNC_KEY: 'fixture-only'}, d1Databases: ['DB'], r2Buckets: ['BUCKET']});
+  await build({stdin: {contents: `import {GET,POST} from './app/api/[...path]/route.ts'; export {PasswordCrypto} from './lib/password-crypto'; export default {fetch(r) {return r.method === 'GET' ? GET(r) : POST(r)}};`, resolveDir: resolve('.')}, bundle: true, format: 'esm', platform: 'browser', external: ['cloudflare:workers', 'node:*'], outfile: join(directory, 'worker.mjs')});
+  mf = new Miniflare({modulesRoot: directory, rootPath: directory, modules: true, scriptPath: join(directory, 'worker.mjs'), compatibilityDate: '2026-05-15', compatibilityFlags: ['nodejs_compat'], bindings: {SYNC_KEY: 'fixture-only'}, d1Databases: ['DB'], r2Buckets: ['BUCKET'], durableObjects: {PASSWORD_CRYPTO: {className: 'PasswordCrypto', useSQLite: true}}});
   const db = await mf.getD1Database('DB');
-  for (const name of ['0000_furry_moira_mactaggert', '0001_overrated_medusa', '0002_sync_protocol', '0003_academic_snapshots']) {
+  for (const name of ['0000_furry_moira_mactaggert', '0001_overrated_medusa', '0002_sync_protocol', '0003_academic_snapshots', '0004_publication_roster']) {
     const sql = await readFile(`drizzle/${name}.sql`, 'utf8');
     for (const statement of sql.split('--> statement-breakpoint').flatMap(s => s.split(';')).filter(s => s.trim())) await db.prepare(statement).run();
   }
@@ -25,6 +25,9 @@ try {
   }
   const hash = password => createHash('sha256').update(password).digest('hex');
   const students = ['S1','S2'].map((id,i) => ({id,email: `${id}@fixture.invalid`,name: id,active:true,account:{username:id,password_hash:hash('Initial password'),must_change_password:false,credential_version:1},snapshot:{schema_version:3,academic_terms:[],term_history:{enrollments:[]},profile:{student_id:id,name:id},violations:[{id:i+1,identity:hash(id),can_appeal:true,appeal_deadline:'2099-01-01 00:00:00'}],notifications:[],appeals:[]}}));
+  const fixtureSalt = '0123456789abcdef0123456789abcdef';
+  students[0].account.password_hash = `pbkdf2_sha256$v1$600000$${fixtureSalt}$${pbkdf2Sync('Initial password',Buffer.from(fixtureSalt,'hex'),600000,32,'sha256').toString('hex')}`;
+  assert.equal((await call('/api/login',{username:'nonexistent',password:'Incorrect password'})).status,401);
   const publish = (rows=students, receipts=[]) => call('/api/sync/publish', {generation,run_id:crypto.randomUUID(),students:rows,receipts}, syncHeaders);
   assert.equal((await call('/api/sync/audit')).status,401);
   assert.equal((await call('/api/sync/audit',undefined, {...syncHeaders,'X-CBVMS-Protocol':'1'})).status,409);
@@ -33,6 +36,13 @@ try {
   const oldSnapshot=structuredClone(students); delete oldSnapshot[0].snapshot.schema_version;
   assert.equal((await publish(oldSnapshot)).status,400);
   assert.equal((await publish()).status,200); generation++;
+  // Cloud-only identities survive and must not make subsequent campus syncs
+  // look like a shrinking campus roster. Actual campus shrinkage still stops.
+  for (const id of ['CLOUD1','CLOUD2']) await db.prepare('INSERT INTO portal_students (id,email,name,snapshot,synced_at) VALUES (?,?,?,?,?)').bind(id,`${id}@fixture.invalid`,id,'{}',new Date().toISOString()).run();
+  assert.equal((await publish()).status,200); generation++;
+  assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM portal_students WHERE id LIKE 'CLOUD%'").first()).n,2);
+  assert.equal((await publish([students[0]])).status,409);
+  await db.prepare("DELETE FROM portal_students WHERE id LIKE 'CLOUD%'").run();
   assert.equal((await publish([])).status,409);
   const staleCredentials=structuredClone(students); staleCredentials[0].account.credential_version=0;
   assert.equal((await publish(staleCredentials)).status,400);

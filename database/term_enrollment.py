@@ -94,30 +94,72 @@ class TermEnrollmentStore:
                 (student_id,semester_id,*values.values()))
             audit(conn,'enrollment',f'{student_id}:{semester_id}','draft',actor,'Demographics only',dict(old) if old else None,values)
 
-    def confirm_term_enrollment(self, student_id, semester_id, academics, captures, student_key, *, actor, new_student=None):
-        """Accept only current frame-bound wizard captures, never an encoding/photo upload.
-
-        This validates camera provenance and identity consistency, not biometric liveness.
-        All capture rows and confirmation metadata commit under one writer lock.
-        """
+    @staticmethod
+    def _registration_capture_payload(captures, student_key):
+        """Apply the same fresh, three-angle identity checks to both save paths."""
         import numpy as np
         from core.face_capture import FaceCapture, capture_payload
-        from core.recognizer import MATCH_THRESHOLD
         captures=tuple(captures)
         if len(captures)!=3 or any(not isinstance(c,FaceCapture) or not 0 <= time.monotonic()-c.captured_at <= 600 for c in captures):
             raise ValueError('Three fresh camera captures are required; reopen the camera to retry.')
         if len({str(c.frame_id) for c in captures})!=3:
             raise ValueError('Each capture must come from a distinct camera frame.')
         blob,photo=capture_payload(captures,student_key)
+        candidate=np.vstack([c.embedding for c in captures])
+        if np.min(candidate @ candidate.T) < .55:
+            raise ValueError('Capture identities are inconsistent; retake all angles.')
+        return blob,photo,candidate
+
+    @staticmethod
+    def _check_capture_identity(conn, student_id, candidate):
+        import numpy as np
+        from core.recognizer import MATCH_THRESHOLD
+        found=False
+        # These encodings are trusted local storage, never uploaded pickle data.
+        for student in conn.execute('SELECT student_id,encoding FROM students'):
+            if student['student_id']==student_id:
+                found=True
+            if not student['encoding']:
+                continue
+            stored=np.asarray(pickle.loads(student['encoding']),dtype=np.float32).reshape(-1,candidate.shape[1])
+            stored=stored/np.linalg.norm(stored,axis=1,keepdims=True)
+            distance=1-float(np.max(candidate @ stored.T))
+            if student['student_id']!=student_id and distance<MATCH_THRESHOLD:
+                raise ValueError('Face matches another permanent student identity. Resolve the identity before enrolling.')
+            if student['student_id']==student_id and distance>=MATCH_THRESHOLD:
+                raise ValueError('Fresh capture does not match this permanent student identity.')
+        return found
+
+    def register_student_with_capture(self, student, captures, student_key, *, actor):
+        """Save an account and recognition anchor without confirming term eligibility."""
+        captures=tuple(captures)
+        blob,photo,candidate=self._registration_capture_payload(captures,student_key)
+        values=dict(student)
+        student_id=str(values.get('student_id','')).strip()
+        if not student_id or not str(values.get('name','')).strip() or not values.get('account_password'):
+            raise ValueError('Student ID, name and account password are required.')
+        values.update(student_id=student_id,encoding=blob,photo=photo,registration_pending=False)
+        with self.connect() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            self._term_admin(conn,actor)
+            if conn.execute('SELECT 1 FROM students WHERE student_id=?',(student_id,)).fetchone():
+                raise ValueError('Student already registered. Select a published term to confirm enrollment, or edit the existing student.')
+            self._check_capture_identity(conn,student_id,candidate)
+            pk=self.insert_student(**values,_connection=conn)
+            audit(conn,'student',student_id,'register',actor,'Face registration; academic term not assigned',
+                  after={'term_assigned':False,'capture_hashes':[hashlib.sha256(c.photo).hexdigest() for c in captures]})
+            return pk
+
+    def confirm_term_enrollment(self, student_id, semester_id, academics, captures, student_key, *, actor, new_student=None):
+        """Confirm a published term with fresh camera provenance and identity checks."""
+        captures=tuple(captures)
+        blob,photo,candidate=self._registration_capture_payload(captures,student_key)
         values={k:str(academics.get(k,'')).strip() for k in ACADEMICS}
         from core.academics import academic_values
         normalized=academic_values(values['college_department'],values['course'],values['report_year_level'],values['report_section'])
         values={k:normalized[k] for k in ACADEMICS}
         if not all(values.values()):
             raise ValueError('Complete the term department, course, year and section.')
-        candidate=np.vstack([c.embedding for c in captures])
-        if np.min(candidate @ candidate.T) < .55:
-            raise ValueError('Capture identities are inconsistent; retake all angles.')
         with self.connect() as conn:
             conn.execute('BEGIN IMMEDIATE')
             self._term_admin(conn,actor)
@@ -131,21 +173,7 @@ class TermEnrollmentStore:
             old=conn.execute('SELECT * FROM student_term_enrollments WHERE student_id=? AND semester_id=?',(student_id,semester_id)).fetchone()
             if old and old['status']=='confirmed':
                 raise ValueError('This student already has a verified enrollment for this term.')
-            # Existing local encodings use trusted pickle storage; never unpickle an uploaded value.
-            found=False
-            for student in conn.execute('SELECT student_id,encoding FROM students'):
-                if student['student_id']==student_id:
-                    found=True
-                if not student['encoding']:
-                    continue
-                stored=np.asarray(pickle.loads(student['encoding']),dtype=np.float32).reshape(-1,candidate.shape[1])
-                stored=stored/np.linalg.norm(stored,axis=1,keepdims=True)
-                distance=1-float(np.max(candidate @ stored.T))
-                if student['student_id']!=student_id and distance<MATCH_THRESHOLD:
-                    raise ValueError('Face matches another permanent student identity. Resolve the identity before enrolling.')
-                if student['student_id']==student_id and distance>=MATCH_THRESHOLD:
-                    raise ValueError('Fresh capture does not match this permanent student identity.')
-            if not found:
+            if not self._check_capture_identity(conn,student_id,candidate):
                 raise ValueError('Create the permanent student draft first.')
             capture_id=uuid.uuid4().hex
             stamp=instant().isoformat()

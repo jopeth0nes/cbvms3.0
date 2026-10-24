@@ -1,0 +1,39 @@
+{
+  "$schema": "https://developers.cloudflare.com/workers/wrangler/config-schema.json",
+  "name": "cbvms-student-portal",
+  "main": "./worker.ts",
+  "compatibility_date": "2026-05-15",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "preview_urls": false,
+  "routes": [
+    { "pattern": "migration.studentportal.bond", "custom_domain": true },
+    { "pattern": "studentportal.bond", "custom_domain": true }
+  ],
+  "observability": { "enabled": false },
+  "durable_objects": {
+    "bindings": [{ "name": "PASSWORD_CRYPTO", "class_name": "PasswordCrypto" }]
+  },
+  "migrations": [{ "tag": "password-crypto-v1", "new_sqlite_classes": ["PasswordCrypto"] }],
+  "assets": {
+    "directory": "../public",
+    "binding": "ASSETS",
+    "html_handling": "none",
+    "not_found_handling": "none",
+    "run_worker_first": true
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "cbvms-student-portal",
+      "database_id": "640d2258-ca44-45b3-b83a-5e1f0caec663",
+      "migrations_dir": "../drizzle"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "BUCKET",
+      "bucket_name": "cbvms-student-evidence"
+    }
+  ]
+}

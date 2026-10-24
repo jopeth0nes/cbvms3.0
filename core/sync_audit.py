@@ -1,5 +1,5 @@
 """Read-only reconciliation. Never construct/initialize the application database."""
-from contextlib import contextmanager
+from contextlib import contextmanager, closing
 import hashlib
 import json
 from pathlib import Path
@@ -82,7 +82,7 @@ def backup(path, target):
     if target.exists():
         raise ValueError('Backup destination must not exist')
     with readonly(path) as source:
-        with sqlite3.connect(target) as dest:
+        with closing(sqlite3.connect(target)) as dest:
             source.backup(dest)
     with readonly(target) as restored:
         if restored.execute('PRAGMA integrity_check').fetchone()[0] != 'ok':

@@ -44,6 +44,11 @@ data/
 .env
 .env.*
 
+# Local runtimes, tooling, credentials and Wrangler state (never commit)
+/.runtime/
+/.wrangler/
+/sites/student-portal/cloudflare/.wrangler/
+
 # YOLO / model weights (download via install scripts)
 models/*.pt
 models/*.pth

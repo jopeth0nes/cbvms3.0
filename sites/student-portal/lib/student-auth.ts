@@ -16,6 +16,19 @@ function equals(a: string, b: string) {
   const x = new TextEncoder().encode(a), y = new TextEncoder().encode(b);
   return x.length === y.length && timingSafeEqual(x, y);
 }
+async function derivePassword(password: string, salt: Uint8Array, iterations: number): Promise<string> {
+  const namespace = (env as unknown as {PASSWORD_CRYPTO?: DurableObjectNamespace}).PASSWORD_CRYPTO;
+  if (!namespace) return bytesToHex(await pbkdf2Async(sha256, password, salt, {c: iterations, dkLen: 32, asyncTick: 10}));
+  const stub = namespace.get(namespace.idFromName('password-' + (salt[0] % 16)));
+  const response = await stub.fetch('https://password.internal/derive', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({password, salt: bytesToHex(salt), iterations}),
+  });
+  if (!response.ok) throw Error('Password verification unavailable');
+  const result = await response.json() as {value?: unknown};
+  if (typeof result.value !== 'string' || !/^[0-9a-f]{64}$/.test(result.value)) throw Error('Invalid password verification response');
+  return result.value;
+}
 export function validHash(value: unknown): value is string {
   return typeof value === 'string' && (/^[0-9a-f]{64}$/.test(value) || /^pbkdf2_sha256\$v1\$(?:[1-9][0-9]{5}|1[0-9]{6}|2000000)\$[0-9a-f]{32}\$[0-9a-f]{64}$/.test(value));
 }
@@ -23,13 +36,13 @@ export async function verifyPassword(password: unknown, encoded: string): Promis
   if (typeof password !== 'string' || password.length > 1024 || !validHash(encoded)) return false;
   if (/^[0-9a-f]{64}$/.test(encoded)) return equals(digest(password), encoded);
   const parts = encoded.split('$');
-  const hash = await pbkdf2Async(sha256, password, hexToBytes(parts[3]), { c: Number(parts[2]), dkLen: 32, asyncTick: 10 });
-  return equals(bytesToHex(hash), parts[4]);
+  const hash = await derivePassword(password, hexToBytes(parts[3]), Number(parts[2]));
+  return equals(hash, parts[4]);
 }
 async function hashPassword(password: string) {
   const salt = crypto.getRandomValues(new Uint8Array(16));
-  const value = await pbkdf2Async(sha256, password, salt, { c: 600000, dkLen: 32, asyncTick: 10 });
-  return `pbkdf2_sha256$v1$600000$${bytesToHex(salt)}$${bytesToHex(value)}`;
+  const value = await derivePassword(password, salt, 600000);
+  return `pbkdf2_sha256$v1$600000$${bytesToHex(salt)}$${value}`;
 }
 function cookie(request: Request) {
   return (request.headers.get('Cookie') || '').split(';').map(s => s.trim()).find(s => s.startsWith(COOKIE + '='))?.slice(COOKIE.length + 1) || '';

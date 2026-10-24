@@ -29,6 +29,13 @@
       "when": 1792411200000,
       "tag": "0003_academic_snapshots",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1792818000000,
+      "tag": "0004_publication_roster",
+      "breakpoints": true
     }
   ]
 }

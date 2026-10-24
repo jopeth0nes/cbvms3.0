@@ -75,6 +75,9 @@ _UPDATE_FINISH_TEXT = "✓ All Angles Done — Update Photo"
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
+REGISTER_WITHOUT_TERM = 'Register now, assign term later'
+
+
 class EnrollmentPanel(ctk.CTkFrame):
     """Student list with a selected-student summary. Enrolling swaps the panel's center to an
     in-panel flow (details form → guided face capture); Update Photo still uses a modal.
@@ -599,15 +602,15 @@ class EnrollmentPanel(ctk.CTkFrame):
         header.grid(row=0, column=0, sticky="ew", padx=PADDING, pady=(0, 4))
         header.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(
-            header, text="Term Enrollment", font=heading_font(18), text_color=COLOR_TEXT,
+            header, text="Student Registration", font=heading_font(18), text_color=COLOR_TEXT,
         ).grid(row=0, column=0, sticky="w")
         self._build_enroll_stepper(header).grid(row=0, column=1, sticky="e")
         from core.academic_calendar import instant
         self._enrollment_terms={f"{t['semester_name']} · {t['school_year']} (#{t['id']})":t['id']
             for t in self.database.get_academic_terms() if t.get('publication_state')=='published' and instant(t['ends_before'])>instant()}
-        self._enrollment_term_var=tk.StringVar(value=next(iter(self._enrollment_terms),'Publish term dates first'))
+        self._enrollment_term_var=tk.StringVar(value=REGISTER_WITHOUT_TERM)
         ctk.CTkOptionMenu(header,variable=self._enrollment_term_var,
-            values=list(self._enrollment_terms) or ['Publish term dates first']).grid(row=1,column=0,pady=8)
+            values=[REGISTER_WITHOUT_TERM,*self._enrollment_terms]).grid(row=1,column=0,pady=8)
 
 
         # Body host — the form and capture sub-steps swap in and out of this cell.
@@ -1472,9 +1475,10 @@ class EnrollmentPanel(ctk.CTkFrame):
             values.update(self._academics.values())
             if not all(values.get(k) for k in ('name','student_id')):
                 raise ValueError('Name and student ID are required.')
-            term_id = self._enrollment_terms.get(self._enrollment_term_var.get())
-            if not term_id:
-                raise ValueError('Publish current or upcoming term dates before enrollment.')
+            selection = self._enrollment_term_var.get()
+            term_id = self._enrollment_terms.get(selection)
+            if selection != REGISTER_WITHOUT_TERM and not term_id:
+                raise ValueError('Select registration without a term, or a published current or upcoming term.')
             captures = tuple(self._ordered_captures(state))
             student_key = state['student_key']
             with self.database.connect() as conn:
@@ -1499,7 +1503,12 @@ class EnrollmentPanel(ctk.CTkFrame):
                     college_department=values['college_department'],report_year_level=values['report_year_level'],
                     report_section=values['report_section'],email=values.get('email',''),contacts=contacts,
                     account_password=password)
-            database.confirm_term_enrollment(sid,term_id,values,captures,student_key,actor=self.username,new_student=new_student)
+            if term_id is None:
+                if new_student is None:
+                    raise ValueError('Student already registered. Select a published term to confirm enrollment, or edit the existing student.')
+                database.register_student_with_capture(new_student,captures,student_key,actor=self.username)
+            else:
+                database.confirm_term_enrollment(sid,term_id,values,captures,student_key,actor=self.username,new_student=new_student)
             note = ''
             try:
                 recognizer.load_known_faces()
@@ -1516,7 +1525,8 @@ class EnrollmentPanel(ctk.CTkFrame):
             note,username,is_new = result
             self._clear_form()
             self._reload_students()
-            self._set_status(f'Term enrollment confirmed. Login: {username or "See Account Manager"}. '+(f'Temporary password: {password}. ' if is_new else 'Existing credentials preserved. ')+note,success=True)
+            outcome = 'Student registered. Academic term not assigned yet.' if term_id is None else 'Term enrollment confirmed.'
+            self._set_status(f'{outcome} Login: {username or "See Account Manager"}. '+(f'Temporary password: {password}. ' if is_new else 'Existing credentials preserved. ')+note,success=True)
             if state.get('close'):
                 state['close']()
             # Existing optional delivery never determines whether registration committed.

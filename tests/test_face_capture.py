@@ -277,7 +277,7 @@ class SaveFlowTests(unittest.TestCase):
         self.assertEqual(session.frozen.frame_id, (1, 4))
         panel._show_frozen.assert_called_once_with(state, session.frozen)
 
-    def test_enrollment_insert_uses_reviewed_face_without_new_inference(self):
+    def enrollment_fixture(self, selection='Current'):
         panel, state, captured = self.panel(MagicMock(), 7, 'S7')
         del state['target_pk'], state['target_student_id']
         values = dict(name='New Student', student_id='NEW', course='BSIT', year_and_section='1A',
@@ -297,10 +297,15 @@ class SaveFlowTests(unittest.TestCase):
         panel.username='superadmin'
         panel._enrollment_terms={'Current':2}
         panel._enrollment_term_var=MagicMock()
-        panel._enrollment_term_var.get.return_value='Current'
+        panel._enrollment_term_var.get.return_value=selection
         state['student_key'] = panel._capture_student_key(state)
         capture = FaceCapture.freeze(state['student_key'], sample(3), face())
         state['angle_frames'] = {'front': [capture]}
+        return panel,state,capture
+
+    def test_enrollment_insert_uses_reviewed_face_without_new_inference(self):
+        from core.academics import COURSES
+        panel,state,capture=self.enrollment_fixture()
         with patch('ui.enrollment.threading.Thread'):
             EnrollmentPanel._finish_enroll(panel, state['modal'], state)
         saved = panel.database.confirm_term_enrollment.call_args.kwargs['new_student']
@@ -314,6 +319,28 @@ class SaveFlowTests(unittest.TestCase):
         panel.recognizer.enrollment_faces.assert_not_called()
         panel._academics.raw.return_value = (*COURSES['cs'], '1st Year', 'A')
         self.assertFalse(panel._capture_current(state))
+
+    def test_registration_without_term_routes_to_registration_and_shows_credentials(self):
+        from ui.enrollment import REGISTER_WITHOUT_TERM
+        panel,state,capture=self.enrollment_fixture(REGISTER_WITHOUT_TERM)
+        panel._enrollment_terms={}
+        with patch('ui.enrollment.threading.Thread'):
+            EnrollmentPanel._finish_enroll(panel,state['modal'],state)
+        panel.database.confirm_term_enrollment.assert_not_called()
+        registered=panel.database.register_student_with_capture.call_args
+        self.assertEqual(registered.args[0]['student_id'],'NEW')
+        self.assertEqual(registered.args[1][0].photo,capture.photo)
+        self.assertEqual(registered.kwargs['actor'],'superadmin')
+        self.assertTrue(state['saved'])
+        self.assertIn('Academic term not assigned yet',panel._set_status.call_args.args[0])
+        self.assertIn('Temporary password:',panel._set_status.call_args.args[0])
+        panel.recognizer.enrollment_faces.assert_not_called()
+
+    def test_unknown_term_selection_does_not_silently_register(self):
+        panel,state,_=self.enrollment_fixture('Unavailable term')
+        EnrollmentPanel._finish_enroll(panel,state['modal'],state)
+        panel.database.register_student_with_capture.assert_not_called()
+        panel.database.confirm_term_enrollment.assert_not_called()
 
     def test_confirm_angle_final_review_and_retake_do_not_save_implicitly(self):
         panel, state, captured = self.panel(MagicMock(), 7, 'S7')

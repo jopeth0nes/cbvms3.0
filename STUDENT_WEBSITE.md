@@ -25,6 +25,17 @@ Sessions last eight hours and are cleared when the server stops. Each API operat
 the authenticated student's ID; evidence and appeal access cannot be switched by supplying
 another student ID. Requests use HTTP-only session cookies and CSRF tokens.
 
+For staff-assisted registration before term dates are available, sign in as superadmin
+and open Student Management's registration flow. Leave **Register now, assign term later**
+selected, enter the student details, capture all three face angles, and save. The student
+account and face data are saved together; the completion message shows the username and
+temporary password. The student must change that password at first login. Registration
+alone does not confirm academic term enrollment.
+
+Later, publish the actual dates in Settings > Academic Terms. Open the enrollment flow
+again with the same student ID, select the published term, and complete its fresh face
+capture confirmation. The existing account and permanent face data are preserved.
+
 Desktop and browser appearance preferences are saved per student in the shared database.
 An already open desktop session applies changed preferences on its next login.
 

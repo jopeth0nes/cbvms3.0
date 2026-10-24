@@ -77,11 +77,12 @@ export async function cloudSync(request: Request, path: string, readBody: (r: Re
   }
   if (!Number.isSafeInteger(data.generation) || data.generation !== control.generation || typeof data.run_id !== 'string' || !Array.isArray(data.students) || !Array.isArray(data.receipts)) return json({error: 'Stale publication'}, 409);
   const existing = await db().prepare('SELECT id,snapshot,active FROM portal_students').all<Obj>();
-  if (!data.students.length || data.students.length < existing.results.length * .8) return json({error: 'Roster reduction requires reconciliation'}, 409);
+  const rosterBaseline = control.published_student_count ?? existing.results.length;
+  if (!data.students.length || data.students.length < rosterBaseline * .8) return json({error: 'Roster reduction requires reconciliation'}, 409);
   if (new Set(data.students.map((s: Obj) => s.id)).size !== data.students.length) throw Error('Duplicate students');
   const old = new Map(existing.results.map(s => [s.id, s]));
   const identities = new Map(existing.results.flatMap(s => (JSON.parse(s.snapshot).violations || []).map((v: Obj) => [v.id, recordIdentity(s.id, v)] as const)));
-  const statements = [db().prepare('INSERT INTO campus_sync_publications (generation,run_id) VALUES (?,?)').bind(data.generation + 1, data.run_id), db().prepare('UPDATE campus_sync_control SET generation=generation+1,run_id=? WHERE singleton=1 AND generation=?').bind(data.run_id, data.generation)];
+  const statements = [db().prepare('INSERT INTO campus_sync_publications (generation,run_id) VALUES (?,?)').bind(data.generation + 1, data.run_id), db().prepare('UPDATE campus_sync_control SET generation=generation+1,run_id=?,published_student_count=? WHERE singleton=1 AND generation=?').bind(data.run_id, data.students.length, data.generation)];
   const guard = 'EXISTS (SELECT 1 FROM campus_sync_control WHERE singleton=1 AND generation=? AND run_id=?)';
   const fence = [data.generation + 1, data.run_id];
   for (const s of data.students) {

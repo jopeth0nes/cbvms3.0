@@ -11,7 +11,7 @@ import re
 import sqlite3
 import uuid
 import tempfile
-from contextlib import contextmanager
+from contextlib import contextmanager, closing
 from pathlib import Path
 from urllib.request import Request, build_opener, HTTPRedirectHandler
 from urllib.parse import urlsplit
@@ -42,6 +42,7 @@ class CloudClient:
         self.headers = {'Authorization': 'Bearer ' + config['sync_key'],
                         'OAI-Sites-Authorization': 'Bearer ' + config['service_token'],
                         'Content-Type': 'application/json',
+                        'User-Agent': 'CBVMS-Campus-Sync/2',
                         'X-CBVMS-Protocol': '2',
                         'X-CBVMS-Source': config.get('source_id', ''),
                         'X-CBVMS-Writer': config.get('writer_id', '')}
@@ -235,7 +236,7 @@ def frozen_database(database):
     with tempfile.TemporaryDirectory(prefix='cbvms-export-') as directory:
         path = Path(directory) / 'snapshot.db'
         from core.sync_audit import readonly
-        with readonly(database.db_path) as source, sqlite3.connect(path) as dest:
+        with readonly(database.db_path) as source, closing(sqlite3.connect(path)) as dest:
             source.backup(dest)
         yield FrozenDatabase(path)
 
@@ -273,7 +274,10 @@ def _sync_once(database, client, state_path=None):
             raise ValueError('Sync paused: stale database copy or competing writer.')
     with database.connect() as conn:
         count = conn.execute('SELECT COUNT(*) FROM students').fetchone()[0]
-    if not count or count < len(remote['ids']) * .8:
+    baseline = remote.get('published_student_count')
+    if baseline is None:
+        baseline = len(remote['ids'])
+    if not count or count < baseline * .8:
         raise ValueError('Sync paused: empty or sharply reduced roster requires reconciliation.')
     with database.connect() as conn:
         records = {r['id']: violation_identity(dict(r)) for r in conn.execute('SELECT id,student_id,timestamp,violation_code FROM violations')}
