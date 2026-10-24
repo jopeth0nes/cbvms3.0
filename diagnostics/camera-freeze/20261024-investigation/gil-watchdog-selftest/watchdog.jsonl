@@ -1,0 +1,2 @@
+{"event": "heartbeat_stalled", "monotonic": 393186.158976291, "gap_seconds": 0.5495828749844804, "capture": 1}
+{"event": "sample_complete", "monotonic": 393188.386394458, "returncode": 0}

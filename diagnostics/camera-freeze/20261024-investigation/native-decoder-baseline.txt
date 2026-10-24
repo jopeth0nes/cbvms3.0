@@ -1,0 +1,13 @@
+test_delayed_open_read_release_and_navigation_keep_heartbeat_alive (tests.test_camera_transition_native_ui.NativeTransitionTests.test_delayed_open_read_release_and_navigation_keep_heartbeat_alive) ... ok
+test_dashboard_start_navigation_and_shutdown_with_synthetic_camera (tests.test_live_monitor_native_ui.DashboardNativeLifecycleTests.test_dashboard_start_navigation_and_shutdown_with_synthetic_camera) ... ok
+test_native_cards_wrap_update_in_place_and_clear_display_only (tests.test_live_monitor_native_ui.LiveMonitorNativeUITests.test_native_cards_wrap_update_in_place_and_clear_display_only) ... ok
+test_native_frame_fits_canvas_and_placeholder_reuses_items (tests.test_live_monitor_native_ui.LiveMonitorNativeUITests.test_native_frame_fits_canvas_and_placeholder_reuses_items) ... ok
+test_mjpeg_preview_authentication_and_cleanup (tests.test_network_capture_integration.RealDecoderTests.test_mjpeg_preview_authentication_and_cleanup) ... ok
+test_real_native_open_cancels_and_parent_eof_terminates_decoder (tests.test_network_capture_integration.RealDecoderTests.test_real_native_open_cancels_and_parent_eof_terminates_decoder) ... ok
+
+----------------------------------------------------------------------
+Ran 6 tests in 10.520s
+
+OK
+{"local_mjpeg": {"delivered_fps": 19.0, "first_frame_ms": 257.51, "codec": "MJPG", "width": 320.0, "height": 240.0}}
+{"native_stalled_open_cancel_ms": 21.062750020064414}

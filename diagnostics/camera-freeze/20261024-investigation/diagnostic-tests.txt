@@ -1,0 +1,13 @@
+test_close_failure_trace_keeps_original_exception_and_safe_artifact (tests.test_camera_switch_diagnostics.CameraSwitchDiagnosticHelperTests.test_close_failure_trace_keeps_original_exception_and_safe_artifact) ... ok
+test_entry_point_import_does_not_parse_arguments_or_start_diagnostics (tests.test_camera_switch_diagnostics.CameraSwitchDiagnosticHelperTests.test_entry_point_import_does_not_parse_arguments_or_start_diagnostics) ... ok
+test_failed_callback_does_not_replace_last_completed (tests.test_camera_switch_diagnostics.CameraSwitchDiagnosticHelperTests.test_failed_callback_does_not_replace_last_completed) ... ok
+test_failure_artifact_contains_phase_and_error_type_only (tests.test_camera_switch_diagnostics.CameraSwitchDiagnosticHelperTests.test_failure_artifact_contains_phase_and_error_type_only) ... ok
+test_tk_tracing_reports_entry_return_and_last_callback (tests.test_camera_switch_diagnostics.CameraSwitchDiagnosticHelperTests.test_tk_tracing_reports_entry_return_and_last_callback) ... ok
+test_valid_result_requires_both_current_generations_and_task_acceptance (tests.test_camera_switch_diagnostics.CameraSwitchDiagnosticHelperTests.test_valid_result_requires_both_current_generations_and_task_acceptance) ... ok
+test_sample_retains_stacks_without_process_metadata (tests.test_camera_freeze_watchdog.FreezeWatchdogTests.test_sample_retains_stacks_without_process_metadata) ... ok
+test_stale_heartbeat_signals_parent_and_collects_sample (tests.test_camera_freeze_watchdog.FreezeWatchdogTests.test_stale_heartbeat_signals_parent_and_collects_sample) ... ok
+
+----------------------------------------------------------------------
+Ran 8 tests in 0.044s
+
+OK

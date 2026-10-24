@@ -1,0 +1,2 @@
+Current thread 0x00000001ee685e80 (most recent call first):
+  File "/private/tmp/cbvms-gil-watchdog-20261024/probe.py", line 11 in <module>

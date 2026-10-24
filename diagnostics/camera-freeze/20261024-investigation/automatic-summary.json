@@ -1,0 +1,147 @@
+{
+  "interaction": "automated callbacks; no physical dropdown selection",
+  "head": "b489989",
+  "performance_enabled": false,
+  "max_heartbeat_gap_ms": 227.657,
+  "watchdog_captures": 0,
+  "frame_milestones": [
+    {
+      "utc": "2026-10-23T23:15:47.311004+00:00",
+      "t": 7.221902,
+      "event": "first_frame",
+      "thread": "MainThread",
+      "camera_generation": 1,
+      "monitor_generation": 1,
+      "switch_ms": null,
+      "source_type": "usb"
+    },
+    {
+      "utc": "2026-10-23T23:16:12.329037+00:00",
+      "t": 32.240113,
+      "event": "first_frame",
+      "thread": "MainThread",
+      "camera_generation": 3,
+      "monitor_generation": 3,
+      "switch_ms": 961.28,
+      "source_type": "usb"
+    },
+    {
+      "utc": "2026-10-23T23:16:36.384101+00:00",
+      "t": 56.295348,
+      "event": "first_frame",
+      "thread": "MainThread",
+      "camera_generation": 5,
+      "monitor_generation": 5,
+      "switch_ms": 1012.38,
+      "source_type": "usb"
+    },
+    {
+      "utc": "2026-10-23T23:16:41.313850+00:00",
+      "t": 61.225132,
+      "event": "first_frame",
+      "thread": "MainThread",
+      "camera_generation": 7,
+      "monitor_generation": 7,
+      "switch_ms": 841.149,
+      "source_type": "usb"
+    }
+  ],
+  "source_failures": 3,
+  "peak_analysis_rate": 1.8696161809429772,
+  "streaming_preview_fps_p50": 26.195211584673523,
+  "longest_ui_callbacks": [
+    {
+      "utc": "2026-10-23T23:16:42.044864+00:00",
+      "t": 61.956151,
+      "event": "tk_callback_return",
+      "thread": "MainThread",
+      "callback": "CTkScrollbar.set",
+      "ms": 176.505
+    },
+    {
+      "utc": "2026-10-23T23:16:42.044854+00:00",
+      "t": 61.956141,
+      "event": "tk_callback_return",
+      "thread": "MainThread",
+      "callback": "CTkScrollbar.set",
+      "ms": 147.598
+    },
+    {
+      "utc": "2026-10-23T23:16:37.120763+00:00",
+      "t": 57.032016,
+      "event": "tk_callback_return",
+      "thread": "MainThread",
+      "callback": "CTkScrollbar.set",
+      "ms": 135.266
+    },
+    {
+      "utc": "2026-10-23T23:15:42.890731+00:00",
+      "t": 2.801604,
+      "event": "tk_callback_return",
+      "thread": "MainThread",
+      "callback": "Misc.after.<locals>.callit",
+      "ms": 134.336
+    }
+  ],
+  "max_model_lock_wait_ms": 127.873,
+  "cleanup": [
+    {
+      "utc": "2026-10-23T23:16:52.390560+00:00",
+      "t": 72.301921,
+      "event": "capture_owner_cleanup",
+      "thread": "MainThread",
+      "done": true
+    },
+    {
+      "utc": "2026-10-23T23:16:52.390580+00:00",
+      "t": 72.301941,
+      "event": "analysis_cleanup",
+      "thread": "MainThread",
+      "worker": "analysis",
+      "done": true
+    },
+    {
+      "utc": "2026-10-23T23:16:52.390593+00:00",
+      "t": 72.301954,
+      "event": "analysis_cleanup",
+      "thread": "MainThread",
+      "worker": "tracking",
+      "done": true
+    },
+    {
+      "utc": "2026-10-23T23:16:52.421881+00:00",
+      "t": 72.333245,
+      "event": "analysis_cleanup",
+      "thread": "MainThread",
+      "worker": "persistence",
+      "done": true
+    },
+    {
+      "utc": "2026-10-23T23:16:52.439466+00:00",
+      "t": 72.350829,
+      "event": "analysis_cleanup",
+      "thread": "MainThread",
+      "worker": "attendance",
+      "done": true
+    },
+    {
+      "utc": "2026-10-23T23:16:52.439493+00:00",
+      "t": 72.350855,
+      "event": "analysis_cleanup",
+      "thread": "MainThread",
+      "worker": "unknown",
+      "done": true
+    },
+    {
+      "utc": "2026-10-23T23:16:52.439573+00:00",
+      "t": 72.350934,
+      "event": "model_cleanup",
+      "thread": "MainThread",
+      "running": 0
+    }
+  ],
+  "limitations": [
+    "Front Gate delivered no frames; first-valid-analysis timestamps unavailable in this exploratory run due an overstrict diagnostic filter, corrected before manual launch.",
+    "Physical selection, enrolled-person accuracy, successful Front Gate analysis and long-term leaks unverified."
+  ]
+}

@@ -1,0 +1,7 @@
+test_delayed_open_read_release_and_navigation_keep_heartbeat_alive (tests.test_camera_transition_native_ui.NativeTransitionTests.test_delayed_open_read_release_and_navigation_keep_heartbeat_alive) ... ok
+test_dashboard_start_navigation_and_shutdown_with_synthetic_camera (tests.test_live_monitor_native_ui.DashboardNativeLifecycleTests.test_dashboard_start_navigation_and_shutdown_with_synthetic_camera) ... ok
+
+----------------------------------------------------------------------
+Ran 2 tests in 5.241s
+
+OK

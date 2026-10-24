@@ -11,6 +11,7 @@ from core.appeal_categories import category_display
 from core.academics import display_academics
 from core.attendance import display_time
 from core.discipline import parse_db_datetime, violation_display_name
+from zoneinfo import ZoneInfo
 
 
 ATTENDANCE_HEADERS = ["Date", "Student ID", "Student Name", "Course",
@@ -86,3 +87,59 @@ def open_print_preview(title, headers, rows, description=""):
         path = Path(output.name)
     if not webbrowser.open(path.as_uri()):
         raise OSError(f"Could not open print preview. Open {path} in a browser.")
+
+
+def snapshot_report_html(snapshot):
+    """Render selected safe snapshot sections with independent table schemas."""
+    cell = lambda value: escape(str(value if value is not None else ""))
+    generated = snapshot.generated_at.astimezone(ZoneInfo('Asia/Manila')).strftime('%Y-%m-%d %H:%M:%S %Z')
+    filters = dict(snapshot.filters)
+    names={'academic_years':'Academic years','term_labels':'Terms','term_ids':'Stable term IDs','departments':'Departments','courses':'Courses','year_levels':'Year levels','sections':'Sections','statuses':'Statuses','appeal_statuses':'Appeal statuses','date_from':'From (inclusive, Manila)','date_to':'To (inclusive, Manila)','search':'Student search'}
+    def display(value):
+        if value is None:return 'All'
+        if isinstance(value,(list,tuple)):return ', '.join(map(str,value)) if value else 'None (no matching rows)'
+        return str(value) if value else 'None'
+    summary = ' · '.join(f'{names.get(k,k.replace("_"," ").title())}: {display(v)}' for k,v in filters.items())
+    semantics=('Dates are inclusive Asia/Manila dates: violations by occurrence, enrollment by confirmation, '
+               'suspensions by start, and imported discipline by supplied date. Historical enrollment uses the '
+               'latest revision effective at generation time. Status applies to enrollment and discipline; '
+               'appeal status applies to live and imported discipline.')
+    parts = []
+    main_columns={
+        'Student Directory':('student_id','name','college_department','course','year_level','section'),
+        'Semester Enrollment Roster':('student_id','name','semester_id','semester_name','school_year','course','year_level','section','status'),
+        'Violations':('record_id','student_id','name','semester_id','semester_name','category','status','appeal_status','date'),
+        'Suspensions':('record_id','student_id','name','semester_id','semester_name','status','date','ends_at'),
+        'Imported Discipline Snapshot':('record_id','source_record_id','student_id','name','semester_name','school_year','record_type','category','status','date')}
+    for section in snapshot.sections:
+        columns=main_columns.get(section.name,section.columns)
+        heads = ''.join(f'<th>{cell(key.replace("_", " ").title())}</th>' for key in columns)
+        body_parts=[]
+        for row in section.rows:
+            body_parts.append('<tbody class="record"><tr>' + ''.join(f'<td>{cell(row.get(key, ""))}</td>' for key in columns) + '</tr>')
+            extra=[(key.replace('_',' ').title(),value) for key,value in row.items() if key not in columns and value not in (None,'')]
+            if extra:
+                details=' · '.join(f'<b>{cell(key)}:</b> {cell(value)}' for key,value in extra)
+                body_parts.append(f'<tr class="detail"><td colspan="{len(columns)}">{details}</td></tr>')
+            body_parts.append('</tbody>')
+        body=''.join(body_parts)
+        if not body:
+            body = f'<tbody><tr><td colspan="{len(columns)}">No records match these filters.</td></tr></tbody>'
+        parts.append(f'<section><h2>{cell(section.name)}</h2><p>{section.record_count} records · '
+                     f'{section.distinct_students} distinct students</p><table><thead><tr>{heads}</tr></thead>'
+                     f'{body}</table></section>')
+    return f'''<!doctype html><html><head><meta charset="utf-8"><title>CBVMS Reports</title><style>
+body{{font:12px Arial,sans-serif;color:#172033;margin:24px}}h1{{font-size:22px}}h2{{font-size:17px;break-after:avoid}}
+table{{width:100%;border-collapse:collapse;font-size:10px;table-layout:auto}}th,td{{border:1px solid #cbd5e1;padding:5px;text-align:left;overflow-wrap:anywhere}}
+th{{background:#edf2f7}}thead{{display:table-header-group}}tr,.record{{break-inside:avoid}}.detail td{{font-size:9px;background:#f8fafc}}section{{break-before:page}}section:first-of-type{{break-before:auto}}
+@page{{size:landscape;margin:12mm}}@media print{{button{{display:none}}body{{margin:0}}}}
+</style></head><body><button onclick="window.print()">Print / Save as PDF</button><h1>CBVMS Reports</h1>
+<p>{cell(summary or 'No additional filters')} · Sections: {cell(', '.join(snapshot.selected_sections) if snapshot.selected_sections else 'None selected')} · {cell(semantics)}</p><p>Source: Local CBVMS database snapshot; imported rows retain their source labels · Generated {cell(generated)} · Asia/Manila</p>{''.join(parts)}</body></html>'''
+
+
+def open_snapshot_print_preview(snapshot):
+    with tempfile.NamedTemporaryFile(suffix='.html', prefix='cbvms_report_', delete=False, mode='w', encoding='utf-8') as output:
+        output.write(snapshot_report_html(snapshot))
+        path = Path(output.name)
+    if not webbrowser.open(path.as_uri()):
+        raise OSError(f'Could not open print preview. Open {path} in a browser.')

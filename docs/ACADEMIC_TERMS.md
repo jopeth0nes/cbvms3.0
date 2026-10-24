@@ -122,3 +122,80 @@ These checks use synthetic identities, controlled clocks and disposable SQLite
 files. They cover camera preview/switching logic, not physical camera quality or
 speaker output. No whole-repository discovery result or production restore is
 claimed. See `ACADEMIC_TERMS_CHECKPOINT.md` for test logs and recovery context.
+# Reports and academic ownership
+
+The administrative Reports workspace defaults to Student Directory only. The
+Semester Enrollment Roster, Violations, Suspensions and Imported Discipline
+Snapshot are opt-in. Directory rows are identity records and do not establish
+enrollment in any academic term. Reset clears dates and search, restores every
+checklist to All, selects Student Directory, then reapplies the report.
+
+Academic-year and term filters use published calendar records. Term choices show
+academic year, term name and stable local term ID; semester labels alone are not
+identifiers. Checklist selections are ORed within one filter and ANDed across
+filters. All is unrestricted; an explicitly cleared checklist matches no rows.
+To choose multiple semesters, open Term, check each desired term, and apply the
+filters. Choose report sections with the section checkboxes above the filters.
+Exports and printing use the last applied snapshot, not unfinished draft edits.
+
+From/To dates are inclusive Asia/Manila calendar dates. Violations use occurrence
+time, enrollment uses confirmation time, suspensions use suspension start time,
+and imported discipline rows use their supplied date. Timestamps display in
+Asia/Manila; imported date-only values remain dates. Dates intersect selected
+term filters. Directory entries have no term and therefore are excluded when a
+term or academic year is selected. Enrollment rows represent the authoritative
+term enrollment record, using the latest saved revision effective at the fixed
+report generation time. Violation academic labels come only from their saved
+incident snapshot; missing values display Unverified. Status filters apply to
+enrollment and discipline sections, while appeal status applies only to live and
+imported discipline sections. Reports do not process rollover or deadlines.
+
+Exporting multiple sections creates a ZIP with one CSV per section. One section
+creates a CSV. Print / Save as PDF opens a single organized HTML report with
+separate section tables and counts. Ordinary exports omit face data, credentials
+and evidence images. The Roster template remains the permanent-demographics
+import format; importing it does not create term enrollment.
+
+Reporting dates accept blank bounds or exact `YYYY-MM-DD`. The inclusive To
+bound includes every instant before the next Manila midnight. Naive legacy
+SQLite timestamps mean UTC; exports display timestamp offsets as `+08:00`.
+Suspension dates filter **starts**, not interval overlap. The displayed effective
+end is the earliest scheduled end, lift, recorded rollover, or next published
+term start; calculating it performs no rollover writes. Directory records also
+have no report date and are excluded by date bounds. Status/appeal filters are
+ignored for sections where those fields do not apply.
+
+Use **Hide filters** to expand the table. Tables render at most 200 rows per page;
+CSV and printing include all matching rows from the applied snapshot. Optional
+checked-row export is not implemented. Report reads still materialize safe rows
+in memory; very large campus datasets have not been load-tested. Imported
+snapshots preserve source IDs and historical decisions; incoming numeric term
+IDs never establish local ownership. Only an exact, unique academic-year plus
+term-name match maps to a local term.
+
+## Reporting verification — 2026-10-24
+
+All checks used disposable SQLite databases and synthetic identities. Existing
+camera and cloud edits were preserved; production startup was not used.
+
+- ` .venv/bin/python -m unittest tests.test_report_snapshot tests.test_report_csv tests.test_reports tests.test_term_enrollment tests.test_suspensions tests.test_suspension_analytics -q` — 63 passed.
+- `.venv/bin/python -m unittest tests.test_reports_native_ui -q` — 4 passed in a native GUI session outside the sandbox (sandbox Tk initialization aborts).
+- Reporting-file `compileall` and `git diff --check` passed.
+- Native standalone panel inspected at the dashboard's 1280×800 minimum,
+  including a 220-pixel sidebar, normal and 125% widget scaling. Tested 205-row
+  pagination, keyboard checklist toggling, explicit empty selections, latest
+  request rejection, draft/applied separation, and exported ID order.
+- Synthetic HTML rendered with headless Chrome and saved as a landscape PDF.
+  PDFKit renders confirmed readable section tables, repeated headers, and
+  grouping of records with their detail rows across pages. Physical printer
+  output and the production dataset were not exercised.
+
+For manual acceptance in an authorized admin/superadmin session: open Reports,
+select Semester Enrollment Roster and Violations, select two academic years and
+their terms (include Summer), then Apply filters. Confirm separate totals and
+repeat enrollment rows for a student with two enrollments. Change a draft filter
+without applying, export CSV/ZIP, and verify it still matches the displayed
+snapshot. Apply the draft and verify the new result. Clear one checklist and
+expect zero matching rows; Reset returns to Directory with unrestricted filters.
+Open Print / Save as PDF, inspect headers and totals, then choose the browser's
+PDF destination or printer. Test with both normal and increased display scaling.
