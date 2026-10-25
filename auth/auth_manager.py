@@ -40,10 +40,12 @@ class AuthManager:
 
         # 3. Admin users (DB)
         if self._db.verify_user(uname, password):
-            return {
+            result = {
                 "role": self._db.get_user_role(uname),
                 "username": uname,
                 "student_id": None,
                 "display_name": uname,
             }
+            result["staff_session_token"] = self._db.create_staff_session(uname, password)
+            return result
         return None

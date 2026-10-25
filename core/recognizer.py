@@ -342,6 +342,8 @@ class FaceRecognizer:
             captures = self._db.recognition_capture_encodings() if hasattr(self._db, "recognition_capture_encodings") else {}
             for row in students:
                 student = dict(row)          # sqlite3.Row → plain dict
+                if student.get('is_archived'):
+                    continue
                 blob = student.get("encoding")
                 if not blob:
                     continue

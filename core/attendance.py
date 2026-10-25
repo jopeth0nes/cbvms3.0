@@ -57,6 +57,7 @@ class Sighting:
     semester_name: str = ''
     school_year: str = ''
     provenance: str = 'confirmed_live_identity'
+    lifecycle_version: int = 0
 
     @property
     def key(self):

@@ -61,6 +61,22 @@ class RecognitionEvidenceTests(unittest.TestCase):
         ]
         return recognizer
 
+    def test_gallery_reload_removes_archived_identity_and_capture_embeddings(self):
+        import pickle
+        db = MagicMock()
+        blob = pickle.dumps(np.array([1., 0.], dtype=np.float32))
+        db.get_all_students.return_value = [
+            {'student_id': 'S1', 'encoding': blob, 'is_archived': 0},
+            {'student_id': 'S2', 'encoding': blob, 'is_archived': 0},
+        ]
+        db.recognition_capture_encodings.return_value = {'S1': pickle.dumps([np.array([1., 0.], dtype=np.float32)])}
+        recognizer = FaceRecognizer(db)
+        recognizer.load_known_faces()
+        self.assertEqual({row['student_id'] for row, _ in recognizer._known}, {'S1', 'S2'})
+        db.get_all_students.return_value[0]['is_archived'] = 1
+        recognizer.load_known_faces()
+        self.assertEqual({row['student_id'] for row, _ in recognizer._known}, {'S2'})
+
     def test_evidence_normalized_immutable_and_independent_of_input(self):
         recognizer = self.recognizer()
         embedding = np.array([3., 0.], np.float32)

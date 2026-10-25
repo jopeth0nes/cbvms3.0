@@ -158,7 +158,7 @@ class StudentManagement:
                 conn.rollback()
                 return False
             student = conn.execute("SELECT * FROM students WHERE student_id=?", (student_id,)).fetchone()
-            if not student or student["registration_pending"] or student["student_status"] not in ("Graduate", "Unenrolled"):
+            if not student or student["is_archived"] or student["registration_pending"] or student["student_status"] not in ("Graduate", "Unenrolled"):
                 return False
             last = conn.execute("SELECT id, last_seen, student_status FROM premises_entries WHERE student_id=? ORDER BY entered_at DESC LIMIT 1", (student_id,)).fetchone()
             if last and last["student_status"] == student["student_status"] and (observed - parse_db_datetime(last["last_seen"])).total_seconds() < cooldown_seconds:

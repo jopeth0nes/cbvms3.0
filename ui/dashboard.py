@@ -118,6 +118,7 @@ class CBVMSDashboard(WorkspaceWindow):
         recognizer: "FaceRecognizer | None" = None,
         person_detector: "PersonDetector | None" = None,
         monitor_models: "MonitorModels | None" = None,
+        staff_session_token: str | None = None,
     ) -> None:
         super().__init__()
         if monitor_models is None and recognizer is not None:
@@ -129,6 +130,7 @@ class CBVMSDashboard(WorkspaceWindow):
             person_detector = monitor_models.person_detector
         self.withdraw()
         self.username = username
+        self.staff_session_token = staff_session_token
         self._logout_requested = False
         self._active_nav = "live"
         self._suspension_student_id = None
@@ -369,6 +371,7 @@ class CBVMSDashboard(WorkspaceWindow):
         nav_items = [
             ("live",       "📹  Live Monitor"),
             ("enrollment", "👤  Student Management"),
+            ("recycle_bin", "Recycle Bin"),
             ("attendance", "Attendance"),
             ("unknown", "Unknown Sightings"),
             ("suspensions", "⏸  Suspensions"),
@@ -383,7 +386,7 @@ class CBVMSDashboard(WorkspaceWindow):
         ]
         self._nav_buttons: dict[str, ctk.CTkButton] = {}
         for key, label in nav_items:
-            if key in {"training", "accounts"} and not self._is_superadmin:
+            if key in {"training", "accounts", "recycle_bin"} and not self._is_superadmin:
                 continue
             btn = ctk.CTkButton(
                 sidebar, text=label, anchor="w", height=40,
@@ -547,6 +550,7 @@ class CBVMSDashboard(WorkspaceWindow):
             get_frame=self._get_camera_frame,
             get_frame_sample=self._get_camera_sample,
             username=self.username,
+            actor_token=self.staff_session_token,
             on_open_suspensions=self._open_student_suspensions,
         )),
             "violation_history": ("_violation_history_panel", lambda: SuspensionsPanel(
@@ -585,7 +589,7 @@ class CBVMSDashboard(WorkspaceWindow):
             self._view_host, database=self._database)),
         }
         if not self._is_superadmin:
-            for key in ("training", "accounts"):
+            for key in ("training", "accounts", "recycle_bin"):
                 self._panel_factories.pop(key, None)
         self._views = {"live": self._live_frame}
         self._live_frame.grid(row=0, column=0, sticky="nsew")
@@ -694,8 +698,16 @@ class CBVMSDashboard(WorkspaceWindow):
         self._center_panel.grid_configure(columnspan=2 if active else 1)
 
     def _on_nav_select(self, key: str) -> None:
-        if key in {"training", "accounts"} and not self._is_superadmin:
+        if key in {"training", "accounts", "recycle_bin"} and not self._is_superadmin:
             return
+        if key in {"enrollment", "recycle_bin"} and key not in self._views:
+            # Both sidebar destinations share the existing student workspace.
+            if self._enrollment_panel is None:
+                attribute, factory = self._panel_factories["enrollment"]
+                panel = factory()
+                panel.grid_remove()
+                setattr(self, attribute, panel)
+            self._views[key] = self._enrollment_panel
         if key not in self._views:
             if key not in self._panel_factories:
                 return
@@ -749,7 +761,7 @@ class CBVMSDashboard(WorkspaceWindow):
                 hover_color=COLOR_ACCENT_HOVER if nav_key == key else COLOR_BORDER,
             )
 
-        if previous_nav == "enrollment" and self._enrollment_panel is not None:
+        if previous_nav in {"enrollment", "recycle_bin"} and self._enrollment_panel is not None:
             self._enrollment_panel.on_hide()
         if previous_nav == "training" and self._training_panel is not None:
             self._training_panel.on_hide()
@@ -766,6 +778,7 @@ class CBVMSDashboard(WorkspaceWindow):
             "reports":    "Reports",
             "live":       "Live Monitor",
             "enrollment": "Student Management",
+            "recycle_bin": "Recycle Bin",
             "suspensions": "Suspensions",
             "violation_history": "Violation History",
             "violations": "Violation Log",
@@ -786,8 +799,8 @@ class CBVMSDashboard(WorkspaceWindow):
                 view.grid_remove()
             self._views[key].grid(row=0, column=0, sticky="nsew")
             self._view_host.tkraise()
-            if key == "enrollment" and self._enrollment_panel is not None:
-                self._enrollment_panel.on_show()
+            if key in {"enrollment", "recycle_bin"} and self._enrollment_panel is not None:
+                self._enrollment_panel.on_show(show_archived=key == "recycle_bin")
             if key == "violation_history":
                 selected = self._suspensions_panel.records.student_id if self._suspensions_panel and self._suspensions_panel.records else None
                 self._violation_history_panel.on_show(selected)
@@ -1695,6 +1708,7 @@ def open_dashboard(
     recognizer=None,
     person_detector=None,
     monitor_models=None,
+    staff_session_token=None,
 ) -> bool:
     """Run the dashboard. Returns True if the user logged out (vs. closed the app)."""
     app = CBVMSDashboard(
@@ -1703,9 +1717,12 @@ def open_dashboard(
         recognizer=recognizer,
         person_detector=person_detector,
         monitor_models=monitor_models,
+        staff_session_token=staff_session_token,
     )
     app.mainloop()
     app._monitor_models.cancel_pending()
+    if database is not None and staff_session_token:
+        database.revoke_staff_session(staff_session_token)
     # Let cancelled native calls return before Python tears down ONNX/PyTorch
     # types. Otherwise closing the window can emit spurious model-type errors.
     deadline=time.monotonic()+5

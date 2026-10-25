@@ -18,7 +18,7 @@ import time
 import re
 import threading
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import messagebox, simpledialog, ttk
 from typing import TYPE_CHECKING, Callable
 
 import cv2
@@ -93,17 +93,26 @@ class EnrollmentPanel(ctk.CTkFrame):
         recognizer: Recognizer,
         get_frame: Callable[[], np.ndarray | None],
         username: str = "admin",
+        actor_token: str | None = None,
         on_open_suspensions: Callable[[str], None] | None = None,
         get_frame_sample=None,
         **kwargs,
     ) -> None:
         super().__init__(master, fg_color=COLOR_BG, **kwargs)
         self.username = username
+        self.actor_token = actor_token
+        self._show_archived = False
+        self._actor_role = None
+        self._bin_page = 0
+        self._bin_page_size = 50
+        self._bin_total = 0
+        self._bin_sort = 'archived_at'
         self.on_open_suspensions = on_open_suspensions
         self.database = database
         self._list_task = BackgroundTask(self)
         self._list_refresh_pending = False
         self._delete_task = BackgroundTask(self)
+        self._restore_task = BackgroundTask(self)
         self.recognizer = recognizer
         self.get_frame = get_frame
         self.get_frame_sample = get_frame_sample
@@ -177,7 +186,7 @@ class EnrollmentPanel(ctk.CTkFrame):
         self._build_summary_card(left)
 
         self._search_var = tk.StringVar()
-        self._search_var.trace_add("write", lambda *_: self._apply_filter())
+        self._search_var.trace_add("write", lambda *_: self._search_changed())
         search = ctk.CTkEntry(
             left,
             placeholder_text="Search by name or student ID…",
@@ -240,6 +249,28 @@ class EnrollmentPanel(ctk.CTkFrame):
             footer, text="0 students enrolled", font=body_font(12), text_color=COLOR_TEXT_MUTED,
         )
         self._count_label.grid(row=0, column=0, sticky="w")
+
+        self._archive_view_btn = ctk.CTkButton(
+            footer, text="Recycle Bin", width=125, height=32, corner_radius=CORNER_RADIUS,
+            fg_color=COLOR_BORDER, hover_color=COLOR_ACCENT_HOVER, command=self._toggle_archived_view,
+        )
+        self._archive_view_btn.grid(row=0, column=2, sticky="e", padx=(8, 0))
+        self._archive_view_btn.grid_remove()
+        self._bin_sort_menu = ctk.CTkOptionMenu(footer, values=['Moved date', 'Name', 'Student ID'],
+            command=self._sort_recycle_bin, width=110)
+        self._bin_sort_menu.grid(row=2, column=0, sticky='w')
+        self._bin_sort_menu.grid_remove()
+        self._bin_page_label = ctk.CTkLabel(footer, text='', font=body_font(11), text_color=COLOR_TEXT_MUTED)
+        self._bin_page_label.grid(row=2, column=1, sticky='e')
+        self._bin_page_label.grid_remove()
+        self._bin_prev_btn = ctk.CTkButton(footer, text='Previous', width=80, height=28,
+            command=lambda: self._change_bin_page(-1))
+        self._bin_prev_btn.grid(row=2, column=2, sticky='e')
+        self._bin_prev_btn.grid_remove()
+        self._bin_next_btn = ctk.CTkButton(footer, text='Next', width=65, height=28,
+            command=lambda: self._change_bin_page(1))
+        self._bin_next_btn.grid(row=2, column=3, sticky='e')
+        self._bin_next_btn.grid_remove()
 
         ctk.CTkButton(
             footer, text="Reload", width=100, height=32, corner_radius=CORNER_RADIUS,
@@ -351,12 +382,17 @@ class EnrollmentPanel(ctk.CTkFrame):
         )
         self._update_btn.pack(fill="x", pady=6)
         self._delete_btn = ctk.CTkButton(
-            actions, text="Delete Selected", width=185, height=30, corner_radius=8,
+            actions, text="Move to Recycle Bin", width=185, height=30, corner_radius=8,
             fg_color=COLOR_BG, border_width=1, border_color=COLOR_DANGER,
             text_color=COLOR_DANGER, hover_color=COLOR_BORDER,
             command=self._delete_selected, state="disabled",
         )
         self._delete_btn.pack(fill="x")
+        self._restore_btn = ctk.CTkButton(actions, text='Restore Student', width=185, height=30,
+            corner_radius=8, fg_color=COLOR_ACCENT, hover_color=COLOR_ACCENT_HOVER,
+            command=self._restore_selected, state='disabled')
+        self._restore_btn.pack(fill='x', pady=(6, 0))
+        self._restore_btn.pack_forget()
 
     def _configure_tree_style(self) -> None:
         style = ttk.Style()
@@ -405,16 +441,47 @@ class EnrollmentPanel(ctk.CTkFrame):
         if self._list_task.busy:
             self._list_refresh_pending = True
             return
+        search, bin_sort = self._search_var.get().strip(), self._bin_sort
+        bin_offset, bin_limit = self._bin_page*self._bin_page_size, self._bin_page_size
         def read():
-            students = [dict(row) for row in self.database.get_all_students()]
+            role = None
+            total = None
+            if self.actor_token:
+                actor = self.database.get_staff_session_info(self.actor_token)
+                if actor is None:
+                    raise PermissionError('Staff session expired; sign in again.')
+                role = actor['role']
+                if self._show_archived:
+                    if role != 'superadmin':
+                        raise PermissionError('Only a superadmin may view the Recycle Bin.')
+                    result = self.database.get_recycle_bin(self.actor_token,
+                        search=search, sort=bin_sort, limit=bin_limit, offset=bin_offset)
+                    rows, total = result['rows'], result['total']
+                else:
+                    rows = self.database.get_management_students(self.actor_token, include_archived=False)
+            else:
+                rows = self.database.get_all_students(include_archived=False)
+            students = [dict(row) for row in rows]
             for student in students:
                 student['_active_suspension'] = self.database.get_active_suspension(student['student_id'])
-            return students
-        def loaded(students):
+                if role == 'superadmin' and not student.get('is_archived'):
+                    student['_lifecycle'] = self.database.get_student_archive_operation(
+                        self.actor_token, student['student_id'])
+            return students, role, total
+        def loaded(result):
             if self._list_refresh_pending:
                 self._list_refresh_pending = False
                 self._reload_students()
                 return
+            students, role, total = result
+            self._actor_role = role
+            self._bin_total = total or 0
+            if role == 'superadmin':
+                self._archive_view_btn.grid()
+                self._delete_btn.pack(fill='x')
+            else:
+                self._archive_view_btn.grid_remove()
+                self._delete_btn.pack_forget()
             self._students = students
             self._apply_filter()
         self._list_task.run(read, loaded, lambda error: self._set_status(f'Could not load students: {error}', error=True))
@@ -432,7 +499,7 @@ class EnrollmentPanel(ctk.CTkFrame):
                 continue
             name = (student.get("name") or "").lower()
             sid = (student.get("student_id") or "").lower()
-            if query and query not in name and query not in sid:
+            if query and not self._show_archived and query not in name and query not in sid:
                 continue
             shown += 1
             active_suspension = student.get("_active_suspension")
@@ -453,10 +520,50 @@ class EnrollmentPanel(ctk.CTkFrame):
                 ),
             )
 
-        self._count_label.configure(text=f"{shown} of {len(self._students)} students")
+        label = "in Recycle Bin" if self._show_archived else "active students"
+        total = self._bin_total if self._show_archived else len(self._students)
+        self._count_label.configure(text=f"{shown} of {total} {label}")
+        for widget in (self._bin_sort_menu, self._bin_page_label, self._bin_prev_btn, self._bin_next_btn):
+            widget.grid() if self._show_archived else widget.grid_remove()
+        if self._show_archived:
+            pages = max(1, (total + self._bin_page_size - 1) // self._bin_page_size)
+            self._bin_page_label.configure(text=f"Page {self._bin_page + 1} of {pages}")
+            self._bin_prev_btn.configure(state='normal' if self._bin_page > 0 else 'disabled')
+            self._bin_next_btn.configure(state='normal' if self._bin_page + 1 < pages else 'disabled')
+            if total == 0:
+                if not self._status_label.cget('text'):
+                    self._set_status('The Recycle Bin is empty.' if not query else 'No Recycle Bin entries match this search.')
         if selection and self._tree.exists(selection[0]):
             self._tree.selection_set(selection[0])
         self._on_row_select()
+
+    def _toggle_archived_view(self):
+        if not self.actor_token or self._actor_role != 'superadmin':
+            self._set_status("Only a current superadmin may open the Recycle Bin.", error=True)
+            return
+        self._show_archived = not self._show_archived
+        self._archive_view_btn.configure(text="Show Active Students" if self._show_archived else "Recycle Bin")
+        self._bin_page = 0
+        self._selected_pk = None
+        self._set_status('')
+        self._reload_students()
+
+    def _search_changed(self):
+        if self._show_archived:
+            self._bin_page = 0
+            self._reload_students()
+        else:
+            self._apply_filter()
+
+    def _sort_recycle_bin(self, value):
+        self._bin_sort = {'Moved date': 'archived_at', 'Name': 'name', 'Student ID': 'student_id'}.get(value, 'archived_at')
+        self._bin_page = 0
+        self._reload_students()
+
+    def _change_bin_page(self, delta):
+        pages = max(1, (self._bin_total + self._bin_page_size - 1) // self._bin_page_size)
+        self._bin_page = min(max(0, self._bin_page + delta), pages - 1)
+        self._reload_students()
 
     def _on_row_select(self, _event: tk.Event | None = None) -> None:
         selection = self._tree.selection()
@@ -465,8 +572,17 @@ class EnrollmentPanel(ctk.CTkFrame):
         if previous_pk != self._selected_pk and self._update_close is not None:
             self._update_close()
         student = self._resolve_selected_student()
-        for button in (self._details_btn, self._update_btn, self._delete_btn):
-            button.configure(state="normal" if student else "disabled")
+        archived = bool(student and student.get("is_archived"))
+        for button in (self._details_btn, self._update_btn):
+            button.configure(state="normal" if student and not archived else "disabled")
+        can_recycle = bool(student and not archived and self._actor_role == 'superadmin')
+        self._delete_btn.configure(state="normal" if can_recycle else "disabled")
+        if archived and self._actor_role == 'superadmin':
+            self._restore_btn.pack(fill='x', pady=(6, 0))
+            self._restore_btn.configure(state='normal')
+        else:
+            self._restore_btn.pack_forget()
+            self._restore_btn.configure(state='disabled')
         self._suspensions_btn.configure(state="normal" if student and self.on_open_suspensions else "disabled")
 
         if student is None:
@@ -489,6 +605,24 @@ class EnrollmentPanel(ctk.CTkFrame):
         display = dict(student, **display_academics(student))
         self._summary_identity.configure(text=" · ".join(
             str(display.get(key) or "—") for key in ("student_id", "college_department", "course", "year_and_section")))
+        if archived:
+            cloud_state = student.get('cloud_state', 'status unavailable')
+            labels = {'pending': 'cloud revocation pending delivery', 'verified': 'cloud revocation verified',
+                      'failed': 'Action failed — retry available'}
+            detail = (f" · In Recycle Bin — {labels.get(cloud_state, cloud_state)}"
+                      f" · Moved {student.get('lifecycle_at') or student.get('archived_at') or 'date unknown'}"
+                      f" by {student.get('actor') or 'unknown'}"
+                      f" · Reason: {student.get('reason') or 'not recorded'}")
+            self._summary_identity.configure(text=self._summary_identity.cget('text') + detail)
+        else:
+            operation = student.get('_lifecycle') or {}
+            if operation.get('operation_type') == 'restore':
+                state = operation.get('state', 'pending')
+                label = {'pending': 'Restored locally — cloud restoration pending delivery',
+                         'verified': 'Restored — cloud restoration verified',
+                         'failed': 'Action failed — retry available'} .get(state, 'Restored locally')
+                self._summary_identity.configure(text=self._summary_identity.cget('text') +
+                    f" · {label} · {operation.get('actor') or 'unknown'} · {operation.get('reason') or ''}")
         standing = standing_label(student)
         self._summary_standing.configure(
             text=f"Status: {standing}",
@@ -552,7 +686,15 @@ class EnrollmentPanel(ctk.CTkFrame):
     # Dashboard hooks (camera preview now lives in modals — no-ops)
     # ------------------------------------------------------------------
 
-    def on_show(self) -> None:
+    def on_show(self, *, show_archived: bool | None = None) -> None:
+        if show_archived is not None:
+            # The backend revalidates the current staff session before bin reads.
+            self._show_archived = show_archived
+            self._archive_view_btn.configure(
+                text="Show Active Students" if show_archived else "Recycle Bin")
+            self._bin_page = 0
+            self._selected_pk = None
+            self._set_status('')
         # Always land on the student list when the panel is (re)opened.
         if self._enroll_screen is None:
             self._reload_students()
@@ -1571,28 +1713,108 @@ class EnrollmentPanel(ctk.CTkFrame):
 
     def _delete_selected(self) -> None:
         if self._selected_pk is None:
-            self._set_status("Select a student to delete.", error=True)
+            self._set_status("Select a student to move to the Recycle Bin.", error=True)
             return
-
         student = next((s for s in self._students if s["id"] == self._selected_pk), None)
-        name = student["name"] if student else "this student"
+        if not student:
+            self._set_status("The selected student is no longer in this list. Refresh and try again.", error=True)
+            return
+        if not self.actor_token or self._actor_role != 'superadmin':
+            self._set_status("Only a current superadmin may move students to the Recycle Bin.", error=True)
+            return
+        if self._delete_task.busy:
+            return
+        pk, sid = int(student["id"]), str(student["student_id"])
+        version = int(student.get("archive_version", 0))
+        name = student.get("name") or sid
+        reason = simpledialog.askstring('Recycle Student', 'Reason for moving this student to the Recycle Bin:',
+                                        parent=self.winfo_toplevel())
+        if reason is None:
+            return
+        reason = reason.strip()
+        if not reason:
+            self._set_status('A reason is required.', error=True)
+            return
         if not messagebox.askyesno(
-            "Confirm Delete",
-            f"Delete {name}? This cannot be undone.",
+            "Move Student to Recycle Bin",
+            f"Move {name} out of active management? Local account access will be blocked and sessions revoked. Cloud revocation may remain pending until confirmed. Historical records and reports will be preserved. A superadmin can restore the student.",
             parent=self.winfo_toplevel(),
         ):
             return
-
-        pk = self._selected_pk
+        operation_id = str(uuid.uuid4())
+        self._delete_btn.configure(state="disabled")
         def remove():
-            deleted = self.database.delete_student(pk)
-            if deleted and self.recognizer is not None:
-                self.recognizer.load_known_faces()
-            return deleted
-        def completed(deleted):
-            self._set_status('Student deleted.' if deleted else 'Delete failed.', success=deleted, error=not deleted)
+            operation = self.database.recycle_student(pk, sid, self.actor_token, version, reason, operation_id)
+            if operation and self.recognizer is not None:
+                try:
+                    self.recognizer.load_known_faces()
+                except Exception as exc:
+                    operation['_cache_refresh_error'] = str(exc)
+            return operation
+        def completed(operation):
+            state = operation.get('state') if operation else None
+            status = {
+                'pending': 'In Recycle Bin — cloud revocation pending delivery.',
+                'verified': 'In Recycle Bin — cloud revocation verified.',
+                'failed': 'Action failed — retry available; student remains in Recycle Bin.',
+            }.get(state, 'Student moved to the Recycle Bin locally.')
+            cache_error = operation.get('_cache_refresh_error') if operation else None
+            if cache_error:
+                status += ' Gallery refresh failed; archived identities are still rejected by database guards.'
+            self._set_status(status, success=state in ('pending', 'verified'), error=state == 'failed')
             self._reload_students()
-        self._delete_task.run(remove, completed, lambda error: self._set_status(error, error=True))
+        def failed(error):
+            self._set_status(f"Recycle Bin action failed; the local change was rolled back. {error}", error=True)
+            self._on_row_select()
+        self._delete_task.run(remove, completed, failed)
+
+    def _restore_selected(self) -> None:
+        student = self._resolve_selected_student()
+        if student is None or not student.get('is_archived'):
+            self._set_status('Select a Recycle Bin entry to restore.', error=True)
+            return
+        if not self.actor_token or self._actor_role != 'superadmin':
+            self._set_status('Only a current superadmin may restore students.', error=True)
+            return
+        if self._restore_task.busy:
+            return
+        reason = simpledialog.askstring('Restore Student', 'Reason for restoring this student:',
+                                        parent=self.winfo_toplevel())
+        if reason is None:
+            return
+        reason = reason.strip()
+        if not reason:
+            self._set_status('A reason is required.', error=True)
+            return
+        name = student.get('name') or student['student_id']
+        if not messagebox.askyesno('Restore Student',
+            f'Restore {name} to active management? Existing account restrictions remain in force. Old sessions stay revoked; the student must sign in again. Current enrollment eligibility will be recalculated.',
+            parent=self.winfo_toplevel()):
+            return
+        pk, sid = int(student['id']), str(student['student_id'])
+        version, operation_id = int(student['archive_version']), str(uuid.uuid4())
+        self._restore_btn.configure(state='disabled')
+        def restore():
+            operation = self.database.restore_student(pk, sid, self.actor_token, version, reason, operation_id)
+            if self.recognizer is not None:
+                try:
+                    self.recognizer.load_known_faces()
+                except Exception as exc:
+                    operation['_cache_refresh_error'] = str(exc)
+            return operation
+        def completed(operation):
+            state = operation['state']
+            status = {'pending': 'Restored locally — cloud restoration pending delivery.',
+                      'verified': 'Restored — cloud restoration verified.',
+                      'failed': 'Action failed — retry available; restoration remains locally applied.'}.get(state, 'Student restored locally.')
+            if operation.get('_cache_refresh_error'):
+                status += ' Recognition refresh failed; lifecycle guards remain active.'
+            self._set_status(status, success=state in ('pending', 'verified'), error=state == 'failed')
+            self._reload_students()
+        def failed(error):
+            self._set_status(f'Restore failed; the student remains in the Recycle Bin. {error}', error=True)
+            self._on_row_select()
+        self._restore_task.run(restore, completed, failed)
 
     # ------------------------------------------------------------------
     # View photo (enlarge) modal

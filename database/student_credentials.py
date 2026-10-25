@@ -42,7 +42,8 @@ class StudentCredentials:
         """Credential check only: does not complete setup or authorize portal access."""
         with self.connect() as conn:
             row = conn.execute('''SELECT sa.*, s.name AS display_name FROM student_accounts sa
-                LEFT JOIN students s ON s.student_id=sa.student_id WHERE sa.username=?''',
+                LEFT JOIN students s ON s.student_id=sa.student_id
+                WHERE sa.username=? AND sa.is_disabled=0 AND COALESCE(s.is_archived,0)=0''',
                 ((username or '').strip(),)).fetchone()
         if not row or not verify_password(password, row['password_hash']):
             return None
@@ -62,7 +63,8 @@ class StudentCredentials:
     def create_student_session(self, account):
         with self.connect() as conn:
             conn.execute('BEGIN IMMEDIATE')
-            row = conn.execute('SELECT * FROM student_accounts WHERE id=? AND credential_version=?',
+            row = conn.execute('''SELECT sa.* FROM student_accounts sa LEFT JOIN students s ON s.student_id=sa.student_id
+                WHERE sa.id=? AND sa.credential_version=? AND sa.is_disabled=0 AND COALESCE(s.is_archived,0)=0''',
                                (account['id'], account['credential_version'])).fetchone()
             if not row:
                 raise SessionExpired('Credentials changed. Please sign in again.')
@@ -85,7 +87,8 @@ class StudentCredentials:
         row = conn.execute('''SELECT sa.*, ss.restricted, ss.expires, ss.csrf, s.name AS display_name
             FROM student_sessions ss JOIN student_accounts sa ON sa.id=ss.account_id
             LEFT JOIN students s ON s.student_id=sa.student_id
-            WHERE ss.token_hash=? AND ss.expires>? AND ss.credential_version=sa.credential_version''',
+            WHERE ss.token_hash=? AND ss.expires>? AND ss.credential_version=sa.credential_version
+              AND sa.is_disabled=0 AND COALESCE(s.is_archived,0)=0''',
             (token_digest(token), time.time())).fetchone()
         if not row:
             raise SessionExpired('Your session expired or credentials changed. Please sign in again.')

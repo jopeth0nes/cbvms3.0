@@ -212,6 +212,7 @@ class LiveAssessment:
     uniform_assessment: UniformAssessment = UniformAssessment.UNASSESSED
     active_suspension: bool = False
     enrollment_status: str = ""
+    lifecycle_version: int = 0
 
     @property
     def matched(self) -> bool:
@@ -533,4 +534,5 @@ class LiveState:
                                 UniformAssessment.UNASSESSED),
             active_suspension=reliable and bool(row.get("active_suspension", False)),
             unknown_confirmed=state == UNKNOWN_PERSON and track.unknown_hits >= cfg.identity_frames,
+            lifecycle_version=int(row.get("archive_version", 0) or 0) if reliable else 0,
         )

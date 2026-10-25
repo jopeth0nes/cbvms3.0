@@ -7,6 +7,7 @@ from unittest.mock import patch, MagicMock
 
 import customtkinter as ctk
 from database.db_manager import CBVMSDatabase
+from auth.auth_manager import AuthManager
 from ui.enrollment import EnrollmentPanel
 from ui import student_management as sm
 from auth.register import StudentRegistrationWindow
@@ -37,7 +38,9 @@ class StudentManagementUITests(unittest.TestCase):
             Image.new("RGB", (400, 800), "steelblue").save(photo, format="PNG")
             pk = db.insert_student("S1", "Student One", "BSIT", "3A", b"", photo.getvalue())
             second = db.insert_student("S2", "Student Two", "BSIT", "1A", b"", b"")
-            panel = EnrollmentPanel(root, db, MagicMock(), lambda: None)
+            actor = AuthManager(db).authenticate('superadmin', 'superadmin123')['staff_session_token']
+            recognizer = MagicMock()
+            panel = EnrollmentPanel(root, db, recognizer, lambda: None, actor_token=actor)
             self.wait_for(root, lambda: len(panel._students) == 2)
             self.assertEqual(panel._details_btn.cget("state"), "disabled")
             panel._tree.selection_set(str(pk))
@@ -64,15 +67,56 @@ class StudentManagementUITests(unittest.TestCase):
             self.assertEqual(panel._delete_btn.cget("state"), "disabled")
             panel._tree.selection_set(str(second))
             panel._on_row_select()
+            panel._status_filter.set("All")
+            panel._apply_filter()
+            panel._tree.selection_set(str(second))
+            panel._on_row_select()
             self.assertEqual(panel._summary_name.cget("text"), "Student Two")
             self.assertEqual(panel._selected_photo_label.cget("text"), "No photo on file")
-            with patch("ui.enrollment.messagebox.askyesno", return_value=True):
+            with patch("ui.enrollment.simpledialog.askstring", return_value='Synthetic recycle reason'), \
+                 patch("ui.enrollment.messagebox.askyesno", return_value=False):
                 panel._delete_selected()
+            self.assertEqual(db.get_student(second)['is_archived'], 0)
+            with patch("ui.enrollment.simpledialog.askstring", return_value='Synthetic recycle reason'), \
+                 patch("ui.enrollment.messagebox.askyesno", return_value=True) as confirm:
+                panel._delete_selected()
+                self.assertIn("Recycle Bin", confirm.call_args.args[0])
             self.wait_for(root, lambda: len(panel._students) == 1)
+            self.assertIn("1 of 1 active", panel._count_label.cget("text"))
             self.assertIsNone(panel._selected_pk)
             self.assertEqual(panel._summary_name.cget("text"), "Select a student")
             self.assertEqual(panel._update_btn.cget("state"), "disabled")
+            self.assertIn("Recycle Bin", panel._status_label.cget("text"))
+            panel.on_show(show_archived=True)
+            self.wait_for(root, lambda: not panel._list_task.busy)
+            self.assertEqual(panel._actor_role, 'superadmin', panel._status_label.cget('text'))
+            self.assertTrue(panel._show_archived)
+            self.assertEqual([s['student_id'] for s in panel._students], ['S2'],
+                             f"Recycle Bin load: {panel._status_label.cget('text')}")
+            panel._tree.selection_set(str(second))
+            panel._on_row_select()
+            self.assertEqual(db.get_student(second, actor_token=actor)['is_archived'], 1)
+            self.assertIn("cloud revocation pending", panel._summary_identity.cget("text"))
+            self.assertIn("1 of 1 in Recycle Bin", panel._count_label.cget("text"))
+            self.assertEqual(panel._restore_btn.cget('state'), 'normal')
+            with patch('ui.enrollment.simpledialog.askstring', return_value='Synthetic restore reason'), \
+                 patch('ui.enrollment.messagebox.askyesno', return_value=True):
+                panel._restore_selected()
+            self.wait_for(root, lambda: len(panel._students) == 0)
+            self.assertEqual(db.get_student(second)['archive_version'], 2)
+            self.assertEqual(recognizer.load_known_faces.call_count, 2)
+            panel.on_show(show_archived=False)
+            self.wait_for(root, lambda: len(panel._students) == 2)
+            self.assertFalse(panel._show_archived)
             panel.destroy()
+            admin = AuthManager(db).authenticate('admin', 'admin123')['staff_session_token']
+            admin_panel = EnrollmentPanel(root, db, recognizer, lambda: None, actor_token=admin)
+            self.wait_for(root, lambda: len(admin_panel._students) == 2)
+            self.assertEqual(admin_panel._archive_view_btn.winfo_manager(), '')
+            admin_panel._tree.selection_set(str(second))
+            admin_panel._on_row_select()
+            self.assertEqual(admin_panel._delete_btn.cget('state'), 'disabled')
+            admin_panel.destroy()
 
     def test_forms_build_and_save_through_existing_widgets(self):
         try:

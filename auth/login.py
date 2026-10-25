@@ -441,10 +441,10 @@ class CBVMSLoginWindow(WorkspaceWindow):
 
 
 
-def run_login(auth_manager: AuthManager, on_ready=None) -> str | None:
+def run_login(auth_manager: AuthManager, on_ready=None, *, return_staff_result=False) -> str | dict | None:
     """Show the login window and route by role.
 
-    - admin → return the username so the caller launches the admin dashboard.
+    - staff → return the username, or the authenticated result when requested by the application entry point.
     - student → launch the StudentPortal here; loop back to login on logout,
       or return None (exit) when the portal window is closed directly.
     - closed login window → return None.
@@ -481,4 +481,4 @@ def run_login(auth_manager: AuthManager, on_ready=None) -> str | None:
                 continue  # back to the login screen
             return None  # portal closed directly → exit the app
 
-        return result["username"]  # admin → caller opens the dashboard
+        return result if return_staff_result else result["username"]

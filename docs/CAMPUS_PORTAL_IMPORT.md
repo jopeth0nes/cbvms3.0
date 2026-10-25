@@ -94,3 +94,14 @@ campus records by both desktops. `data/cloud-sync.json` is still absent and the
 MacBook is not registered as a publisher. Later desktop updates require the shared
 authority/client transition in `SHARED_CAMPUS_DATA_TRANSITION.md`; do not re-enable
 independent whole-database writers with copied source identities.
+
+## Recycle Bin deployment — 25 October 2026
+
+Additive migrations 0006 and 0007 are deployed. The source-bound superadmin
+provider dispatcher is installed; it awaits normal updated-desktop startup for the
+local lifecycle schema. This is a bounded lifecycle delivery channel, not general
+MacBook synchronization. No production student was recycled/restored to test it.
+The import receipt, negative case mappings and all original domain rows matched
+the verified backup after deployment. Use [STUDENT_RECYCLE_BIN.md](STUDENT_RECYCLE_BIN.md)
+for versioned delivery, state-aware verification and recovery. Never recreate an
+account merely because its current access bit differs from the import snapshot.

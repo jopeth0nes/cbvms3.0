@@ -25,7 +25,10 @@ CREATE TABLE IF NOT EXISTS students (
     encoding BLOB,
     photo BLOB,
     profile_photo BLOB,
-    enrolled_at TEXT NOT NULL DEFAULT (datetime('now'))
+    enrolled_at TEXT NOT NULL DEFAULT (datetime('now')),
+    is_archived INTEGER NOT NULL DEFAULT 0,
+    archive_version INTEGER NOT NULL DEFAULT 0,
+    archived_at TEXT
 );
 """
 

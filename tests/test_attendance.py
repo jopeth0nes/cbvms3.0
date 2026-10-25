@@ -64,6 +64,24 @@ class AttendanceTests(unittest.TestCase):
         self.assertEqual(row['last_seen'],self.fact(600).observed_at)
         self.assertEqual(row['sighting_count'],2)
 
+    def test_queued_old_epoch_is_rejected_after_recycle_and_restore(self):
+        from auth.auth_manager import AuthManager
+        token = AuthManager(self.db).authenticate('superadmin', 'superadmin123')['staff_session_token']
+        with self.db.connect() as conn:
+            pk = conn.execute('SELECT id FROM students WHERE student_id=?', (self.sid,)).fetchone()['id']
+        queued = self.fact()  # Captured at local lifecycle version zero.
+        recycled = self.db.recycle_student(pk, self.sid, token, 0, 'synthetic test',
+            '00000000-0000-4000-8000-000000000011')
+        self.db.restore_student(pk, self.sid, token, recycled['lifecycle_version'], 'synthetic test',
+            '00000000-0000-4000-8000-000000000012')
+        self.assertFalse(self.db.record_attendance(self.sid, sighting=queued))
+        fresh = replace(queued, session_id='fresh-session', frame_id='fresh-frame',
+                        lifecycle_version=2)
+        self.assertTrue(self.db.record_attendance(self.sid, sighting=fresh))
+        events = self.db.query_attendance(view='events')['rows']
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]['lifecycle_version'], 2)
+
     def test_concurrent_cameras_and_same_fact_retries(self):
         barrier=threading.Barrier(9)
         results,errors=[],[]

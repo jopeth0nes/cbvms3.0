@@ -236,6 +236,12 @@ class TermEnrollmentStore:
             conn.execute('BEGIN IMMEDIATE')
             if valid_if and not valid_if():
                 return None
+            # Recheck the identity under the same write lock as the review insert.
+            # An assessment queued before archival must not create new history after it.
+            active = conn.execute('SELECT is_archived FROM students WHERE student_id=?',
+                                  (student_id,)).fetchone()
+            if active is None or active['is_archived']:
+                return None
             context=enrollment_context(conn,student_id,observed_at)
             if context['eligible']:
                 return None

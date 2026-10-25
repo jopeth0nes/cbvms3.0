@@ -20,11 +20,15 @@ def migrate_attendance(conn):
         student_name TEXT NOT NULL, observed_at TEXT NOT NULL, attendance_date TEXT NOT NULL,
         source_id TEXT NOT NULL, source_label TEXT NOT NULL, session_id TEXT NOT NULL, frame_id TEXT NOT NULL,
         monitor_generation INTEGER NOT NULL, camera_generation INTEGER NOT NULL, presence_id TEXT NOT NULL,
-        student_status TEXT NOT NULL, college_department TEXT NOT NULL, course TEXT NOT NULL,
+        student_status TEXT NOT NULL, lifecycle_version INTEGER NOT NULL DEFAULT 0,
+        college_department TEXT NOT NULL, course TEXT NOT NULL,
         report_year_level TEXT NOT NULL, report_section TEXT NOT NULL,
         semester_id INTEGER, semester_name TEXT NOT NULL, school_year TEXT NOT NULL,
         provenance TEXT NOT NULL, cooldown_seconds INTEGER NOT NULL, persisted_at TEXT NOT NULL,
         UNIQUE(student_id,session_id,frame_id))''')
+    event_cols = {r[1] for r in conn.execute('PRAGMA table_info(attendance_events)')}
+    if 'lifecycle_version' not in event_cols:
+        conn.execute('ALTER TABLE attendance_events ADD COLUMN lifecycle_version INTEGER NOT NULL DEFAULT 0')
     conn.execute('CREATE INDEX IF NOT EXISTS attendance_event_student_time ON attendance_events(student_id,observed_at)')
     conn.execute('CREATE INDEX IF NOT EXISTS attendance_event_day ON attendance_events(attendance_date,student_id,id)')
     conn.execute('CREATE INDEX IF NOT EXISTS attendance_event_source ON attendance_events(source_id,attendance_date)')
@@ -84,15 +88,18 @@ class AttendanceStore:
             if valid_if is not None and not valid_if():
                 return False
             student = conn.execute('SELECT * FROM students WHERE student_id=?', (student_id,)).fetchone()
-            if student is None:
+            if student is None or student['is_archived']:
                 return False
             if sighting is None:
                 values = snapshot_fields(dict(student))
                 sighting = Sighting(student_id, student['name'], timestamp, 'legacy-api', 'Legacy Python caller',
                     'legacy-api', timestamp, 0, 0, '', student['student_status'], **values,
-                    provenance='legacy_api_observation: source/session unavailable')
+                    provenance='legacy_api_observation: source/session unavailable',
+                    lifecycle_version=int(student['archive_version']))
             if not isinstance(sighting, Sighting) or sighting.student_id != student_id:
                 raise ValueError('Sighting identity does not match the student.')
+            if int(sighting.lifecycle_version) != int(student['archive_version']):
+                return False
             timestamp = utc_stamp(sighting.observed_at)
             from core.academic_calendar import enrollment_context
             from dataclasses import replace

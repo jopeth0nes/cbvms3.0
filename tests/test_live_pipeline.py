@@ -103,6 +103,55 @@ class LivePipelineTests(unittest.TestCase):
         self.assertEqual(assessment.torso_box, (65, 100, 145, 210))
         self.assertEqual(fx.trainer.predict_proba.call_count, 4)
 
+    def test_archived_identity_suppresses_queued_persistence_effects(self):
+        fx = PipelineFixture()
+        result = fx.confirmed()
+        result = replace(result, assessments=(replace(result.assessments[0],
+            discipline_eligible=False, suspension_tag='Suspended'),))
+        fx.database.is_student_active.return_value = False
+        fx.persist(result)
+        fx.database.record_enrollment_review.assert_not_called()
+        fx.database.record_premises_entry.assert_not_called()
+        fx.database.log_violation.assert_not_called()
+        fx.notifier.notify.assert_not_called()
+
+    def test_assessment_from_before_restore_cannot_write_after_lifecycle_version_advances(self):
+        fx = PipelineFixture()
+        result = fx.confirmed()
+        assessment = replace(result.assessments[0], lifecycle_version=4)
+        result = replace(result, assessments=(assessment,))
+        # Identity is active again at version 5, but the queued result was captured at 4.
+        fx.database.is_student_active.side_effect = lambda sid, version: version == 5
+        fx.persist(result)
+        fx.database.is_student_active.assert_called_with('S-1', 4)
+        attendance_guard = fx.database.record_attendance.call_args.kwargs['valid_if']
+        self.assertFalse(attendance_guard())
+        fx.database.log_violation.assert_not_called()
+
+    def test_audio_guard_rechecks_archive_and_leaves_unknown_identity_unfiltered(self):
+        fx = PipelineFixture()
+        result = fx.confirmed()
+        queued = []
+        fx.notifier.audio = MagicMock()
+        fx.notifier.audio.observe_batch.side_effect = lambda batch, **kwargs: queued.extend(batch)
+        captured = time.monotonic()
+        context = replace(result.task.context, captured_at=captured)
+        task = replace(result.task, context=context)
+        result = replace(result, task=task, assessments=(replace(result.assessments[0], context=context),))
+        fx.latest = replace(fx.latest, captured_at=captured)
+        fx.processor.submit_detection_audio(result)
+        guard = queued[0][1]
+        fx.database.is_student_active.return_value = False
+        self.assertFalse(guard())
+        fx.database.is_student_active.assert_called_with('S-1', result.assessments[0].lifecycle_version)
+
+        uncertain = replace(result.assessments[0], reliable_identity=False, student_id='')
+        uncertain_result = replace(result, assessments=(replace(uncertain, context=context),))
+        fx.database.is_student_active.reset_mock()
+        fx.processor.submit_detection_audio(uncertain_result)
+        self.assertTrue(queued[-1][1]())
+        fx.database.is_student_active.assert_not_called()
+
     def test_every_person_gets_its_own_crop_and_uniform_result(self):
         fx = PipelineFixture()
         fx.recognizer.recognize_faces.return_value = [detection(), detection("S-2", 360, embedding=1)]

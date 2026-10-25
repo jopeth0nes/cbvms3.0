@@ -50,8 +50,8 @@ def main() -> None:
 
     auth = AuthManager(database, recognizer=recognizer)
 
-    username = run_login(auth, on_ready=start_model_warmup)
-    if not username:
+    staff_result = run_login(auth, on_ready=start_model_warmup, return_staff_result=True)
+    if not staff_result:
         monitor_models.cancel_pending()
         monitor_models.wait(5.)
         return  # login window closed — exit
@@ -66,7 +66,8 @@ def main() -> None:
                      name="post-login-face-refresh").start()
 
     logged_out = open_dashboard(
-        username=username,
+        username=staff_result["username"],
+        staff_session_token=staff_result["staff_session_token"],
         database=database,
         recognizer=recognizer,
         person_detector=person_detector,

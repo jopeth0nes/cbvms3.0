@@ -88,6 +88,9 @@ def prepare(campus_path, cloud_restore_path, output_dir, import_id):
         rows_out, mappings, evidence, account_rows = [], {}, [], []
         with frozen_database(type('ReadOnlySource', (), {'db_path': campus_path})()) as frozen:
             with frozen.connect() as conn:
+                columns = {r[1] for r in conn.execute('PRAGMA table_info(students)')}
+                if 'is_archived' in columns and conn.execute('SELECT 1 FROM students WHERE is_archived=1 LIMIT 1').fetchone():
+                    raise ValueError('Archived identities require reconciliation, not a new import')
                 source_rows = [dict(r) for r in conn.execute('SELECT student_id,name,email,registration_pending FROM students ORDER BY student_id')]
                 for integrity_row in conn.execute('SELECT snapshot,snapshot_sha256 FROM violations'):
                     stored_hash = integrity_row['snapshot_sha256']
@@ -349,3 +352,49 @@ def build_batch(bundle):
     for row in bundle['accounts']:
         out.append({'sql': 'INSERT INTO portal_accounts(student_id,username,password_hash,must_change_password,credential_version) VALUES(?,?,?,?,?)', 'params': [row['student_id'], row['username'], row['password_hash'], row['must_change_password'], row['credential_version']]})
     return out
+
+
+def verify_imported_rows(bundle, receipts, students, accounts, revocations=(), lifecycle_operations=(), lifecycle_states=()):
+    """Verify a repeated import without recreating legitimately archived accounts.
+
+    Only the active bit may differ with a matching durable revocation. Snapshot,
+    credentials and negative case mappings retain the original strict checks.
+    Later unrelated edits require separate reconciliation, never an upsert.
+    """
+    receipt = next((r for r in receipts if r['import_id'] == bundle['import_id']), None)
+    if not receipt or any(receipt[k] != bundle[k] for k in ('source_checkpoint', 'payload_sha256')):
+        raise ValueError('Import receipt verification failed')
+    if json.loads(receipt['mapping_json']) != bundle['mapping']:
+        raise ValueError('Import mapping verification failed')
+    by_student = {s['id']: s for s in students}
+    by_account = {a['student_id']: a for a in accounts}
+    revoked = {r['student_id']: r for r in revocations}
+    for student, account in zip(bundle['students'], bundle['accounts']):
+        sid = student['id']
+        remote, remote_account = by_student.get(sid), by_account.get(sid)
+        if not remote or not remote_account:
+            raise ValueError('Imported identity is missing')
+        expected_active = int(student['active'])
+        lifecycle = next((r for r in lifecycle_states if r['student_id'] == sid), None)
+        if lifecycle:
+            operation = next((r for r in lifecycle_operations if r['operation_id'] == lifecycle['operation_id']), None)
+            if (not operation or operation['student_id'] != sid or operation['version'] != lifecycle['version']
+                    or operation['import_id'] != bundle['import_id']
+                    or operation['source_checkpoint'] != bundle['source_checkpoint']
+                    or operation['payload_sha256'] != bundle['payload_sha256']
+                    or operation['expected_username'] != account['username']
+                    or lifecycle['recycled'] != int(operation['operation_type'] == 'recycle')):
+                raise ValueError('Lifecycle provenance mismatch')
+            expected_active = int(not lifecycle['recycled'] and not lifecycle['access_blocked'])
+        elif sid in revoked:
+            r = revoked[sid]
+            if (r['import_id'] != bundle['import_id'] or r['source_checkpoint'] != bundle['source_checkpoint']
+                    or r['payload_sha256'] != bundle['payload_sha256'] or r['version'] != 1
+                    or r['expected_version'] != 0 or r['expected_username'] != account['username']):
+                raise ValueError('Archive provenance mismatch')
+            expected_active = 0
+        if (json.loads(remote['snapshot']) != student['snapshot'] or remote['active'] != expected_active
+                or any(remote[k] != student[k] for k in ('name', 'email'))
+                or any(remote_account[k] != v for k, v in account.items())):
+            raise ValueError('Imported rows changed; reconcile before retry')
+    return True

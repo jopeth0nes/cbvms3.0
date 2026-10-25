@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import secrets
 import sqlite3
-from datetime import datetime, timedelta
+import time
+import uuid
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable
 
@@ -77,9 +81,39 @@ CREATE TABLE IF NOT EXISTS student_accounts (
     student_id TEXT NOT NULL UNIQUE,
     username TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    is_disabled INTEGER NOT NULL DEFAULT 0,
+    disabled_at TEXT
 );
 """
+
+STAFF_SESSIONS_TABLE = """
+CREATE TABLE IF NOT EXISTS staff_sessions (
+    token_hash TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    credential_hash TEXT NOT NULL,
+    expires REAL NOT NULL,
+    revoked_at TEXT
+);
+"""
+
+STUDENT_ARCHIVE_TABLES = (
+    """CREATE TABLE IF NOT EXISTS student_archive_operations (
+        operation_id TEXT PRIMARY KEY, student_id TEXT NOT NULL,
+        expected_version INTEGER NOT NULL,
+        state TEXT NOT NULL CHECK(state IN ('pending','verified','failed')),
+        error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+        operation_type TEXT NOT NULL DEFAULT 'recycle' CHECK(operation_type IN ('recycle','restore')),
+        lifecycle_version INTEGER NOT NULL DEFAULT 1, actor_id INTEGER, actor TEXT NOT NULL DEFAULT '',
+        actor_role TEXT NOT NULL DEFAULT '', reason TEXT NOT NULL DEFAULT '',
+        account_id INTEGER, account_username TEXT)""",
+    """CREATE TABLE IF NOT EXISTS student_archive_audit (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, student_id TEXT NOT NULL,
+        operation_id TEXT NOT NULL, actor TEXT NOT NULL, action TEXT NOT NULL,
+        occurred_at TEXT NOT NULL, actor_id INTEGER, actor_role TEXT NOT NULL DEFAULT '',
+        operation_type TEXT NOT NULL DEFAULT 'recycle', lifecycle_version INTEGER NOT NULL DEFAULT 1,
+        reason TEXT NOT NULL DEFAULT '', account_id INTEGER, account_username TEXT)""",
+)
 
 STUDENT_NOTIFICATIONS_TABLE = """
 CREATE TABLE IF NOT EXISTS student_notifications (
@@ -275,6 +309,79 @@ class CBVMSDatabase(TermEnrollmentStore, StudentManagement, StudentCredentials, 
                 conn.execute("ALTER TABLE students ADD COLUMN profile_photo BLOB")
             conn.execute(SYSTEM_REPORTS_TABLE)
             conn.execute(STUDENT_ACCOUNTS_TABLE)
+            account_cols = {r[1] for r in conn.execute("PRAGMA table_info(student_accounts)")}
+            if "is_disabled" not in account_cols:
+                conn.execute("ALTER TABLE student_accounts ADD COLUMN is_disabled INTEGER NOT NULL DEFAULT 0")
+            if "disabled_at" not in account_cols:
+                conn.execute("ALTER TABLE student_accounts ADD COLUMN disabled_at TEXT")
+            conn.execute(STAFF_SESSIONS_TABLE)
+            staff_session_cols = {r[1] for r in conn.execute("PRAGMA table_info(staff_sessions)")}
+            if "credential_hash" not in staff_session_cols:
+                conn.execute("ALTER TABLE staff_sessions ADD COLUMN credential_hash TEXT NOT NULL DEFAULT ''")
+            archive_cols = {r[1] for r in conn.execute("PRAGMA table_info(students)")}
+            for name, declaration in {
+                "is_archived": "INTEGER NOT NULL DEFAULT 0",
+                "archive_version": "INTEGER NOT NULL DEFAULT 0",
+                "archived_at": "TEXT",
+            }.items():
+                if name not in archive_cols:
+                    conn.execute(f"ALTER TABLE students ADD COLUMN {name} {declaration}")
+            for ddl in STUDENT_ARCHIVE_TABLES:
+                conn.execute(ddl)
+            audit_cols = {r[1] for r in conn.execute("PRAGMA table_info(student_archive_audit)")}
+            for name, declaration in {
+                "actor_id": "INTEGER",
+                "actor_role": "TEXT NOT NULL DEFAULT ''",
+                "operation_type": "TEXT NOT NULL DEFAULT 'recycle'",
+                "lifecycle_version": "INTEGER NOT NULL DEFAULT 1",
+                "reason": "TEXT NOT NULL DEFAULT ''",
+                "account_id": "INTEGER",
+                "account_username": "TEXT",
+            }.items():
+                if name not in audit_cols:
+                    conn.execute(f"ALTER TABLE student_archive_audit ADD COLUMN {name} {declaration}")
+            conn.execute('''CREATE TRIGGER IF NOT EXISTS immutable_student_archive_audit_update
+                BEFORE UPDATE ON student_archive_audit BEGIN SELECT RAISE(ABORT,'archive audit is immutable'); END''')
+            conn.execute('''CREATE TRIGGER IF NOT EXISTS immutable_student_archive_audit_delete
+                BEFORE DELETE ON student_archive_audit BEGIN SELECT RAISE(ABORT,'archive audit is immutable'); END''')
+            conn.execute('''CREATE TRIGGER IF NOT EXISTS immutable_student_lifecycle_operation
+                BEFORE UPDATE OF operation_id,student_id,expected_version,created_at,operation_type,
+                    lifecycle_version,actor_id,actor,actor_role,reason ON student_archive_operations
+                BEGIN SELECT RAISE(ABORT,'lifecycle operation identity is immutable'); END''')
+            conn.execute('''CREATE TRIGGER IF NOT EXISTS immutable_student_lifecycle_operation_delete
+                BEFORE DELETE ON student_archive_operations BEGIN SELECT RAISE(ABORT,'lifecycle operations are immutable'); END''')
+            operation_cols = {r[1] for r in conn.execute("PRAGMA table_info(student_archive_operations)")}
+            for name, declaration in {
+                "operation_type": "TEXT NOT NULL DEFAULT 'recycle'",
+                "lifecycle_version": "INTEGER NOT NULL DEFAULT 1",
+                "actor_id": "INTEGER",
+                "actor": "TEXT NOT NULL DEFAULT ''",
+                "actor_role": "TEXT NOT NULL DEFAULT ''",
+                "reason": "TEXT NOT NULL DEFAULT ''",
+                "account_id": "INTEGER",
+                "account_username": "TEXT",
+            }.items():
+                if name not in operation_cols:
+                    conn.execute(f"ALTER TABLE student_archive_operations ADD COLUMN {name} {declaration}")
+            conn.execute('DROP TRIGGER IF EXISTS immutable_student_lifecycle_operation')
+            conn.execute('''CREATE TRIGGER immutable_student_lifecycle_operation
+                BEFORE UPDATE OF operation_id,student_id,expected_version,created_at,operation_type,
+                    lifecycle_version,actor_id,actor,actor_role,reason,account_id,account_username
+                    ON student_archive_operations
+                BEGIN SELECT RAISE(ABORT,'lifecycle operation identity is immutable'); END''')
+            conn.execute('''CREATE TRIGGER IF NOT EXISTS preserve_recycled_student_account_insert
+                BEFORE INSERT ON student_accounts WHEN EXISTS(
+                    SELECT 1 FROM students WHERE student_id=NEW.student_id AND is_archived=1)
+                BEGIN SELECT RAISE(ABORT,'student account identity is in the Recycle Bin'); END''')
+            conn.execute('''CREATE TRIGGER IF NOT EXISTS preserve_recycled_student_account_delete
+                BEFORE DELETE ON student_accounts WHEN EXISTS(
+                    SELECT 1 FROM students WHERE student_id=OLD.student_id AND is_archived=1)
+                BEGIN SELECT RAISE(ABORT,'student account identity is in the Recycle Bin'); END''')
+            conn.execute('''CREATE TRIGGER IF NOT EXISTS preserve_recycled_student_account_identity
+                BEFORE UPDATE OF student_id,username ON student_accounts WHEN
+                    EXISTS(SELECT 1 FROM students WHERE student_id=OLD.student_id AND is_archived=1)
+                    OR EXISTS(SELECT 1 FROM students WHERE student_id=NEW.student_id AND is_archived=1)
+                BEGIN SELECT RAISE(ABORT,'student account identity is in the Recycle Bin'); END''')
             migrate_credentials(conn)
             conn.execute(STUDENT_NOTIFICATIONS_TABLE)
             conn.execute(EVIDENCE_FILES_TABLE)
@@ -486,26 +593,281 @@ class CBVMSDatabase(TermEnrollmentStore, StudentManagement, StudentCredentials, 
                 return changed.rowcount == 1
         return True
 
-    def get_all_students(self) -> list[sqlite3.Row]:
+    def create_staff_session(self, username: str, password: str) -> str:
+        """Verify credentials again and persist an unguessable, credential-bound proof."""
         with self.connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT *
-                FROM students
-                ORDER BY name COLLATE NOCASE
-                """
-            ).fetchall()
+            initial = conn.execute("SELECT id,password_hash FROM users WHERE username=?",
+                                   (username.strip(),)).fetchone()
+        if initial is None or not verify_password(password, initial['password_hash']):
+            raise PermissionError("Staff credentials could not be verified.")
+        token = secrets.token_urlsafe(32)
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT id,password_hash FROM users WHERE username=?", (username.strip(),)).fetchone()
+            if row is None or row['id'] != initial['id'] or row['password_hash'] != initial['password_hash']:
+                raise PermissionError("Staff credentials changed during sign in.")
+            conn.execute("DELETE FROM staff_sessions WHERE expires<=? OR revoked_at IS NOT NULL", (time.time(),))
+            conn.execute("INSERT INTO staff_sessions(token_hash,user_id,credential_hash,expires) VALUES (?,?,?,?)",
+                         (hashlib.sha256(token.encode()).hexdigest(), row['id'], row['password_hash'], time.time() + 8 * 3600))
+        return token
+
+    @staticmethod
+    def _staff_actor(conn, token: str):
+        if not isinstance(token, str) or not token:
+            return None
+        return conn.execute("""SELECT u.id,u.username,u.role FROM staff_sessions ss
+            JOIN users u ON u.id=ss.user_id AND u.password_hash=ss.credential_hash
+            WHERE ss.token_hash=? AND ss.expires>? AND ss.revoked_at IS NULL""",
+            (hashlib.sha256(token.encode()).hexdigest(), time.time())).fetchone()
+
+    def revoke_staff_session(self, token: str) -> None:
+        with self.connect() as conn:
+            conn.execute("UPDATE staff_sessions SET revoked_at=datetime('now') WHERE token_hash=?",
+                         (hashlib.sha256(token.encode()).hexdigest(),))
+
+    def recycle_student(self, student_pk: int, expected_student_id: str, actor_token: str,
+                        expected_version: int, reason: str, operation_id: str) -> dict:
+        return self._change_recycle_state(student_pk, expected_student_id, actor_token,
+                                          expected_version, reason, operation_id, recycle=True)
+
+    def archive_student(self, student_pk: int, expected_student_id: str, actor_token: str,
+                        expected_version: int | None = None, *, reason='Recycled by superadmin',
+                        operation_id=None) -> dict:
+        """Compatibility alias for older callers; authorization remains superadmin-only."""
+        if expected_version is None:
+            row = self.get_student(student_pk, actor_token=actor_token)
+            if row is None:
+                raise ValueError('Student record does not exist.')
+            expected_version = int(row['archive_version'])
+        return self.recycle_student(student_pk, expected_student_id, actor_token, expected_version,
+                                    reason, operation_id or str(uuid.uuid4()))
+
+    def restore_student(self, student_pk: int, expected_student_id: str, actor_token: str,
+                        expected_version: int, reason: str, operation_id: str) -> dict:
+        return self._change_recycle_state(student_pk, expected_student_id, actor_token,
+                                          expected_version, reason, operation_id, recycle=False)
+
+    def _change_recycle_state(self, student_pk, expected_student_id, actor_token,
+                              expected_version, reason, operation_id, *, recycle):
+        """Versioned superadmin-only recycle/restore and durable provider outbox."""
+        reason = (reason or '').strip()
+        if not reason or len(reason) > 1000:
+            raise ValueError('A reason of 1–1000 characters is required.')
+        try:
+            operation_id = str(uuid.UUID(str(operation_id)))
+        except (ValueError, TypeError, AttributeError) as exc:
+            raise ValueError('A canonical UUID operation ID is required.') from exc
+        kind = 'recycle' if recycle else 'restore'
+        target = int(bool(recycle))
+        with self.connect() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            actor = self._staff_actor(conn, actor_token)
+            if actor is None or actor['role'] != 'superadmin':
+                raise PermissionError('Only a current superadmin may change Recycle Bin state.')
+            prior = conn.execute('SELECT * FROM student_archive_operations WHERE operation_id=?',
+                                 (operation_id,)).fetchone()
+            if prior:
+                if (prior['student_id'] != expected_student_id or prior['operation_type'] != kind
+                        or prior['expected_version'] != expected_version or prior['reason'] != reason
+                        or prior['actor_id'] != actor['id']):
+                    raise ValueError('This operation ID is already bound to a different lifecycle action.')
+                return dict(prior)
+            student = conn.execute('SELECT student_id,is_archived,archive_version FROM students WHERE id=?',
+                                   (student_pk,)).fetchone()
+            if (student is None or student['student_id'] != expected_student_id
+                    or student['archive_version'] != expected_version
+                    or bool(student['is_archived']) != (not recycle)):
+                raise ValueError('The selected student changed. Refresh and try again.')
+            account = conn.execute('SELECT id,username FROM student_accounts WHERE student_id=?',
+                                   (expected_student_id,)).fetchone()
+            if recycle:
+                account_id = account['id'] if account else None
+                account_username = account['username'] if account else None
+            else:
+                original = conn.execute('''SELECT account_id,account_username FROM student_archive_operations
+                    WHERE student_id=? AND operation_type='recycle' ORDER BY lifecycle_version DESC LIMIT 1''',
+                    (expected_student_id,)).fetchone()
+                if original is None:
+                    raise ValueError('The original recycle identity record is unavailable.')
+                account_id, account_username = original['account_id'], original['account_username']
+                if ((account['id'] if account else None) != account_id
+                        or (account['username'] if account else None) != account_username):
+                    raise ValueError('The student account identity changed while in the Recycle Bin. Reconcile the account before restoring.')
+            lifecycle_version = int(student['archive_version']) + 1
+            now = datetime.now(timezone.utc).isoformat(timespec='seconds').replace('+00:00', 'Z')
+            changed = conn.execute('''UPDATE students SET is_archived=?,archive_version=?,archived_at=?
+                WHERE id=? AND student_id=? AND archive_version=? AND is_archived=?''',
+                (target, lifecycle_version, now if recycle else None, student_pk, expected_student_id,
+                 expected_version, int(not recycle)))
+            if changed.rowcount != 1:
+                raise ValueError('The selected student changed. Refresh and try again.')
+            # is_disabled is an independent administrative restriction. The archived
+            # flag gates sign-in; never claim ownership of or clear that restriction.
+            if account:
+                conn.execute('DELETE FROM student_sessions WHERE account_id=?', (account['id'],))
+            conn.execute('''INSERT INTO student_archive_operations
+                (operation_id,student_id,expected_version,state,error,created_at,updated_at,
+                 operation_type,lifecycle_version,actor_id,actor,actor_role,reason,account_id,account_username)
+                VALUES(?,?,?,'pending',NULL,?,?,?,?,?,?,?,?,?,?)''',
+                (operation_id, expected_student_id, expected_version, now, now, kind,
+                 lifecycle_version, actor['id'], actor['username'], actor['role'], reason,
+                 account_id, account_username))
+            action = 'recycled' if recycle else 'restored'
+            conn.execute('''INSERT INTO student_archive_audit
+                (student_id,operation_id,actor,action,occurred_at,actor_id,actor_role,
+                 operation_type,lifecycle_version,reason,account_id,account_username)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)''',
+                (expected_student_id, operation_id, actor['username'], action, now, actor['id'],
+                 actor['role'], kind, lifecycle_version, reason, account_id, account_username))
+            return dict(operation_id=operation_id, student_id=expected_student_id,
+                        expected_version=expected_version, lifecycle_version=lifecycle_version,
+                        operation_type=kind, actor=actor['username'], actor_role=actor['role'],
+                        reason=reason, state='pending', created_at=now)
+
+    def get_staff_session_info(self, actor_token: str) -> dict | None:
+        with self.connect() as conn:
+            row = self._staff_actor(conn, actor_token)
+        return dict(row) if row else None
+
+    def get_archive_operation(self, actor_token: str, operation_id: str) -> dict | None:
+        with self.connect() as conn:
+            actor = self._staff_actor(conn, actor_token)
+            if actor is None or actor['role'] != 'superadmin':
+                raise PermissionError('Only a current superadmin may inspect Recycle Bin metadata.')
+            row = conn.execute("SELECT * FROM student_archive_operations WHERE operation_id=?",
+                               (operation_id,)).fetchone()
+        return dict(row) if row else None
+
+    def get_student_archive_operation(self, actor_token: str, student_id: str) -> dict | None:
+        with self.connect() as conn:
+            actor = self._staff_actor(conn, actor_token)
+            if actor is None or actor['role'] != 'superadmin':
+                raise PermissionError('Only a current superadmin may inspect Recycle Bin metadata.')
+            row = conn.execute("SELECT * FROM student_archive_operations WHERE student_id=? "
+                               "ORDER BY lifecycle_version DESC LIMIT 1", (student_id,)).fetchone()
+        return dict(row) if row else None
+
+    def get_recycle_bin(self, actor_token: str, *, search='', sort='archived_at', descending=True,
+                        limit=100, offset=0):
+        allowed = {'archived_at': 's.archived_at', 'name': 's.name COLLATE NOCASE',
+                   'student_id': 's.student_id', 'course': 's.course COLLATE NOCASE'}
+        if sort not in allowed:
+            raise ValueError('Unsupported Recycle Bin sort field.')
+        limit = max(1, min(int(limit), 500))
+        offset = max(0, int(offset))
+        pattern = '%' + (search or '').strip() + '%'
+        with self.connect() as conn:
+            actor = self._staff_actor(conn, actor_token)
+            if actor is None or actor['role'] != 'superadmin':
+                raise PermissionError('Only a current superadmin may view the Recycle Bin.')
+            order = allowed[sort] + (' DESC' if descending else ' ASC') + ',s.id ASC'
+            rows = conn.execute(f'''SELECT s.*,o.operation_id,o.state AS cloud_state,o.operation_type,
+                    o.lifecycle_version,o.actor,o.reason,o.created_at AS lifecycle_at,o.error AS cloud_error
+                FROM students s LEFT JOIN student_archive_operations o ON o.operation_id=(
+                    SELECT operation_id FROM student_archive_operations x WHERE x.student_id=s.student_id
+                    ORDER BY x.lifecycle_version DESC LIMIT 1)
+                WHERE s.is_archived=1 AND (?='' OR s.name LIKE ? OR s.student_id LIKE ?)
+                ORDER BY {order} LIMIT ? OFFSET ?''',
+                (search.strip(), pattern, pattern, limit, offset)).fetchall()
+            total = conn.execute("SELECT COUNT(*) FROM students WHERE is_archived=1 AND (?='' OR name LIKE ? OR student_id LIKE ?)",
+                                 (search.strip(), pattern, pattern)).fetchone()[0]
+        return {'rows': [dict(row) for row in rows], 'total': total,
+                'limit': limit, 'offset': offset}
+
+    def acknowledge_lifecycle(self, operation_id: str, state: str, error: str = '') -> bool:
+        """Provider dispatcher records explicit outcome; timeout is never success."""
+        if state not in ('pending', 'verified', 'failed'):
+            raise ValueError("Invalid archive operation state.")
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT state FROM student_archive_operations WHERE operation_id=?",
+                               (operation_id,)).fetchone()
+            if row is None:
+                return False
+            # A verified result is terminal and cannot be overwritten by a stale failure.
+            if row['state'] == 'verified' and state != 'verified':
+                return True
+            return conn.execute("""UPDATE student_archive_operations SET state=?,error=?,updated_at=?
+                WHERE operation_id=?""", (state, error[:1000] or None,
+                datetime.now(timezone.utc).isoformat(timespec='seconds').replace('+00:00', 'Z'), operation_id)).rowcount == 1
+
+    def set_archive_cloud_result(self, operation_id: str, state: str, error: str = '') -> bool:
+        """Deprecated compatibility alias for the trusted provider dispatcher."""
+        return self.acknowledge_lifecycle(operation_id, state, error)
+
+    def list_pending_lifecycle_operations(self, limit=100):
+        with self.connect() as conn:
+            return [dict(row) for row in conn.execute('''SELECT * FROM student_archive_operations
+                WHERE state IN ('pending','failed') ORDER BY student_id,lifecycle_version,operation_id LIMIT ?''',
+                (max(1, min(int(limit), 500)),)).fetchall()]
+
+    def get_lifecycle_operation_for_provider(self, operation_id):
+        with self.connect() as conn:
+            row = conn.execute('''SELECT o.*,s.id AS student_pk,s.archive_version AS current_version,
+                s.is_archived AS current_is_archived,u.role AS current_actor_role,
+                a.actor_id AS audit_actor_id,a.actor AS audit_actor,a.actor_role AS audit_actor_role,
+                a.operation_type AS audit_operation_type,a.lifecycle_version AS audit_lifecycle_version,
+                a.reason AS audit_reason,a.action AS audit_action,a.occurred_at AS audit_occurred_at,
+                a.account_id AS audit_account_id,a.account_username AS audit_account_username
+                FROM student_archive_operations o
+                JOIN students s ON s.student_id=o.student_id
+                LEFT JOIN users u ON u.id=o.actor_id
+                LEFT JOIN student_archive_audit a ON a.operation_id=o.operation_id
+                WHERE o.operation_id=?''', (operation_id,)).fetchone()
+        if row is None:
+            return None
+        operation = dict(row)
+        matches_audit = (
+            operation['audit_actor_id'] == operation['actor_id']
+            and operation['audit_actor'] == operation['actor']
+            and operation['audit_actor_role'] == operation['actor_role'] == 'superadmin'
+            and operation['current_actor_role'] == 'superadmin'
+            and operation['audit_operation_type'] == operation['operation_type']
+            and operation['audit_lifecycle_version'] == operation['lifecycle_version']
+            and operation['audit_reason'] == operation['reason']
+            and operation['audit_account_id'] == operation['account_id']
+            and operation['audit_account_username'] == operation['account_username']
+            and operation['audit_action'] == ('recycled' if operation['operation_type'] == 'recycle' else 'restored')
+        )
+        return operation if matches_audit else None
+
+    def get_all_students(self, *, include_archived: bool = False,
+                         actor_token: str | None = None) -> list[sqlite3.Row]:
+        with self.connect() as conn:
+            if include_archived:
+                actor = self._staff_actor(conn, actor_token)
+                if actor is None or actor['role'] != 'superadmin':
+                    raise PermissionError('Only a superadmin may inspect Recycle Bin identities.')
+            rows = conn.execute("SELECT * FROM students " +
+                ("" if include_archived else "WHERE is_archived=0 ") +
+                "ORDER BY name COLLATE NOCASE").fetchall()
         return list(rows)
 
-    def get_student(self, student_pk: int) -> sqlite3.Row | None:
+    def get_management_students(self, actor_token: str, *, include_archived=False):
         with self.connect() as conn:
-            return conn.execute(
+            actor = self._staff_actor(conn, actor_token)
+            if actor is None or actor['role'] not in ('admin', 'superadmin'):
+                raise PermissionError("A current staff session is required to view archived students.")
+            if include_archived and actor['role'] != 'superadmin':
+                raise PermissionError('Only a superadmin may view the Recycle Bin.')
+            rows = conn.execute("SELECT * FROM students WHERE is_archived=? ORDER BY name COLLATE NOCASE",
+                                (int(include_archived),)).fetchall()
+        return list(rows)
+
+    def get_student(self, student_pk: int, *, actor_token: str | None = None) -> sqlite3.Row | None:
+        with self.connect() as conn:
+            row = conn.execute(
                 """
                 SELECT *
                 FROM students WHERE id = ?
                 """,
                 (student_pk,),
             ).fetchone()
+            if row is not None and row['is_archived']:
+                actor = self._staff_actor(conn, actor_token)
+                if actor is None or actor['role'] != 'superadmin':
+                    raise PermissionError('Only a superadmin may inspect Recycle Bin identities.')
+            return row
 
     def student_id_exists(self, student_id: str) -> bool:
         with self.connect() as conn:
@@ -594,19 +956,12 @@ class CBVMSDatabase(TermEnrollmentStore, StudentManagement, StudentCredentials, 
             return cursor.rowcount > 0
 
     def delete_student(self, student_pk: int) -> bool:
-        with self.connect() as conn:
-            # Resolve student_id string before deleting the row
-            row = conn.execute(
-                "SELECT student_id FROM students WHERE id = ?", (student_pk,)
-            ).fetchone()
-            if row is None:
-                return False
-            sid = row[0]
-            # Cascade: remove login account so the student can no longer log in
-            conn.execute("DELETE FROM student_accounts WHERE student_id = ?", (sid,))
-            cursor = conn.execute("DELETE FROM students WHERE id = ?", (student_pk,))
-            conn.commit()
-            return cursor.rowcount > 0
+        raise ValueError("Permanent deletion is disabled because trusted cloud identity provenance is unavailable. Archive the student instead.")
+
+    def permanently_delete_unused_student(self, student_pk: int, expected_student_id: str,
+                                          actor_token: str) -> bool:
+        """Disabled until the local schema can prove cloud ownership is absent."""
+        raise ValueError("Permanent deletion is unavailable: this database has no trusted cloud identity provenance. Archive the student instead.")
 
     def log_violation(
         self,
@@ -651,7 +1006,10 @@ class CBVMSDatabase(TermEnrollmentStore, StudentManagement, StudentCredentials, 
             if valid_if is not None and not valid_if():
                 conn.rollback()
                 return None
-            standing = conn.execute("SELECT student_status, registration_pending FROM students WHERE student_id=?", (safe_student_id,)).fetchone()
+            standing = conn.execute("SELECT student_status, registration_pending,is_archived FROM students WHERE student_id=?", (safe_student_id,)).fetchone()
+            if standing and standing['is_archived']:
+                conn.rollback()
+                return None
             context = enrollment_context(conn, safe_student_id, detected_dt)
             occurrence_term = context['term'].get('id')
             if semester_id is not None and semester_id != occurrence_term:
@@ -1266,14 +1624,29 @@ class CBVMSDatabase(TermEnrollmentStore, StudentManagement, StudentCredentials, 
     # Student-portal helpers
     # ------------------------------------------------------------------
 
-    def get_student_by_student_id(self, student_id: str) -> dict | None:
+    def get_student_by_student_id(self, student_id: str, *, actor_token: str | None = None) -> dict | None:
         """Fetch a student row by their student_id string (not PK). Dict or None."""
         with self.connect() as conn:
             row = conn.execute(
                 "SELECT * FROM students WHERE student_id = ?",
                 ((student_id or "").strip(),),
             ).fetchone()
+            if row is not None and row['is_archived']:
+                actor = self._staff_actor(conn, actor_token)
+                if actor is None or actor['role'] != 'superadmin':
+                    return None
         return dict(row) if row is not None else None
+
+    def is_student_active(self, student_id: str, lifecycle_version: int | None = None) -> bool:
+        """Cheap live guard for queued effects; authoritative writes recheck transactionally."""
+        with self.connect() as conn:
+            if lifecycle_version is None:
+                query = "SELECT 1 FROM students WHERE student_id=? AND COALESCE(is_archived,0)=0"
+                params = ((student_id or "").strip(),)
+            else:
+                query = "SELECT 1 FROM students WHERE student_id=? AND COALESCE(is_archived,0)=0 AND archive_version=?"
+                params = ((student_id or "").strip(), int(lifecycle_version))
+            return conn.execute(query, params).fetchone() is not None
 
     def get_violations_for_student(self, student_id: str) -> list[dict]:
         """All violations for a student, newest first (snapshot column included)."""
@@ -1564,6 +1937,7 @@ class CBVMSDatabase(TermEnrollmentStore, StudentManagement, StudentCredentials, 
                        s.name, s.college_department, s.course, s.year_and_section, s.gender
                 FROM student_accounts sa
                 LEFT JOIN students s ON s.student_id = sa.student_id
+                WHERE COALESCE(s.is_archived,0)=0
                 ORDER BY s.name COLLATE NOCASE
                 """
             ).fetchall()

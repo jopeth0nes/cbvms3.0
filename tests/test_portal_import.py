@@ -38,6 +38,7 @@ class PortalImportTests(unittest.TestCase):
     def _make_cloud(self):
         with sqlite3.connect(self.cloud) as conn:
             for name in sorted(MIGRATIONS.glob('*.sql')):
+                if name.name > '0006_student_revocations.sql': continue  # legacy import/revocation compatibility
                 conn.executescript(name.read_text(encoding='utf-8'))
             conn.execute("INSERT INTO campus_sync_control(singleton,source_id,writer_id,protocol,generation,run_id,checked_at,minimum_snapshot_version,published_student_count) VALUES(1,'source-fixture','writer-fixture',2,4,NULL,'2026-10-24T00:00:00+00:00',3,1)")
             conn.execute("INSERT INTO campus_sync_publications(generation,run_id) VALUES(4,'run-fixture')")
@@ -69,6 +70,33 @@ class PortalImportTests(unittest.TestCase):
 
     def _prepare(self):
         return prepare(self.campus, self.cloud, self.output, IMPORT_ID)
+
+    def test_retry_verification_after_authorized_archive(self):
+        from core.portal_import import verify_imported_rows
+        from core.archive_cloud import command_for_import, revoke
+        from tests.test_archive_cloud import Transport
+        import uuid
+        self._student_case()
+        self._prepare()
+        bundle = json.loads((self.output / 'bundle.json').read_text())
+        with sqlite3.connect(self.cloud) as conn:
+            conn.row_factory = sqlite3.Row
+            for item in build_batch(bundle):
+                conn.execute(item['sql'], item['params'])
+            conn.commit()
+            account = dict(conn.execute("SELECT * FROM portal_accounts WHERE student_id='00123'").fetchone())
+            command = command_for_import({'operation_id': str(uuid.uuid4()), 'student_id': '00123'}, bundle, account)
+            revoke(Transport(conn), command)
+            def rows(table):
+                return [dict(r) for r in conn.execute('SELECT * FROM ' + table)]
+            args = [bundle, rows('campus_portal_imports'), rows('portal_students'), rows('portal_accounts')]
+            self.assertTrue(verify_imported_rows(*args, rows('portal_student_revocations')))
+            with self.assertRaises(ValueError):
+                verify_imported_rows(*args)
+            revoked = rows('portal_student_revocations')
+            revoked[0]['source_checkpoint'] = 'wrong'
+            with self.assertRaises(ValueError):
+                verify_imported_rows(*args, revoked)
 
     def test_full_offline_export_and_insert_only_sqlite_rehearsal(self):
         local_id, appeal_id, blob = self._student_case()

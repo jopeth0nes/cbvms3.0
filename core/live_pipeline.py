@@ -243,6 +243,7 @@ class LiveProcessor:
                 row['academic_snapshot'] = tuple((context['enrollment'] or {}).items())
                 row['term_snapshot'] = tuple(term.items())
                 row['name'] = student.get('name') or row.get('name', '')
+                row['archive_version'] = int(student.get('archive_version', 0) or 0)
                 row['gender'] = student.get('gender') or row.get('gender', '')
                 row['student_status']=standing_label(student)
                 row['enrollment_status']=context['status']
@@ -387,6 +388,11 @@ class LiveProcessor:
         if audio is None or not result.task.valid():
             return
         task = result.task
+        database = self.read_database or self.database
+        def active_identity(assessment):
+            # Unknown/unreliable assessments do not name an identity to revoke.
+            return (not assessment.reliable_identity or not assessment.student_id
+                    or database.is_student_active(assessment.student_id, assessment.lifecycle_version))
         def guard(assessment):
             if not task.valid() or not self.audio_task_valid(task):
                 return False
@@ -394,12 +400,13 @@ class LiveProcessor:
             if (current is None or current.frame_id[0] != task.context.frame_id[0]
                     or not 0 <= time.monotonic() - current.captured_at <= 1):
                 return False
-            return True
+            return active_identity(assessment)
         def relevance(assessment):
+            if not active_identity(assessment):
+                return False
             current = self.latest_sample()
             return current is not None and (current.frame_id == task.context.frame_id or
                     MotionProjection(task.frame, assessment.face_box).advance(current.frame) is not None)
-        database = self.read_database or self.database
         audio.observe_batch([
             (a, lambda a=a: guard(a),
              lambda sid=a.student_id: database.get_active_suspension(sid),
@@ -441,6 +448,7 @@ class LiveProcessor:
                 college_department=snapshot.get('college_department','Unspecified/Needs review'),
                 course=snapshot.get('course','Unspecified/Needs review'),report_year_level=snapshot.get('report_year_level',''),
                 report_section=snapshot.get('report_section',''),semester_id=term.get('id'),
+                lifecycle_version=assessment.lifecycle_version,
                 semester_name=term.get('semester_name',''),school_year=term.get('school_year',''))
             if self.attendance_writer is not None:
                 self.attendance_writer.offer(fact,task.cancelled)
@@ -561,6 +569,9 @@ class LiveProcessor:
                 current = self.latest_sample()
                 if (current is None or current.frame_id[0] != task.context.frame_id[0]
                         or not 0 <= time.monotonic()-current.captured_at <= 1):
+                    return False
+                if (assessment.reliable_identity and assessment.student_id
+                        and not self.database.is_student_active(assessment.student_id, assessment.lifecycle_version)):
                     return False
                 if current.frame_id == task.context.frame_id:
                     return True
