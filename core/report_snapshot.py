@@ -82,10 +82,13 @@ def _matches(row, filters, *, section):
                 return False
         elif selected is not None and not selected:
             return False
-    for key,field in (('statuses','status'),('appeal_statuses','appeal_status')):
+    for key,field in (('statuses','status'),('appeal_statuses','appeal_status'),
+                      ('categories','category'),('enrollment_statuses','enrollment_status')):
         selected=filters.get(key)
         applicable=(section in ('Semester Enrollment Roster','Violations','Suspensions','Imported Discipline Snapshot') if field=='status'
                     else section in ('Violations','Imported Discipline Snapshot'))
+        if field == 'enrollment_status':
+            applicable = section == 'Violations'
         if applicable and selected is not None and (not selected or row.get(field) not in selected):return False
     search = (filters.get('search') or '').strip().casefold()
     if search and search not in (str(row.get('student_id') or '') + ' ' + str(row.get('name') or '')).casefold():

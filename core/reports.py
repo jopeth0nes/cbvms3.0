@@ -95,6 +95,7 @@ def snapshot_report_html(snapshot):
     generated = snapshot.generated_at.astimezone(ZoneInfo('Asia/Manila')).strftime('%Y-%m-%d %H:%M:%S %Z')
     filters = dict(snapshot.filters)
     names={'academic_years':'Academic years','term_labels':'Terms','term_ids':'Stable term IDs','departments':'Departments','courses':'Courses','year_levels':'Year levels','sections':'Sections','statuses':'Statuses','appeal_statuses':'Appeal statuses','date_from':'From (inclusive, Manila)','date_to':'To (inclusive, Manila)','search':'Student search'}
+    names.update(categories='Violation categories', enrollment_statuses='Enrollment at detection')
     def display(value):
         if value is None:return 'All'
         if isinstance(value,(list,tuple)):return ', '.join(map(str,value)) if value else 'None (no matching rows)'

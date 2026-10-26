@@ -11,7 +11,7 @@ from pathlib import Path
 
 from PIL import Image
 
-ANALYZER_VERSION = "evidence-forensics-1"
+ANALYZER_VERSION = "evidence-forensics-2"
 MAX_BYTES = 10 * 1024 * 1024
 MAX_PIXELS = 20_000_000
 MAX_SIDE = 10_000
@@ -34,10 +34,17 @@ def _metadata(image):
         pass
     if exif:
         names = {271: "camera_make", 272: "camera_model", 274: "orientation",
-                 306: "datetime", 36867: "datetime_original", 305: "software"}
+                 306: "datetime", 36867: "datetime_original", 305: "software",
+                 36868: "datetime_digitized", 36881: "offset_original"}
+        # Phone capture tags usually live in the Exif sub-IFD, not IFD0.
+        values = dict(exif)
+        try:
+            values.update(exif.get_ifd(34665))
+        except Exception:
+            pass
         for key, name in names.items():
-            if key in exif:
-                val = _clean(exif.get(key))
+            if key in values:
+                val = _clean(values.get(key))
                 if val is not None:
                     out[name] = val
         gps = exif.get(34853)
@@ -49,6 +56,60 @@ def _metadata(image):
             if val:
                 out[name] = val
     return out
+
+
+def check_photo_dates(metadata, detected_at, uploaded_at):
+    """Compare claimed EXIF capture time with server times for human review.
+
+    Missing offsets remain unknown; never silently interpret them as UTC.
+    """
+    from datetime import datetime, timezone, timedelta
+    from core.discipline import parse_db_datetime
+    result = {'status': 'unavailable', 'capture_claim': metadata.get('datetime_original'),
+              'detected_at': detected_at, 'uploaded_at': uploaded_at, 'observations': [],
+              'notice': 'Photo dates are editable claims. SHA-256 protects stored bytes after upload, not capture authenticity. Exit-camera corroboration is pending.'}
+    claim = metadata.get('datetime_original')
+    if not claim:
+        result['observations'].append('Original capture date is missing; this does not establish tampering.')
+        return result
+    try:
+        captured = datetime.strptime(claim, '%Y:%m:%d %H:%M:%S')
+    except (TypeError, ValueError):
+        result['status'] = 'review'
+        result['observations'].append('Original capture date cannot be parsed.')
+        return result
+    offset = metadata.get('offset_original')
+    if not offset or not re.fullmatch(r'[+-](?:0\d|1\d|2[0-3]):[0-5]\d', offset):
+        result['status'] = 'timezone_unknown'
+        result['observations'].append('Capture timezone is missing or invalid; compare dates manually.')
+        return result
+    sign = 1 if offset[0] == '+' else -1
+    delta = timedelta(hours=int(offset[1:3]), minutes=int(offset[4:6])) * sign
+    try:
+        captured = captured.replace(tzinfo=timezone(delta)).astimezone(timezone.utc)
+    except (ValueError, OverflowError):
+        result['status'] = 'review'
+        result['observations'].append('Capture date and timezone are outside the supported date range.')
+        return result
+    result['capture_utc'] = captured.isoformat()
+    result['status'] = 'compared'
+    for key, value in (('detection', detected_at), ('upload', uploaded_at)):
+        reference = parse_db_datetime(value)
+        if reference:
+            seconds = int((captured - reference).total_seconds())
+            result[key + '_difference_seconds'] = seconds
+            if key == 'upload' and seconds > 300:
+                result['status'] = 'review'
+                result['observations'].append('Claimed capture time is more than five minutes after server upload time.')
+    modified = metadata.get('datetime')
+    if modified:
+        try:
+            if datetime.strptime(modified, '%Y:%m:%d %H:%M:%S') < captured.astimezone(timezone(delta)).replace(tzinfo=None):
+                result['status'] = 'review'
+                result['observations'].append('Claimed modification date precedes claimed capture date; clock settings may explain this.')
+        except (TypeError, ValueError):
+            result['observations'].append('Modification date cannot be parsed.')
+    return result
 
 def analyze_evidence(data: bytes, filename: str) -> dict:
     started = time.monotonic()

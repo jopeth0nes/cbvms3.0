@@ -34,6 +34,8 @@ if _HEIC_OK:
     _IMAGE_EXTS += (".heic", ".heif")
 
 from core.trainer import MIN_SAMPLES_PER_CLASS, MODULES, ViolationTrainer
+from core.uniform_references import KINDS, REFERENCE_DIR, save_reference, list_references
+from ui.background_task import BackgroundTask
 from ui.components import (
     COLOR_ACCENT,
     COLOR_ACCENT_HOVER,
@@ -172,6 +174,47 @@ class TrainingPanel(ctk.CTkFrame):
             self._training[module] = False
             self._build_module_tab(tab, module)
             self._refresh_counts(module)
+
+        references = tabview.add('DYCI Logo & Digital Shirts')
+        self._reference_task = BackgroundTask(self)
+        ctk.CTkLabel(references, text='DYCI uniform reference library',
+            font=heading_font()).pack(anchor='w', padx=20, pady=(20, 8))
+        ctk.CTkLabel(references, text=(
+            'Save approved DYCI logos and digital shirt designs at full resolution.\n'
+            'Artwork is kept separate from camera training photos. Use real chest-framed photos\n'
+            'with visible logos in Uniform Check to train and evaluate detection accuracy.'),
+            justify='left', wraplength=800, text_color=COLOR_TEXT_MUTED).pack(anchor='w', padx=20, pady=8)
+        for kind, title in KINDS.items():
+            ctk.CTkButton(references, text=f'Save {title}',
+                command=lambda k=kind: self._save_uniform_reference(k)).pack(anchor='w', padx=20, pady=8)
+        ctk.CTkButton(references, text='Open reference folder',
+            command=self._open_reference_folder).pack(anchor='w', padx=20, pady=8)
+        self._reference_status = ctk.CTkLabel(references, text='', justify='left', wraplength=800)
+        self._reference_status.pack(anchor='w', padx=20, pady=12)
+        self._refresh_reference_status()
+
+    def _refresh_reference_status(self):
+        refs = list_references()
+        self._reference_status.configure(text='\n'.join(
+            f'{title}: {sum(k == kind for k, _ in refs)} saved' for kind, title in KINDS.items()))
+
+    def _open_reference_folder(self):
+        REFERENCE_DIR.mkdir(parents=True, exist_ok=True)
+        if sys.platform == 'win32':
+            os.startfile(str(REFERENCE_DIR))
+        else:
+            subprocess.Popen(['open' if sys.platform == 'darwin' else 'xdg-open', str(REFERENCE_DIR)])
+
+    def _save_uniform_reference(self, kind):
+        path = filedialog.askopenfilename(parent=self, title=f'Save {KINDS[kind]}',
+            filetypes=[('Reference images', '*.png *.jpg *.jpeg *.bmp *.webp')])
+        if not path:
+            return
+        def done(value):
+            self._refresh_reference_status()
+            show_toast(self, f'{KINDS[kind]} saved.', type='success')
+        self._reference_task.run(lambda: save_reference(path, kind), done,
+            lambda error: show_toast(self, f'Reference could not be saved: {error}', type='error'))
 
     def _build_module_tab(self, tab, module: str) -> None:
         tab.grid_columnconfigure(0, weight=2)

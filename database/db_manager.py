@@ -44,6 +44,7 @@ from database.academic_migration import migrate_academics
 from core.appeal_evidence import validate_evidence
 from core.evidence_integrity import digest, original_evidence, supporting_evidence, INTEGRITY_HELP
 from database.evidence_forensics_migration import migrate_evidence_forensics
+from database.in_person_appeals import migrate_in_person_appeals
 from database import evidence_forensics as forensics_store
 
 DEFAULT_ADMIN_USERNAME = "admin"
@@ -389,6 +390,7 @@ class CBVMSDatabase(TermEnrollmentStore, StudentManagement, StudentCredentials, 
             conn.execute(APPEALS_TABLE)
             migrate_evidence_forensics(conn)
             migrate_appeal_categories(conn)
+            migrate_in_person_appeals(conn)
             conn.execute(SECURITY_EVENTS_TABLE)
             migrate_security_events(conn)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_security_events_observed "
@@ -2189,6 +2191,37 @@ class CBVMSDatabase(TermEnrollmentStore, StudentManagement, StudentCredentials, 
 
     submit_appeal = insert_appeal
 
+    def record_in_person_appeal(self, violation_id, student_id, reason, meeting_notes, *, username):
+        """Transcribe a meeting without requiring a student photo upload.
+
+        Uses the same ownership, deadline and duplicate rules as online appeals.
+        Decisions still go through the normal evidence-aware review workflow.
+        """
+        if self.student_session_ref is not None:
+            raise PermissionError('Only staff can record face-to-face appeals.')
+        sid = (student_id or '').strip()
+        reason = (reason or '').strip()
+        notes = (meeting_notes or '').strip()
+        if not sid or not 20 <= len(reason) <= 1000 or not 10 <= len(notes) <= 2000:
+            raise ValueError('Provide the student explanation (20–1000 characters) and meeting notes (10–2000 characters).')
+        with self.connect() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            self._require_admin_conn(conn, username)
+            if not conn.execute("SELECT 1 FROM users WHERE username=? AND role IN ('admin','superadmin')", (username,)).fetchone():
+                raise PermissionError('Only staff can record face-to-face appeals.')
+            now = utc_now()
+            row = conn.execute('''SELECT v.*,a.id appeal_id,st.is_active strike_active
+                FROM violations v LEFT JOIN appeals a ON a.violation_id=v.id
+                LEFT JOIN strikes st ON st.violation_id=v.id WHERE v.id=?''', (violation_id,)).fetchone()
+            if row is None or not self._appeal_eligibility_from_row(row, sid, now)['eligible']:
+                raise ValueError('This violation is not eligible for a new appeal for this student.')
+            stamp = format_db_datetime(now)
+            cursor = conn.execute('''INSERT INTO appeals(violation_id,student_id,reason,submitted_at)
+                VALUES(?,?,?,?)''', (violation_id, sid, reason, stamp))
+            aid = _inserted_row_id(cursor)
+            conn.execute('INSERT INTO in_person_appeals VALUES(?,?,?,?)', (aid, username, stamp, notes))
+        return aid
+
     def get_admin_appeal_alerts(self) -> list[dict]:
         """Persisted submission alerts, independent of the appeal decision status."""
         with self.connect() as conn:
@@ -2593,6 +2626,8 @@ class CBVMSDatabase(TermEnrollmentStore, StudentManagement, StudentCredentials, 
             if not row:
                 raise ValueError("Appeal no longer available.")
             case = decision_view(row)
+            meeting = conn.execute('SELECT * FROM in_person_appeals WHERE appeal_id=?', (appeal_id,)).fetchone()
+            case['in_person'] = dict(meeting) if meeting else None
             case["evidence"] = [dict(r) for r in conn.execute(
                 "SELECT * FROM evidence_files WHERE appeal_id=? AND student_id=? ORDER BY id",
                 (appeal_id, row["student_id"]))]

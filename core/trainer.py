@@ -104,16 +104,25 @@ class ViolationTrainer:
     # ------------------------------------------------------------------
 
     def add_sample(self, module: str, label: str, image_bgr: np.ndarray) -> Path:
-        """Save one letterboxed sample; return the saved file's Path."""
+        """Preserve uniform detail for torso/logo crops; return the saved path."""
         self._validate(module, label)
         if image_bgr is None or image_bgr.size == 0:
             raise ValueError("Empty image")
 
-        processed = _letterbox(image_bgr, IMG_SIZE)
+        if module == 'uniform':
+            # Keep logo detail and the original aspect ratio for later torso
+            # cropping. Model input resizing still happens at train/inference.
+            h, w = image_bgr.shape[:2]
+            scale = min(1.0, 1600 / max(h, w))
+            processed = cv2.resize(image_bgr, (max(1, round(w * scale)), max(1, round(h * scale))),
+                interpolation=cv2.INTER_AREA) if scale < 1 else image_bgr
+        else:
+            processed = _letterbox(image_bgr, IMG_SIZE)
         folder = self.label_dir(module, label)
         folder.mkdir(parents=True, exist_ok=True)
         out_path = folder / f"{uuid.uuid4().hex}.jpg"
-        cv2.imwrite(str(out_path), processed, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+        if not cv2.imwrite(str(out_path), processed, [int(cv2.IMWRITE_JPEG_QUALITY), 95]):
+            raise OSError('The training photo could not be saved.')
 
         return out_path
 

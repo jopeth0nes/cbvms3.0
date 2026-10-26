@@ -9,6 +9,8 @@ from PIL import Image, ImageOps
 from core.appeal_categories import CATEGORIES, BY_CODE, BY_OPTION, SELECT_CATEGORY, category_display, validate_category
 from core.discipline import display_local_datetime as ts
 from core.evidence_integrity import digest, original_evidence, supporting_evidence, INTEGRITY_HELP
+from core.evidence_forensics import check_photo_dates
+from ui.background_task import BackgroundTask
 from ui.components import COLOR_BG, COLOR_SURFACE, COLOR_TEXT, COLOR_ACCENT, COLOR_DANGER
 
 MUTED = '#9EB3C4'
@@ -112,6 +114,8 @@ class AppealsPanel(ctk.CTkFrame):
         self.refresh_button.configure(height=36, corner_radius=10, fg_color='#29485E',
                                       hover_color='#365D76')
         self.refresh_button.pack(side='right', padx=20)
+        ctk.CTkButton(header, text='Record face-to-face appeal',
+            command=self._in_person_form).pack(side='right', padx=4)
         self.toolbar = ctk.CTkFrame(self, fg_color=COLOR_SURFACE, corner_radius=12)
         self.toolbar.grid(row=1, column=0, sticky='ew', padx=18)
         self.filter = ctk.CTkOptionMenu(self.toolbar, values=['Pending', 'History', 'Approved', 'Rejected', 'All'],
@@ -135,6 +139,58 @@ class AppealsPanel(ctk.CTkFrame):
         self.status = ctk.CTkLabel(self, text='', anchor='w', wraplength=800)
         self.status.grid(row=4, column=0, sticky='ew', padx=12)
         self._poll_job = self.after(50, self._poll)
+
+    def _in_person_form(self):
+        window = ctk.CTkToplevel(self)
+        window.title('Record face-to-face appeal')
+        window.geometry('600x650')
+        task = BackgroundTask(window)
+        fields = {}
+        for key, title in (('student', 'Student ID'), ('violation', 'Violation record ID')):
+            ctk.CTkLabel(window, text=title).pack(anchor='w', padx=20)
+            fields[key] = ctk.CTkEntry(window)
+            fields[key].pack(fill='x', padx=20, pady=(0, 8))
+        for key, title in (('reason', 'Student explanation (20–1000 characters)'),
+                           ('notes', 'Meeting notes / evidence reviewed (10–2000 characters)')):
+            ctk.CTkLabel(window, text=title).pack(anchor='w', padx=20)
+            fields[key] = ctk.CTkTextbox(window, height=130, wrap='word')
+            fields[key].pack(fill='x', padx=20, pady=(0, 8))
+        ctk.CTkLabel(window, text='The regular appeal deadline applies. This records a pending appeal for review.',
+            wraplength=540, text_color=MUTED).pack(padx=20, pady=8)
+        error_label = ctk.CTkLabel(window, text='', wraplength=540)
+        error_label.pack(fill='x', padx=20)
+        def save():
+            try:
+                vid = int(fields['violation'].get())
+            except ValueError:
+                error_label.configure(text='Enter a numeric violation record ID.')
+                return
+            sid = fields['student'].get().strip()
+            reason = fields['reason'].get('1.0', 'end-1c')
+            notes = fields['notes'].get('1.0', 'end-1c')
+            button.configure(state='disabled')
+            def work():
+                try:
+                    aid = self.database.record_in_person_appeal(vid, sid, reason, notes, username=self.username)
+                    return aid, None
+                except Exception as exc:
+                    return None, str(exc)
+            def done(result):
+                if not window.winfo_exists():
+                    return
+                aid, error = result
+                if error:
+                    error_label.configure(text=error)
+                    button.configure(state='normal')
+                    return
+                window.destroy()
+                if self.on_change:
+                    self.on_change()
+                self.open_case(aid)
+            task.run(work, done, lambda error: (
+                error_label.configure(text=error), button.configure(state='normal')))
+        button = ctk.CTkButton(window, text='Record pending appeal', command=save)
+        button.pack(pady=12)
 
     def _request(self, operation, callback, *, action=False):
         if self.closed or (self.busy and not action):
@@ -459,6 +515,12 @@ class AppealsPanel(ctk.CTkFrame):
     def _render_forensics(self, frame, case):
         for child in frame.winfo_children():
             child.destroy()
+        if case.get('in_person'):
+            meeting = case['in_person']
+            ctk.CTkLabel(frame, text=(
+                f"Face-to-face appeal · Recorded by {meeting['recorded_by']} at {ts(meeting['recorded_at'])}\n"
+                f"Meeting notes: {meeting['meeting_notes']}"), justify='left', anchor='w',
+                wraplength=620).pack(fill='x', padx=12, pady=10)
         ctk.CTkLabel(frame, text='Evidence Integrity Analysis', anchor='w',
                      font=ctk.CTkFont(size=15, weight='bold')).pack(fill='x', padx=12, pady=(8, 2))
         ctk.CTkLabel(frame, text='Forensic analysis is advisory. Review the original evidence, supporting image and appeal explanation before making a decision.',
@@ -502,6 +564,15 @@ class AppealsPanel(ctk.CTkFrame):
             row.grid_columnconfigure(0, weight=1)
             label = ctk.CTkLabel(row, text=f'Evidence #{evidence_id} · {summary}', anchor='w', justify='left', wraplength=560)
             label.grid(row=0, column=0, sticky='ew', padx=4, pady=3)
+            if latest and latest.get('hash_status') == 'verified':
+                evidence = next((e for e in case.get('evidence', []) if e['id'] == evidence_id), {})
+                dates = check_photo_dates(latest.get('metadata') or {}, case.get('detection_time'), evidence.get('uploaded_at'))
+                text = f"Photo date: {dates['capture_claim'] or 'Not recorded'} · {dates['status'].replace('_', ' ')}"
+                if 'detection_difference_seconds' in dates:
+                    text += f" · Capture minus detection: {dates['detection_difference_seconds']} seconds"
+                text += '\n' + ' '.join(dates['observations']) + '\n' + dates['notice']
+                ctk.CTkLabel(row, text=text, anchor='w', justify='left', wraplength=560,
+                    text_color=MUTED).grid(row=1, column=0, columnspan=4, sticky='ew', padx=4, pady=4)
             if latest:
                 ctk.CTkButton(row, text='View details', width=100, height=28,
                     command=lambda eid=evidence_id,rid=latest['id']: self._forensics_details(eid,rid)).grid(row=0,column=1,padx=3)
@@ -591,7 +662,7 @@ class AppealsPanel(ctk.CTkFrame):
                 justify='left',wraplength=680).pack(fill='x',padx=16,pady=16)
             return
         summary={key:report.get(key) for key in ('status','classification','hash_status','sha256',
-            'analyzer_version','created_at','completed_at','provenance','model','model_raw_score',
+            'analyzer_version','created_at','completed_at','metadata','provenance','model','model_raw_score',
             'model_calibrated','reliability','facts','signals','risk','error_code')}
         advisory=ctk.CTkLabel(window,text='Forensic analysis is advisory. Review the original evidence, supporting image and appeal explanation before making a decision.',
             justify='left',wraplength=700,text_color=MUTED)

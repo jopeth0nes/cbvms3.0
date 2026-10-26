@@ -49,12 +49,12 @@ class ReportsPanel(ctk.CTkFrame):
             var=tk.BooleanVar(value=name=='Student Directory')
             ctk.CTkCheckBox(self.filter_box,text=name,variable=var,command=self._update_filter_availability).grid(row=i//3,column=i%3,padx=8,pady=5,sticky='w');self.sections[name]=var
         self.checklists={}
-        for i,(key,title) in enumerate((('academic_years','Academic year'),('term_ids','Term'),('departments','College / Department'),('courses','Course'),('year_levels','Year level'),('sections','Section'))):
+        for i,(key,title) in enumerate((('academic_years','Academic year'),('term_ids','Semester / Term'),('departments','College / Department'),('courses','Course'),('year_levels','Year level'),('sections','Section'))):
             (label_row,col),(control_row,_)=checklist_grid(i)
             ctk.CTkLabel(self.filter_box,text=title,anchor='w',wraplength=205,text_color=COLOR_TEXT_MUTED,font=body_small_font()).grid(row=label_row,column=col,sticky='ew',padx=8)
             callback=self._update_dependent_options if key in ('academic_years','departments') else None
             control=MultiSelectChecklist(self.filter_box,title,[],on_change=callback,on_removed=self._removed_options);control.grid(row=control_row,column=col,sticky='ew',padx=8,pady=(2,5));self.checklists[key]=control
-        for i,(key,title) in enumerate((('statuses','Enrollment / violation / suspension status'),('appeal_statuses','Appeal status'))):
+        for i,(key,title) in enumerate((('statuses','Enrollment / violation / suspension status'),('appeal_statuses','Appeal status'),('categories','Violation category'),('enrollment_statuses','Enrollment at detection'))):
             ctk.CTkLabel(self.filter_box,text=title,anchor='w',wraplength=205,text_color=COLOR_TEXT_MUTED,font=body_small_font()).grid(row=6,column=i,sticky='ew',padx=8)
             control=MultiSelectChecklist(self.filter_box,title,[],on_removed=self._removed_options);control.grid(row=7,column=i,sticky='ew',padx=8,pady=(2,5));self.checklists[key]=control
         self.date_from=tk.StringVar();self.date_to=tk.StringVar();self.search=tk.StringVar()
@@ -151,7 +151,7 @@ class ReportsPanel(ctk.CTkFrame):
         imported_years={str(r.get('school_year')) for r in (imported_section.rows if imported_section else ()) if r.get('school_year')}
         years=sorted({str(t.get('school_year')) for t in snapshot.terms if t.get('school_year')} | imported_years,key=str.casefold)
         for k,v in (('academic_years',years),('term_ids',terms.keys()),('departments',opts('college_department')),('courses',opts('course')),('year_levels',opts('year_level')),('sections',opts('section'))):self.checklists[k].set_options(v)
-        for k,field in (('statuses','status'),('appeal_statuses','appeal_status')):self.checklists[k].set_options(opts(field))
+        for k,field in (('statuses','status'),('appeal_statuses','appeal_status'),('categories','category'),('enrollment_statuses','enrollment_status')):self.checklists[k].set_options(opts(field))
         self._update_dependent_options()
 
     def _removed_options(self, removed):
@@ -178,6 +178,7 @@ class ReportsPanel(ctk.CTkFrame):
                 'courses':self.checklists['courses'].get(),'year_levels':self.checklists['year_levels'].get(),
                 'sections':self.checklists['sections'].get(),'statuses':self.checklists['statuses'].get(),
                 'appeal_statuses':self.checklists['appeal_statuses'].get(),'date_from':self.date_from.get().strip() or None,
+                'categories':self.checklists['categories'].get(),'enrollment_statuses':self.checklists['enrollment_statuses'].get(),
                 'date_to':self.date_to.get().strip() or None,'search':self.search.get().strip(),
                 'term_labels':None if terms is None else list(terms)}
 
@@ -236,6 +237,7 @@ class ReportsPanel(ctk.CTkFrame):
     @staticmethod
     def _filter_description(filters):
         labels={'academic_years':'Years','term_ids':'Term IDs','term_labels':'Terms','departments':'Departments','courses':'Courses','year_levels':'Year levels','sections':'Sections','statuses':'Statuses','appeal_statuses':'Appeals','date_from':'From','date_to':'To','search':'Search'}
+        labels.update(categories='Violation categories', enrollment_statuses='Enrollment at detection')
         def value(v):
             if v is None:return 'All'
             if isinstance(v,(list,tuple)):return ', '.join(map(str,v)) if v else 'None (no matches)'
@@ -259,6 +261,8 @@ class ReportsPanel(ctk.CTkFrame):
         self.checklists['academic_years'].set_enabled(has_term);self.checklists['term_ids'].set_enabled(has_term)
         self.checklists['statuses'].set_enabled(has_term)
         self.checklists['appeal_statuses'].set_enabled(bool(selected & {'Violations','Imported Discipline Snapshot'}))
+        self.checklists['categories'].set_enabled(bool(selected & {'Violations','Imported Discipline Snapshot'}))
+        self.checklists['enrollment_statuses'].set_enabled('Violations' in selected)
         for entry in getattr(self,'date_entries',[]):entry.configure(state='normal' if has_term else 'disabled')
 
     def sort_by(self,key):
