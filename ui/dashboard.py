@@ -32,7 +32,7 @@ from core.uniform_matcher import UniformColorMatcher
 from core.trainer import ViolationTrainer
 from core.violation_engine import LiveViolationChecker
 from database.db_manager import CBVMSDatabase
-from ui.camera_feed import CameraFeed
+from ui.camera_feed import CameraFeed, next_preview_tick
 from ui.camera_source_selector import CameraSourceSelector
 from ui.welcome import welcome_banner
 from ui.window_lifecycle import WorkspaceWindow
@@ -1499,6 +1499,8 @@ class CBVMSDashboard(WorkspaceWindow):
         return (len(recent)-1)/(recent[-1]-recent[0]) if len(recent)>1 else 0.0
 
     def _schedule_feed_update(self) -> None:
+        self._feed_deadline = time.monotonic() + self._feed_interval_ms/1000
+        self._feed_period_ms = self._feed_interval_ms
         self._feed_job = self.after(self._feed_interval_ms, self._update_feed)
 
     def _update_feed(self) -> None:
@@ -1527,7 +1529,10 @@ class CBVMSDashboard(WorkspaceWindow):
                 if failed != getattr(self, '_model_retry_enabled', None):
                     self._retry_model_btn.configure(state="normal" if failed else "disabled")
                     self._model_retry_enabled = failed
-                self._attendance_writer_status.configure(text=writer_status(self._database))
+                attendance_status = writer_status(self._database)
+                if attendance_status != getattr(self, '_attendance_status_text', None):
+                    self._attendance_writer_status.configure(text=attendance_status)
+                    self._attendance_status_text = attendance_status
                 sample = self._latest_monitor_sample()
                 if sample is None or started-sample.captured_at > 1.0:
                     if self._monitor_last_rendered is not None:
@@ -1620,7 +1625,11 @@ class CBVMSDashboard(WorkspaceWindow):
         except Exception as exc:
             print(f"[CBVMS] feed error: {exc}")
         if not self._closed.is_set():
-            delay = max(1, self._feed_interval_ms-int((time.monotonic()-started)*1000))
+            deadline = (getattr(self, '_feed_deadline', None)
+                        if getattr(self, '_feed_period_ms', None) == self._feed_interval_ms else None)
+            self._feed_deadline, delay = next_preview_tick(
+                deadline, started, time.monotonic(), self._feed_interval_ms)
+            self._feed_period_ms = self._feed_interval_ms
             self._feed_job = self.after(delay, self._update_feed)
 
     # ------------------------------------------------------------------

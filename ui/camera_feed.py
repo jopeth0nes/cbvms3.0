@@ -3,10 +3,20 @@
 from __future__ import annotations
 
 import tkinter as tk
+import math
 
 import cv2
 import numpy as np
 from PIL import Image, ImageTk
+
+
+def next_preview_tick(previous_deadline, started, finished, interval_ms):
+    """Keep timer lateness from accumulating; skip missed slots without bursts."""
+    period = interval_ms / 1000.0
+    deadline = (started if previous_deadline is None else previous_deadline) + period
+    if deadline <= finished:
+        deadline += (math.floor((finished-deadline)/period)+1)*period
+    return deadline, max(1, math.ceil((deadline-finished)*1000))
 
 
 def fitted_frame_rect(frame_width: int, frame_height: int,
@@ -26,10 +36,12 @@ class CameraFeed(tk.Canvas):
     def __init__(self, master, bg_color: str = "#0F1117", **kwargs) -> None:
         super().__init__(master, bg=bg_color, highlightthickness=0, **kwargs)
         self._photo: ImageTk.PhotoImage | None = None
+        self._photo_size: tuple[int, int] | None = None
         self._item: int | None = None
         self._placeholder_item: int | None = None
         self._placeholder_key: tuple | None = None
         self._geometry_key: tuple | None = None
+        self._position_key: tuple | None = None
         self._frame_rect = (0, 0, 0, 0)
 
     def render(self, frame: np.ndarray) -> bool:
@@ -49,13 +61,23 @@ class CameraFeed(tk.Canvas):
             x, y, fitted_width, fitted_height = self._frame_rect
             if frame.shape[1] != fitted_width or frame.shape[0] != fitted_height:
                 frame = cv2.resize(frame, (fitted_width, fitted_height), interpolation=cv2.INTER_LINEAR)
-            photo = ImageTk.PhotoImage(Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)), master=self)
-            self._photo = photo  # Tk does not keep a Python reference.
+            pixels = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+            size = (fitted_width, fitted_height)
+            new_photo = self._photo is None or getattr(self, '_photo_size', None) != size
+            if new_photo:
+                self._photo = ImageTk.PhotoImage(pixels, master=self)
+                self._photo_size = size
+            else:
+                self._photo.paste(pixels)
+            photo = self._photo  # Tk does not keep a Python reference.
             if self._item is None:
                 self._item = self.create_image(x, y, anchor="nw", image=photo)
-            else:
+            elif new_photo or self._placeholder_key is not None:
                 self.coords(self._item, x, y)
                 self.itemconfig(self._item, image=photo, state="normal")
+            elif key != getattr(self, '_position_key', None):
+                self.coords(self._item, x, y)
+            self._position_key = key
             if self._placeholder_key is not None:
                 self.itemconfig(self._placeholder_item, state="hidden")
                 self._placeholder_key = None
@@ -87,6 +109,8 @@ class CameraFeed(tk.Canvas):
     def cleanup(self) -> None:
         self.delete("all")
         self._photo = None
+        self._photo_size = None
+        self._position_key = None
         self._item = None
         self._placeholder_item = None
         self._placeholder_key = None

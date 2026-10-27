@@ -1,0 +1,817 @@
+{
+  "configuration": {
+    "mode": "full",
+    "source": "synthetic",
+    "render_ref": null,
+    "fps": 20,
+    "width": 1280,
+    "height": 720,
+    "seconds": 30.0,
+    "warmup": 5.0,
+    "busy": false,
+    "output": "/private/tmp/cbvms-matrix-synthetic-full-20.json"
+  },
+  "settings": {
+    "backend": "SYNTHETIC_NO_SENSOR",
+    "width": 1280,
+    "height": 720,
+    "fps": 20,
+    "requested_fps": 20
+  },
+  "measured_seconds": 30.0,
+  "accuracy_evaluated": false,
+  "empty_gallery": true,
+  "sensor_latency_measured": false,
+  "business_writes": 0,
+  "frames_saved": 0,
+  "contention": "idle",
+  "sync_counts": {
+    "accepted": 0,
+    "batches": 0
+  },
+  "errors": [],
+  "rates": {
+    "preview": {
+      "count": 580,
+      "hz": 19.333,
+      "ten_second_hz": {
+        "p1": 19.01,
+        "p50": 19.5,
+        "p95": 19.5,
+        "p99": 19.5
+      },
+      "first_30s_hz": 19.333333333333332,
+      "last_30s_hz": 19.333333333333332,
+      "gap_ms": {
+        "p1": 45.32,
+        "p50": 49.974,
+        "p95": 63.018,
+        "p99": 89.428
+      }
+    },
+    "tracking": {
+      "count": 201,
+      "hz": 6.7,
+      "ten_second_hz": {
+        "p1": 6.7,
+        "p50": 6.7,
+        "p95": 6.7,
+        "p99": 6.7
+      },
+      "first_30s_hz": 6.7,
+      "last_30s_hz": 6.7,
+      "gap_ms": {
+        "p1": 133.781,
+        "p50": 149.932,
+        "p95": 156.359,
+        "p99": 165.932
+      }
+    },
+    "assessment": {
+      "count": 51,
+      "hz": 1.7,
+      "ten_second_hz": {
+        "p1": 1.7,
+        "p50": 1.7,
+        "p95": 1.7,
+        "p99": 1.7
+      },
+      "first_30s_hz": 1.7,
+      "last_30s_hz": 1.7,
+      "gap_ms": {
+        "p1": 498.954,
+        "p50": 599.868,
+        "p95": 601.908,
+        "p99": 609.886
+      }
+    },
+    "redraw": {
+      "count": 586,
+      "hz": 19.533,
+      "ten_second_hz": {
+        "p1": 19.306,
+        "p50": 19.6,
+        "p95": 19.69,
+        "p99": 19.698
+      },
+      "first_30s_hz": 19.533333333333335,
+      "last_30s_hz": 19.533333333333335,
+      "gap_ms": {
+        "p1": 41.776,
+        "p50": 49.978,
+        "p95": 60.866,
+        "p99": 89.425
+      }
+    },
+    "capture": {
+      "count": 600,
+      "hz": 20.0,
+      "ten_second_hz": {
+        "p1": 20.0,
+        "p50": 20.0,
+        "p95": 20.0,
+        "p99": 20.0
+      },
+      "first_30s_hz": 20.0,
+      "last_30s_hz": 20.0,
+      "gap_ms": {
+        "p1": 46.595,
+        "p50": 49.994,
+        "p95": 52.295,
+        "p99": 53.538
+      }
+    }
+  },
+  "costs_ms": {
+    "face_inference_ms": {
+      "p1": 70.917,
+      "p50": 71.293,
+      "p95": 71.718,
+      "p99": 71.881
+    },
+    "capture_to_tracking_ms": {
+      "p1": 73.866,
+      "p50": 113.073,
+      "p95": 115.555,
+      "p99": 118.1
+    },
+    "sample_copy_ms": {
+      "p1": 0.074,
+      "p50": 0.107,
+      "p95": 0.129,
+      "p99": 0.175
+    },
+    "projection_ms": {
+      "p1": 0.004,
+      "p50": 0.005,
+      "p95": 0.007,
+      "p99": 0.007
+    },
+    "render_ms": {
+      "p1": 1.519,
+      "p50": 1.687,
+      "p95": 2.011,
+      "p99": 2.124
+    },
+    "preview_age_ms": {
+      "p1": 3.879,
+      "p50": 43.329,
+      "p95": 45.881,
+      "p99": 48.18
+    },
+    "feed_callback_ms": {
+      "p1": 0.262,
+      "p50": 1.983,
+      "p95": 2.536,
+      "p99": 2.798
+    },
+    "recognition_inference_ms": {
+      "p1": 0.0,
+      "p50": 0.001,
+      "p95": 0.001,
+      "p99": 0.001
+    },
+    "database_read_ms": {
+      "p1": 0.0,
+      "p50": 0.001,
+      "p95": 0.001,
+      "p99": 0.001
+    },
+    "capture_to_assessment_ms": {
+      "p1": 77.504,
+      "p50": 113.133,
+      "p95": 115.409,
+      "p99": 117.954
+    },
+    "persistence_ms": {
+      "p1": 0.001,
+      "p50": 0.001,
+      "p95": 0.001,
+      "p99": 0.001
+    }
+  },
+  "resources": [
+    {
+      "t": 0.011,
+      "rss_mb": 1271.16,
+      "cpu_percent": 158.7,
+      "queued": [
+        0,
+        0
+      ],
+      "canvas_size": [
+        702,
+        360
+      ]
+    },
+    {
+      "t": 1.011,
+      "rss_mb": 1271.09,
+      "cpu_percent": 157.0,
+      "queued": [
+        0,
+        0
+      ],
+      "canvas_size": [
+        702,
+        360
+      ]
+    },
+    {
+      "t": 2.015,
+      "rss_mb": 1269.95,
+      "cpu_percent": 158.3,
+      "queued": [
+        0,
+        0
+      ],
+      "canvas_size": [
+        702,
+        360
+      ]
+    },
+    {
+      "t": 3.016,
+      "rss_mb": 1271.5,
+      "cpu_percent": 157.2,
+      "queued": [
+        0,
+        0
+      ],
+      "canvas_size": [
+        702,
+        360
+      ]
+    },
+    {
+      "t": 4.016,
+      "rss_mb": 1271.52,
+      "cpu_percent": 152.2,
+      "queued": [
+        0,
+        0
+      ],
+      "canvas_size": [
+        702,
+        360
+      ]
+    },
+    {
+      "t": 5.03,
+      "rss_mb": 1271.53,
+      "cpu_percent": 152.8,
+      "queued": [
+        0,
+        0
+      ],
+      "canvas_size": [
+        702,
+        360
+      ]
+    },
+    {
+      "t": 6.033,
+      "rss_mb": 1270.97,
+      "cpu_percent": 163.1,
+      "queued": [
+        0,
+        0
+      ],
+      "canvas_size": [
+        702,
+        360
+      ]
+    },
+    {
+      "t": 7.033,
+      "rss_mb": 1271.28,
+      "cpu_percent": 157.6,
+      "queued": [
+        0,
+        0
+      ],
+      "canvas_size": [
+        702,
+        360
+      ]
+    },
+    {
+      "t": 8.043,
+      "rss_mb": 1271.3,
+      "cpu_percent": 151.1,
+      "queued": [
+        0,
+        0
+      ],
+      "canvas_size": [
+        702,
+        360
+      ]
+    },
+    {
+      "t": 9.059,
+      "rss_mb": 1271.31,
+      "cpu_percent": 155.3,
+      "queued": [
+        0,
+        0
+      ],
+      "canvas_size": [
+        702,
+        360
+      ]
+    },
+    {
+      "t": 10.061,
+      "rss_mb": 1271.45,
+      "cpu_percent": 163.5,
+      "queued": [
+        0,
+        0
+      ],
+      "canvas_size": [
+        702,
+        360
+      ]
+    },
+    {
+      "t": 11.066,
+      "rss_mb": 1271.3,
+      "cpu_percent": 156.8,
+      "queued": [
+        0,
+        0
+      ],
+      "canvas_size": [
+        702,
+        360
+      ]
+    },
+    {
+      "t": 12.086,
+      "rss_mb": 1271.45,
+      "cpu_percent": 151.7,
+      "queued": [
+        0,
+        0
+      ],
+      "canvas_size": [
+        702,
+        360
+      ]
+    },
+    {
+      "t": 13.086,
+      "rss_mb": 1271.66,
+      "cpu_percent": 159.3,
+      "queued": [
+        0,
+        0
+      ],
+      "canvas_size": [
+        702,
+        360
+      ]
+    },
+    {
+      "t": 14.088,
+      "rss_mb": 1271.56,
+      "cpu_percent": 156.6,
+      "queued": [
+        0,
+        0
+      ],
+      "canvas_size": [
+        702,
+        360
+      ]
+    },
+    {
+      "t": 15.089,
+      "rss_mb": 1271.58,
+      "cpu_percent": 151.1,
+      "queued": [
+        0,
+        0
+      ],
+      "canvas_size": [
+        702,
+        360
+      ]
+    },
+    {
+      "t": 16.089,
+      "rss_mb": 1271.66,
+      "cpu_percent": 167.0,
+      "queued": [
+        0,
+        0
+      ],
+      "canvas_size": [
+        702,
+        360
+      ]
+    },
+    {
+      "t": 17.089,
+      "rss_mb": 1079.7,
+      "cpu_percent": 164.7,
+      "queued": [
+        0,
+        0
+      ],
+      "canvas_size": [
+        702,
+        360
+      ]
+    },
+    {
+      "t": 18.09,
+      "rss_mb": 1079.89,
+      "cpu_percent": 148.1,
+      "queued": [
+        0,
+        0
+      ],
+      "canvas_size": [
+        702,
+        360
+      ]
+    },
+    {
+      "t": 19.091,
+      "rss_mb": 1080.14,
+      "cpu_percent": 156.9,
+      "queued": [
+        0,
+        0
+      ],
+      "canvas_size": [
+        702,
+        360
+      ]
+    },
+    {
+      "t": 20.091,
+      "rss_mb": 1079.42,
+      "cpu_percent": 165.0,
+      "queued": [
+        0,
+        0
+      ],
+      "canvas_size": [
+        702,
+        360
+      ]
+    },
+    {
+      "t": 21.093,
+      "rss_mb": 1079.16,
+      "cpu_percent": 155.8,
+      "queued": [
+        0,
+        0
+      ],
+      "canvas_size": [
+        702,
+        360
+      ]
+    },
+    {
+      "t": 22.104,
+      "rss_mb": 1080.62,
+      "cpu_percent": 165.2,
+      "queued": [
+        0,
+        0
+      ],
+      "canvas_size": [
+        702,
+        360
+      ]
+    },
+    {
+      "t": 23.104,
+      "rss_mb": 1080.69,
+      "cpu_percent": 156.4,
+      "queued": [
+        0,
+        0
+      ],
+      "canvas_size": [
+        702,
+        360
+      ]
+    },
+    {
+      "t": 24.107,
+      "rss_mb": 1080.7,
+      "cpu_percent": 147.2,
+      "queued": [
+        0,
+        0
+      ],
+      "canvas_size": [
+        702,
+        360
+      ]
+    },
+    {
+      "t": 25.119,
+      "rss_mb": 1080.7,
+      "cpu_percent": 155.8,
+      "queued": [
+        0,
+        0
+      ],
+      "canvas_size": [
+        702,
+        360
+      ]
+    },
+    {
+      "t": 26.12,
+      "rss_mb": 1080.41,
+      "cpu_percent": 162.1,
+      "queued": [
+        0,
+        0
+      ],
+      "canvas_size": [
+        702,
+        360
+      ]
+    },
+    {
+      "t": 27.123,
+      "rss_mb": 930.84,
+      "cpu_percent": 162.4,
+      "queued": [
+        0,
+        0
+      ],
+      "canvas_size": [
+        702,
+        360
+      ]
+    },
+    {
+      "t": 28.126,
+      "rss_mb": 930.98,
+      "cpu_percent": 151.2,
+      "queued": [
+        0,
+        0
+      ],
+      "canvas_size": [
+        702,
+        360
+      ]
+    },
+    {
+      "t": 29.139,
+      "rss_mb": 930.73,
+      "cpu_percent": 150.5,
+      "queued": [
+        0,
+        0
+      ],
+      "canvas_size": [
+        702,
+        360
+      ]
+    }
+  ],
+  "recent_timings": {
+    "lock_detector": {
+      "count": 466,
+      "retained": 256,
+      "p50_ms": 0.0,
+      "p95_ms": 0.001,
+      "p99_ms": 0.001
+    },
+    "lock_recognition": {
+      "count": 61,
+      "retained": 61,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "p99_ms": 0.001
+    },
+    "face_load": {
+      "count": 1,
+      "retained": 1,
+      "p50_ms": 1925.764,
+      "p95_ms": 1925.764,
+      "p99_ms": 1925.764
+    },
+    "recognition_load": {
+      "count": 1,
+      "retained": 1,
+      "p50_ms": 2032.683,
+      "p95_ms": 2032.683,
+      "p99_ms": 2032.683
+    },
+    "face_warm": {
+      "count": 1,
+      "retained": 1,
+      "p50_ms": 107.765,
+      "p95_ms": 107.765,
+      "p99_ms": 107.765
+    },
+    "lock_person": {
+      "count": 3,
+      "retained": 3,
+      "p50_ms": 0.001,
+      "p95_ms": 0.001,
+      "p99_ms": 0.001
+    },
+    "body_load": {
+      "count": 1,
+      "retained": 1,
+      "p50_ms": 104.77,
+      "p95_ms": 104.77,
+      "p99_ms": 104.77
+    },
+    "recognition_warm": {
+      "count": 1,
+      "retained": 1,
+      "p50_ms": 132.052,
+      "p95_ms": 132.052,
+      "p99_ms": 132.052
+    },
+    "lock_trainer": {
+      "count": 3,
+      "retained": 3,
+      "p50_ms": 0.0,
+      "p95_ms": 0.001,
+      "p99_ms": 0.001
+    },
+    "uniform_load": {
+      "count": 1,
+      "retained": 1,
+      "p50_ms": 772.724,
+      "p95_ms": 772.724,
+      "p99_ms": 772.724
+    },
+    "uniform_inference": {
+      "count": 1,
+      "retained": 1,
+      "p50_ms": 25.308,
+      "p95_ms": 25.308,
+      "p99_ms": 25.308
+    },
+    "body_inference": {
+      "count": 1,
+      "retained": 1,
+      "p50_ms": 831.563,
+      "p95_ms": 831.563,
+      "p99_ms": 831.563
+    },
+    "first_camera_frame": {
+      "count": 1,
+      "retained": 1,
+      "p50_ms": 62.154,
+      "p95_ms": 62.154,
+      "p99_ms": 62.154
+    },
+    "queue_tracking": {
+      "count": 232,
+      "retained": 232,
+      "p50_ms": 0.048,
+      "p95_ms": 0.059,
+      "p99_ms": 0.065
+    },
+    "ui_render": {
+      "count": 676,
+      "retained": 256,
+      "p50_ms": 1.784,
+      "p95_ms": 2.095,
+      "p99_ms": 2.224
+    },
+    "preview_age": {
+      "count": 676,
+      "retained": 256,
+      "p50_ms": 43.112,
+      "p95_ms": 45.801,
+      "p99_ms": 48.246
+    },
+    "face_inference": {
+      "count": 232,
+      "retained": 232,
+      "p50_ms": 71.308,
+      "p95_ms": 71.77,
+      "p99_ms": 73.296
+    },
+    "tracking": {
+      "count": 232,
+      "retained": 232,
+      "p50_ms": 71.363,
+      "p95_ms": 71.828,
+      "p99_ms": 73.364
+    },
+    "capture_to_tracking": {
+      "count": 232,
+      "retained": 232,
+      "p50_ms": 113.038,
+      "p95_ms": 115.492,
+      "p99_ms": 117.933
+    },
+    "queue_assessment": {
+      "count": 59,
+      "retained": 59,
+      "p50_ms": 0.031,
+      "p95_ms": 0.038,
+      "p99_ms": 0.05
+    },
+    "recognition_inference": {
+      "count": 59,
+      "retained": 59,
+      "p50_ms": 0.001,
+      "p95_ms": 0.001,
+      "p99_ms": 0.001
+    },
+    "recognition": {
+      "count": 59,
+      "retained": 59,
+      "p50_ms": 0.014,
+      "p95_ms": 0.017,
+      "p99_ms": 0.035
+    },
+    "database_read": {
+      "count": 59,
+      "retained": 59,
+      "p50_ms": 0.001,
+      "p95_ms": 0.001,
+      "p99_ms": 0.001
+    },
+    "body": {
+      "count": 59,
+      "retained": 59,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "p99_ms": 0.0
+    },
+    "capture_to_assessment": {
+      "count": 59,
+      "retained": 59,
+      "p50_ms": 113.109,
+      "p95_ms": 115.3,
+      "p99_ms": 117.808
+    },
+    "persistence": {
+      "count": 59,
+      "retained": 59,
+      "p50_ms": 0.001,
+      "p95_ms": 0.001,
+      "p99_ms": 0.001
+    }
+  },
+  "workers_stopped": {
+    "camera": true,
+    "tracking": true,
+    "assessment": true
+  },
+  "opened_sources": [
+    {
+      "kind": "synthetic",
+      "settings": {
+        "backend": "SYNTHETIC_NO_SENSOR",
+        "width": 1280,
+        "height": 720,
+        "fps": 20,
+        "requested_fps": 20
+      }
+    }
+  ],
+  "reader_stopped": true,
+  "models": {
+    "face": "ready",
+    "recognition": "ready",
+    "body": "ready",
+    "uniform": "ready",
+    "earring": "failed"
+  },
+  "cost_sample_counts": {
+    "face_inference_ms": 201,
+    "capture_to_tracking_ms": 201,
+    "sample_copy_ms": 651,
+    "projection_ms": 600,
+    "render_ms": 586,
+    "preview_age_ms": 586,
+    "feed_callback_ms": 600,
+    "recognition_inference_ms": 51,
+    "database_read_ms": 51,
+    "capture_to_assessment_ms": 51,
+    "persistence_ms": 51
+  },
+  "source_sha256_at_start": {
+    "core/camera.py": "c04baec8892ffcc83fff5b4422eb829ee2183c16afb84baa3db0c5ad1745327d",
+    "core/live_pipeline.py": "bf4db8bbfd86d5e14be621e2e44f168180d4d1524ed878c8a6b992bff4226344",
+    "ui/dashboard.py": "0bb4f783c523d753c47865d9482d0168f96ee6dd1ec770a3835a1fa4257a6287",
+    "ui/camera_feed.py": "0ba6f02cdff4a7d6e6a60b6d3bc6a40852610d03767bd788d5962c65ae963dc7",
+    "scripts/benchmark_camera_runtime.py": "266d2493b9069d8d23d9bc0d091369d4aa98fa1fdc150a7dcb2fef9a91f598a6"
+  },
+  "timestamp_semantics": "Capture timestamps follow backend read/decode. Preview measures unique Tk image submissions, not compositor presentation or sensor-to-screen latency. OpenCV exposes no sensor sequence/PTS here; no hashes are used to discard static scenes.",
+  "acquired_not_presented": 20,
+  "source_dropped_before_decode": null
+}

@@ -71,7 +71,8 @@ class PerformanceMetrics:
                 at = (len(ordered)-1)*p
                 lower = int(at)
                 return round(1000*(ordered[lower]+(ordered[min(lower+1, len(ordered)-1)]-ordered[lower])*(at-lower)), 3)
-            result[name] = dict(count=count, retained=len(samples), p50_ms=percentile(.5), p95_ms=percentile(.95))
+            result[name] = dict(count=count, retained=len(samples), p50_ms=percentile(.5),
+                                p95_ms=percentile(.95), p99_ms=percentile(.99))
         return result
 
 

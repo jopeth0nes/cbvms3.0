@@ -1,0 +1,274 @@
+{
+  "configuration": {
+    "mode": "preview",
+    "source": "usb",
+    "render_ref": null,
+    "fps": 30,
+    "width": 1280,
+    "height": 720,
+    "seconds": 30.0,
+    "warmup": 5.0,
+    "busy": false,
+    "output": "/private/tmp/cbvms-matrix-usb-preview-30.json"
+  },
+  "settings": {
+    "backend": "AVFOUNDATION",
+    "width": 1280.0,
+    "height": 720.0,
+    "fps": 30.0,
+    "requested_fps": 30
+  },
+  "measured_seconds": 30.0,
+  "accuracy_evaluated": false,
+  "empty_gallery": true,
+  "sensor_latency_measured": false,
+  "business_writes": 0,
+  "frames_saved": 0,
+  "contention": "idle",
+  "sync_counts": {
+    "accepted": 0,
+    "batches": 0
+  },
+  "errors": [],
+  "rates": {
+    "capture": {
+      "count": 900,
+      "hz": 30.0,
+      "ten_second_hz": {
+        "p1": 30.0,
+        "p50": 30.0,
+        "p95": 30.0,
+        "p99": 30.0
+      },
+      "first_30s_hz": 30.0,
+      "last_30s_hz": 30.0,
+      "gap_ms": {
+        "p1": 29.578,
+        "p50": 33.377,
+        "p95": 34.955,
+        "p99": 36.958
+      }
+    },
+    "preview": {
+      "count": 796,
+      "hz": 26.533,
+      "ten_second_hz": {
+        "p1": 26.208,
+        "p50": 26.6,
+        "p95": 26.78,
+        "p99": 26.796
+      },
+      "first_30s_hz": 26.533333333333335,
+      "last_30s_hz": 26.533333333333335,
+      "gap_ms": {
+        "p1": 33.527,
+        "p50": 37.564,
+        "p95": 39.13,
+        "p99": 47.348
+      }
+    }
+  },
+  "costs_ms": {
+    "sample_copy_ms": {
+      "p1": 0.159,
+      "p50": 0.377,
+      "p95": 0.549,
+      "p99": 0.654
+    },
+    "render_ms": {
+      "p1": 3.44,
+      "p50": 3.955,
+      "p95": 4.631,
+      "p99": 5.046
+    },
+    "capture_to_output_ms": {
+      "p1": 4.625,
+      "p50": 19.723,
+      "p95": 36.773,
+      "p99": 38.692
+    }
+  },
+  "resources": [
+    {
+      "t": 0.021,
+      "rss_mb": 345.8,
+      "cpu_percent": 130.1
+    },
+    {
+      "t": 1.048,
+      "rss_mb": 345.88,
+      "cpu_percent": 117.0
+    },
+    {
+      "t": 2.07,
+      "rss_mb": 344.34,
+      "cpu_percent": 116.4
+    },
+    {
+      "t": 3.085,
+      "rss_mb": 344.34,
+      "cpu_percent": 116.6
+    },
+    {
+      "t": 4.099,
+      "rss_mb": 344.41,
+      "cpu_percent": 114.7
+    },
+    {
+      "t": 5.134,
+      "rss_mb": 344.48,
+      "cpu_percent": 116.7
+    },
+    {
+      "t": 6.156,
+      "rss_mb": 344.28,
+      "cpu_percent": 117.0
+    },
+    {
+      "t": 7.192,
+      "rss_mb": 344.33,
+      "cpu_percent": 116.3
+    },
+    {
+      "t": 8.216,
+      "rss_mb": 344.64,
+      "cpu_percent": 116.1
+    },
+    {
+      "t": 9.229,
+      "rss_mb": 344.44,
+      "cpu_percent": 116.2
+    },
+    {
+      "t": 10.249,
+      "rss_mb": 344.45,
+      "cpu_percent": 116.6
+    },
+    {
+      "t": 11.265,
+      "rss_mb": 344.52,
+      "cpu_percent": 116.4
+    },
+    {
+      "t": 12.276,
+      "rss_mb": 344.52,
+      "cpu_percent": 116.6
+    },
+    {
+      "t": 13.291,
+      "rss_mb": 344.84,
+      "cpu_percent": 116.4
+    },
+    {
+      "t": 14.312,
+      "rss_mb": 344.86,
+      "cpu_percent": 116.9
+    },
+    {
+      "t": 15.325,
+      "rss_mb": 344.88,
+      "cpu_percent": 117.6
+    },
+    {
+      "t": 16.337,
+      "rss_mb": 344.88,
+      "cpu_percent": 116.9
+    },
+    {
+      "t": 17.343,
+      "rss_mb": 344.88,
+      "cpu_percent": 102.9
+    },
+    {
+      "t": 18.363,
+      "rss_mb": 344.84,
+      "cpu_percent": 116.8
+    },
+    {
+      "t": 19.385,
+      "rss_mb": 344.89,
+      "cpu_percent": 116.6
+    },
+    {
+      "t": 20.397,
+      "rss_mb": 344.89,
+      "cpu_percent": 116.3
+    },
+    {
+      "t": 21.414,
+      "rss_mb": 344.64,
+      "cpu_percent": 117.3
+    },
+    {
+      "t": 22.43,
+      "rss_mb": 344.59,
+      "cpu_percent": 117.1
+    },
+    {
+      "t": 23.448,
+      "rss_mb": 344.59,
+      "cpu_percent": 117.0
+    },
+    {
+      "t": 24.462,
+      "rss_mb": 344.86,
+      "cpu_percent": 117.2
+    },
+    {
+      "t": 25.47,
+      "rss_mb": 344.84,
+      "cpu_percent": 114.7
+    },
+    {
+      "t": 26.484,
+      "rss_mb": 344.84,
+      "cpu_percent": 118.5
+    },
+    {
+      "t": 27.491,
+      "rss_mb": 345.16,
+      "cpu_percent": 117.5
+    },
+    {
+      "t": 28.509,
+      "rss_mb": 339.59,
+      "cpu_percent": 116.9
+    },
+    {
+      "t": 29.517,
+      "rss_mb": 335.55,
+      "cpu_percent": 118.2
+    }
+  ],
+  "recent_timings": {},
+  "workers_stopped": {},
+  "opened_sources": [
+    {
+      "kind": "usb",
+      "settings": {
+        "backend": "AVFOUNDATION",
+        "width": 1280.0,
+        "height": 720.0,
+        "fps": 30.0,
+        "requested_fps": 30
+      }
+    }
+  ],
+  "reader_stopped": true,
+  "models": {},
+  "cost_sample_counts": {
+    "sample_copy_ms": 804,
+    "render_ms": 798,
+    "capture_to_output_ms": 798
+  },
+  "source_sha256_at_start": {
+    "core/camera.py": "c04baec8892ffcc83fff5b4422eb829ee2183c16afb84baa3db0c5ad1745327d",
+    "core/live_pipeline.py": "bf4db8bbfd86d5e14be621e2e44f168180d4d1524ed878c8a6b992bff4226344",
+    "ui/dashboard.py": "0bb4f783c523d753c47865d9482d0168f96ee6dd1ec770a3835a1fa4257a6287",
+    "ui/camera_feed.py": "0ba6f02cdff4a7d6e6a60b6d3bc6a40852610d03767bd788d5962c65ae963dc7",
+    "scripts/benchmark_camera_runtime.py": "266d2493b9069d8d23d9bc0d091369d4aa98fa1fdc150a7dcb2fef9a91f598a6"
+  },
+  "timestamp_semantics": "Capture timestamps follow backend read/decode. Preview measures unique Tk image submissions, not compositor presentation or sensor-to-screen latency. OpenCV exposes no sensor sequence/PTS here; no hashes are used to discard static scenes.",
+  "acquired_not_presented": 104,
+  "source_dropped_before_decode": null
+}

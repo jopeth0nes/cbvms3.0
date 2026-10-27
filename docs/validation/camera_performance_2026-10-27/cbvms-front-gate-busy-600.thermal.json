@@ -1,0 +1,436 @@
+[
+  {
+    "active_processors": 10,
+    "low_power_mode": true,
+    "thermal_name": "nominal",
+    "thermal_state": 0,
+    "elapsed": 0.02
+  },
+  {
+    "active_processors": 10,
+    "low_power_mode": true,
+    "thermal_name": "nominal",
+    "thermal_state": 0,
+    "elapsed": 10.04
+  },
+  {
+    "active_processors": 10,
+    "low_power_mode": true,
+    "thermal_name": "nominal",
+    "thermal_state": 0,
+    "elapsed": 20.05
+  },
+  {
+    "active_processors": 10,
+    "low_power_mode": true,
+    "thermal_name": "nominal",
+    "thermal_state": 0,
+    "elapsed": 30.08
+  },
+  {
+    "active_processors": 10,
+    "low_power_mode": true,
+    "thermal_name": "nominal",
+    "thermal_state": 0,
+    "elapsed": 40.09
+  },
+  {
+    "active_processors": 10,
+    "low_power_mode": true,
+    "thermal_name": "nominal",
+    "thermal_state": 0,
+    "elapsed": 50.11
+  },
+  {
+    "active_processors": 10,
+    "low_power_mode": true,
+    "thermal_name": "nominal",
+    "thermal_state": 0,
+    "elapsed": 60.13
+  },
+  {
+    "active_processors": 10,
+    "low_power_mode": true,
+    "thermal_name": "nominal",
+    "thermal_state": 0,
+    "elapsed": 70.15
+  },
+  {
+    "active_processors": 10,
+    "low_power_mode": true,
+    "thermal_name": "nominal",
+    "thermal_state": 0,
+    "elapsed": 80.17
+  },
+  {
+    "active_processors": 10,
+    "low_power_mode": true,
+    "thermal_name": "nominal",
+    "thermal_state": 0,
+    "elapsed": 90.19
+  },
+  {
+    "active_processors": 10,
+    "low_power_mode": true,
+    "thermal_name": "nominal",
+    "thermal_state": 0,
+    "elapsed": 100.21
+  },
+  {
+    "active_processors": 10,
+    "low_power_mode": true,
+    "thermal_name": "nominal",
+    "thermal_state": 0,
+    "elapsed": 110.22
+  },
+  {
+    "active_processors": 10,
+    "low_power_mode": true,
+    "thermal_name": "nominal",
+    "thermal_state": 0,
+    "elapsed": 120.25
+  },
+  {
+    "active_processors": 10,
+    "low_power_mode": true,
+    "thermal_name": "nominal",
+    "thermal_state": 0,
+    "elapsed": 130.26
+  },
+  {
+    "active_processors": 10,
+    "low_power_mode": true,
+    "thermal_name": "nominal",
+    "thermal_state": 0,
+    "elapsed": 140.28
+  },
+  {
+    "active_processors": 10,
+    "low_power_mode": true,
+    "thermal_name": "nominal",
+    "thermal_state": 0,
+    "elapsed": 150.3
+  },
+  {
+    "active_processors": 10,
+    "low_power_mode": true,
+    "thermal_name": "nominal",
+    "thermal_state": 0,
+    "elapsed": 160.32
+  },
+  {
+    "active_processors": 10,
+    "low_power_mode": true,
+    "thermal_name": "nominal",
+    "thermal_state": 0,
+    "elapsed": 170.34
+  },
+  {
+    "active_processors": 10,
+    "low_power_mode": true,
+    "thermal_name": "nominal",
+    "thermal_state": 0,
+    "elapsed": 180.36
+  },
+  {
+    "active_processors": 10,
+    "low_power_mode": true,
+    "thermal_name": "nominal",
+    "thermal_state": 0,
+    "elapsed": 190.38
+  },
+  {
+    "active_processors": 10,
+    "low_power_mode": true,
+    "thermal_name": "nominal",
+    "thermal_state": 0,
+    "elapsed": 200.41
+  },
+  {
+    "active_processors": 10,
+    "low_power_mode": true,
+    "thermal_name": "nominal",
+    "thermal_state": 0,
+    "elapsed": 210.42
+  },
+  {
+    "active_processors": 10,
+    "low_power_mode": true,
+    "thermal_name": "nominal",
+    "thermal_state": 0,
+    "elapsed": 220.44
+  },
+  {
+    "active_processors": 10,
+    "low_power_mode": true,
+    "thermal_name": "nominal",
+    "thermal_state": 0,
+    "elapsed": 230.46
+  },
+  {
+    "active_processors": 10,
+    "low_power_mode": true,
+    "thermal_name": "nominal",
+    "thermal_state": 0,
+    "elapsed": 240.47
+  },
+  {
+    "active_processors": 10,
+    "low_power_mode": true,
+    "thermal_name": "nominal",
+    "thermal_state": 0,
+    "elapsed": 250.49
+  },
+  {
+    "active_processors": 10,
+    "low_power_mode": true,
+    "thermal_name": "nominal",
+    "thermal_state": 0,
+    "elapsed": 260.51
+  },
+  {
+    "active_processors": 10,
+    "low_power_mode": true,
+    "thermal_name": "nominal",
+    "thermal_state": 0,
+    "elapsed": 270.53
+  },
+  {
+    "active_processors": 10,
+    "low_power_mode": true,
+    "thermal_name": "nominal",
+    "thermal_state": 0,
+    "elapsed": 280.54
+  },
+  {
+    "active_processors": 10,
+    "low_power_mode": true,
+    "thermal_name": "nominal",
+    "thermal_state": 0,
+    "elapsed": 290.56
+  },
+  {
+    "active_processors": 10,
+    "low_power_mode": true,
+    "thermal_name": "nominal",
+    "thermal_state": 0,
+    "elapsed": 300.59
+  },
+  {
+    "active_processors": 10,
+    "low_power_mode": true,
+    "thermal_name": "nominal",
+    "thermal_state": 0,
+    "elapsed": 310.6
+  },
+  {
+    "active_processors": 10,
+    "low_power_mode": true,
+    "thermal_name": "nominal",
+    "thermal_state": 0,
+    "elapsed": 320.62
+  },
+  {
+    "active_processors": 10,
+    "low_power_mode": true,
+    "thermal_name": "nominal",
+    "thermal_state": 0,
+    "elapsed": 330.64
+  },
+  {
+    "active_processors": 10,
+    "low_power_mode": true,
+    "thermal_name": "nominal",
+    "thermal_state": 0,
+    "elapsed": 340.66
+  },
+  {
+    "active_processors": 10,
+    "low_power_mode": true,
+    "thermal_name": "nominal",
+    "thermal_state": 0,
+    "elapsed": 350.68
+  },
+  {
+    "active_processors": 10,
+    "low_power_mode": true,
+    "thermal_name": "nominal",
+    "thermal_state": 0,
+    "elapsed": 360.7
+  },
+  {
+    "active_processors": 10,
+    "low_power_mode": true,
+    "thermal_name": "nominal",
+    "thermal_state": 0,
+    "elapsed": 370.72
+  },
+  {
+    "active_processors": 10,
+    "low_power_mode": true,
+    "thermal_name": "nominal",
+    "thermal_state": 0,
+    "elapsed": 380.74
+  },
+  {
+    "active_processors": 10,
+    "low_power_mode": true,
+    "thermal_name": "nominal",
+    "thermal_state": 0,
+    "elapsed": 390.76
+  },
+  {
+    "active_processors": 10,
+    "low_power_mode": true,
+    "thermal_name": "nominal",
+    "thermal_state": 0,
+    "elapsed": 400.79
+  },
+  {
+    "active_processors": 10,
+    "low_power_mode": true,
+    "thermal_name": "nominal",
+    "thermal_state": 0,
+    "elapsed": 410.81
+  },
+  {
+    "active_processors": 10,
+    "low_power_mode": true,
+    "thermal_name": "nominal",
+    "thermal_state": 0,
+    "elapsed": 420.83
+  },
+  {
+    "active_processors": 10,
+    "low_power_mode": true,
+    "thermal_name": "nominal",
+    "thermal_state": 0,
+    "elapsed": 430.85
+  },
+  {
+    "active_processors": 10,
+    "low_power_mode": true,
+    "thermal_name": "nominal",
+    "thermal_state": 0,
+    "elapsed": 440.87
+  },
+  {
+    "active_processors": 10,
+    "low_power_mode": true,
+    "thermal_name": "nominal",
+    "thermal_state": 0,
+    "elapsed": 450.89
+  },
+  {
+    "active_processors": 10,
+    "low_power_mode": true,
+    "thermal_name": "nominal",
+    "thermal_state": 0,
+    "elapsed": 460.91
+  },
+  {
+    "active_processors": 10,
+    "low_power_mode": true,
+    "thermal_name": "nominal",
+    "thermal_state": 0,
+    "elapsed": 470.93
+  },
+  {
+    "active_processors": 10,
+    "low_power_mode": true,
+    "thermal_name": "nominal",
+    "thermal_state": 0,
+    "elapsed": 480.95
+  },
+  {
+    "active_processors": 10,
+    "low_power_mode": true,
+    "thermal_name": "nominal",
+    "thermal_state": 0,
+    "elapsed": 490.97
+  },
+  {
+    "active_processors": 10,
+    "low_power_mode": true,
+    "thermal_name": "nominal",
+    "thermal_state": 0,
+    "elapsed": 500.99
+  },
+  {
+    "active_processors": 10,
+    "low_power_mode": true,
+    "thermal_name": "nominal",
+    "thermal_state": 0,
+    "elapsed": 511.0
+  },
+  {
+    "active_processors": 10,
+    "low_power_mode": true,
+    "thermal_name": "nominal",
+    "thermal_state": 0,
+    "elapsed": 521.02
+  },
+  {
+    "active_processors": 10,
+    "low_power_mode": true,
+    "thermal_name": "nominal",
+    "thermal_state": 0,
+    "elapsed": 531.04
+  },
+  {
+    "active_processors": 10,
+    "low_power_mode": true,
+    "thermal_name": "nominal",
+    "thermal_state": 0,
+    "elapsed": 541.06
+  },
+  {
+    "active_processors": 10,
+    "low_power_mode": true,
+    "thermal_name": "nominal",
+    "thermal_state": 0,
+    "elapsed": 551.08
+  },
+  {
+    "active_processors": 10,
+    "low_power_mode": true,
+    "thermal_name": "nominal",
+    "thermal_state": 0,
+    "elapsed": 561.09
+  },
+  {
+    "active_processors": 10,
+    "low_power_mode": true,
+    "thermal_name": "nominal",
+    "thermal_state": 0,
+    "elapsed": 571.11
+  },
+  {
+    "active_processors": 10,
+    "low_power_mode": true,
+    "thermal_name": "nominal",
+    "thermal_state": 0,
+    "elapsed": 581.13
+  },
+  {
+    "active_processors": 10,
+    "low_power_mode": true,
+    "thermal_name": "nominal",
+    "thermal_state": 0,
+    "elapsed": 591.15
+  },
+  {
+    "active_processors": 10,
+    "low_power_mode": true,
+    "thermal_name": "nominal",
+    "thermal_state": 0,
+    "elapsed": 601.16
+  },
+  {
+    "active_processors": 10,
+    "low_power_mode": true,
+    "thermal_name": "nominal",
+    "thermal_state": 0,
+    "elapsed": 611.18
+  }
+]

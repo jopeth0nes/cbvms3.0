@@ -1,0 +1,77 @@
+[
+  {
+    "formats" : [
+      {
+        "fps_ranges" : [
+          {
+            "max" : 30,
+            "min" : 15
+          }
+        ],
+        "height" : 480,
+        "width" : 640
+      },
+      {
+        "fps_ranges" : [
+          {
+            "max" : 30,
+            "min" : 15
+          }
+        ],
+        "height" : 720,
+        "width" : 1280
+      },
+      {
+        "fps_ranges" : [
+          {
+            "max" : 30,
+            "min" : 15
+          }
+        ],
+        "height" : 1328,
+        "width" : 1760
+      },
+      {
+        "fps_ranges" : [
+          {
+            "max" : 30,
+            "min" : 15
+          }
+        ],
+        "height" : 1760,
+        "width" : 1328
+      },
+      {
+        "fps_ranges" : [
+          {
+            "max" : 30,
+            "min" : 15
+          }
+        ],
+        "height" : 1552,
+        "width" : 1552
+      },
+      {
+        "fps_ranges" : [
+          {
+            "max" : 30,
+            "min" : 15
+          }
+        ],
+        "height" : 1080,
+        "width" : 1920
+      },
+      {
+        "fps_ranges" : [
+          {
+            "max" : 30,
+            "min" : 15
+          }
+        ],
+        "height" : 1920,
+        "width" : 1080
+      }
+    ],
+    "name" : "MacBook Air Camera"
+  }
+]

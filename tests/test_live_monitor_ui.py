@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 
-from ui.camera_feed import CameraFeed, fitted_frame_rect
+from ui.camera_feed import CameraFeed, fitted_frame_rect, next_preview_tick
 from ui.live_alerts import LiveAlerts, LiveAlertsModel, _PresenceCard, assessment_style
 from ui.live_overlay import clipped_box, draw_assessments, label_rect
 
@@ -33,6 +33,19 @@ def fake_canvas(width=800, height=600):
 
 
 class CameraFeedLayoutTests(unittest.TestCase):
+    def test_timer_lateness_does_not_accumulate_or_trigger_catchup_bursts(self):
+        due = 10.0
+        for _ in range(100):
+            # A 12 ms late callback with 5 ms of rendering must retain the clock.
+            next_due, delay = next_preview_tick(due, due+.012, due+.017, 33)
+            self.assertAlmostEqual(next_due-due, .033)
+            self.assertIn(delay, (16, 17))
+            due = next_due
+        next_due, delay = next_preview_tick(due, due+.2, due+.21, 33)
+        self.assertGreater(next_due, due+.21)
+        self.assertLessEqual(next_due, due+.243)
+        self.assertGreaterEqual(delay, 1)
+
     def test_landscape_frame_is_letterboxed_without_cropping(self):
         self.assertEqual(fitted_frame_rect(1280, 720, 800, 600), (0, 75, 800, 450))
         self.assertEqual(fitted_frame_rect(640, 480, 1280, 720), (160, 0, 960, 720))
@@ -54,9 +67,36 @@ class CameraFeedLayoutTests(unittest.TestCase):
         self.assertEqual(canvas.create_image.call_args.args, (0, 75))
         self.assertTrue(CameraFeed.render(canvas, frame))
         canvas.create_image.assert_called_once()
-        self.assertEqual(photo.call_count, 2)
-        canvas.coords.assert_called_once_with(1, 0, 75)
+        self.assertEqual(photo.call_count, 1)
+        photo.return_value.paste.assert_called_once()
+        canvas.coords.assert_not_called()
         self.assertEqual(frame[0, 0].tolist(), [0, 0, 200])
+
+    @patch("ui.camera_feed.ImageTk.PhotoImage")
+    def test_image_reuse_preserves_new_pixels_resize_and_reconnect(self, photo):
+        canvas = fake_canvas()
+        frame = np.zeros((720, 1280, 3), np.uint8)
+        CameraFeed.render(canvas, frame)
+        frame[:, :, 0] = 150
+        CameraFeed.render(canvas, frame)
+        self.assertEqual(photo.return_value.paste.call_args.args[0].getpixel((0, 0)), (0, 0, 150))
+        CameraFeed.show_placeholder(canvas, 'Reconnecting')
+        CameraFeed.render(canvas, frame)
+        canvas.itemconfig.assert_any_call(1, image=photo.return_value, state='normal')
+        self.assertEqual(photo.call_count, 1)
+        # Same fitted pixels, different letterbox position: move the reused item.
+        canvas.winfo_width = lambda: 840
+        canvas.winfo_height = lambda: 450
+        CameraFeed.render(canvas, frame)
+        self.assertEqual(photo.call_count, 1)
+        canvas.coords.assert_called_with(1, 20, 0)
+        canvas.winfo_width = lambda: 400
+        CameraFeed.render(canvas, frame)
+        self.assertEqual(photo.call_count, 2)
+        self.assertEqual(photo.call_args.args[0].size, (400, 225))
+        CameraFeed.cleanup(canvas)
+        self.assertIsNone(canvas._photo)
+        self.assertIsNone(canvas._photo_size)
 
     @patch("ui.camera_feed.ImageTk.PhotoImage")
     def test_placeholders_are_text_cached_and_restore_render(self, photo):

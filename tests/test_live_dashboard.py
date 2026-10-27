@@ -166,6 +166,31 @@ class LiveDashboardTests(unittest.TestCase):
         self.assertEqual(len(panel._preview_times), 0)
         self.assertIsNone(panel._monitor_last_rendered)
 
+    def test_writer_status_redraws_only_when_status_changes(self):
+        panel = dashboard()
+        with patch('ui.dashboard.writer_status', side_effect=['Ready', 'Ready', 'Busy']):
+            tick(panel, 10.1)
+            tick(panel, 10.2)
+            tick(panel, 10.3)
+        self.assertEqual(panel._attendance_writer_status.configure.call_count, 2)
+        panel._attendance_writer_status.configure.assert_called_with(text='Busy')
+
+    def test_higher_capture_rates_do_not_accelerate_assessment_evidence(self):
+        for fps in (20, 30, 60):
+            with self.subTest(fps=fps):
+                panel = dashboard()
+                for sequence in range(fps*2):
+                    at = 10+sequence/fps
+                    result = replace(result_for(sample(sequence, at)), observations=())
+                    with patch('core.live_pipeline.time.monotonic', return_value=at):
+                        CBVMSDashboard._on_localized(panel, result)
+                offered = [call.args[0] for call in panel._live_worker.offer.call_args_list]
+                self.assertGreaterEqual(len(offered), 3)
+                self.assertLessEqual(len(offered), 4)
+                self.assertTrue(all(b.context.captured_at-a.context.captured_at >= .5
+                                    for a,b in zip(offered, offered[1:])))
+                self.assertEqual(len({task.context.frame_id for task in offered}), len(offered))
+
     def test_measurement_uses_recent_observations_not_requested_fps(self):
         self.assertEqual(CBVMSDashboard._measured_rate([1, 2], 20), 0)
         self.assertEqual(CBVMSDashboard._measured_rate([10], 10), 0)

@@ -72,6 +72,19 @@ class LiveMonitorNativeUITests(unittest.TestCase):
         self.assertTrue(self.feed.render(frame))
         self.assertLess(abs(self.feed._frame_rect[2] / self.feed._frame_rect[3] - 1280 / 720), .01)
 
+    def test_native_reused_photo_updates_pixels_without_accumulating_images(self):
+        frame = np.zeros((720, 1280, 3), np.uint8)
+        self.feed.render(frame)
+        photo = self.feed._photo
+        initial = set(self.root.tk.call('image', 'names'))
+        for value in (40, 80, 120, 160, 200):
+            frame[:, :, 2] = value
+            self.assertTrue(self.feed.render(frame))
+            self.pump()
+            self.assertIs(self.feed._photo, photo)
+            self.assertEqual(tuple(self.root.tk.call(str(photo), 'get', 0, 0)), (value, 0, 0))
+        self.assertEqual(set(self.root.tk.call('image', 'names')), initial)
+
     def test_native_cards_wrap_update_in_place_and_clear_display_only(self):
         self.alerts.update_assessments([self.row()])
         self.pump()

@@ -64,6 +64,7 @@ class MonitorPerformanceTests(unittest.TestCase):
         self.assertEqual(result["tracking"]["retained"], 4)
         self.assertEqual(result["tracking"]["p50_ms"], 7.5)
         self.assertEqual(result["tracking"]["p95_ms"], 8.85)
+        self.assertEqual(result["tracking"]["p99_ms"], 8.97)
 
     def test_metrics_do_not_capture_task_or_identity_fields(self):
         metrics = PerformanceMetrics(enabled=True)
