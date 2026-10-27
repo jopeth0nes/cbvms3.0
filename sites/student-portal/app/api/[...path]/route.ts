@@ -1,6 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { authRoute, studentSession, csrfValid } from '../../../lib/student-auth';
 import { createHash } from 'node:crypto';
+import { incrementalSync } from '../../../lib/incremental-sync';
 import { cloudSync, evidenceKey } from '../../../lib/cloud-sync';
 
 export const dynamic = 'force-dynamic';
@@ -26,6 +27,7 @@ function picture(encoded: string, filename: string) {
 }
 async function route(request: Request) {
   const url = new URL(request.url), path = url.pathname;
+  if (path.startsWith('/api/campus/')) return incrementalSync(request);
   if (path.startsWith('/api/sync/')) return cloudSync(request, path, body);
   if (['/api/login', '/api/logout', '/api/setup/password', '/api/password'].includes(path)) {
     const response = await authRoute(request, request.method === 'POST' ? await body(request) : {});

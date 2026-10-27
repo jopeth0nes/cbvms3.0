@@ -12,7 +12,7 @@ try {
  const db=await mf.getD1Database('DB'),bucket=await mf.getR2Bucket('BUCKET');
  for(const name of (await readdir('drizzle')).filter(n=>n.endsWith('.sql')).sort()) {
   const sql=await readFile('drizzle/'+name,'utf8');
-  const statements=(name.startsWith('0006')||name.startsWith('0007'))?sql.split('--> statement-breakpoint'):sql.split('--> statement-breakpoint').flatMap(s=>s.split(';'));
+  const statements=sql.includes('CREATE TRIGGER')?sql.split('--> statement-breakpoint'):sql.split('--> statement-breakpoint').flatMap(s=>s.split(';'));
   for(const stmt of statements.filter(s=>s.trim())) await db.prepare(stmt).run();
  }
  async function call(path,data,headers={}) {const r=await mf.dispatchFetch('https://portal.test'+path,{method:data===undefined?'GET':'POST',headers:{'Content-Type':'application/json',Origin:'https://portal.test',...headers},...(data===undefined?{}:{body:JSON.stringify(data)})});return {status:r.status,data:await r.json(),cookie:r.headers.get('Set-Cookie')?.split(';')[0]};}
