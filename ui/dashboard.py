@@ -33,6 +33,7 @@ from core.trainer import ViolationTrainer
 from core.violation_engine import LiveViolationChecker
 from database.db_manager import CBVMSDatabase
 from ui.camera_feed import CameraFeed
+from ui.camera_source_selector import CameraSourceSelector
 from ui.welcome import welcome_banner
 from ui.window_lifecycle import WorkspaceWindow
 from ui.enrollment import EnrollmentPanel
@@ -272,7 +273,7 @@ class CBVMSDashboard(WorkspaceWindow):
         apply_cbvms_theme()
         self.title("CBVMS — Superadmin Dashboard" if self._is_superadmin else "CBVMS — Dashboard")
         self.geometry("1280x800")
-        self.minsize(1280, 800)
+        self.minsize(1280, 540)
         self.configure(fg_color=COLOR_BG)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
@@ -342,19 +343,21 @@ class CBVMSDashboard(WorkspaceWindow):
         )
         sidebar.grid(row=0, column=0, rowspan=2, sticky="nsw", padx=(PADDING, 0), pady=PADDING)
         sidebar.grid_propagate(False)
+        sidebar.grid_columnconfigure(0, weight=1)
+        sidebar.grid_rowconfigure(3, weight=1)
 
         ctk.CTkLabel(
             sidebar, text="CBVMS", font=heading_font(26), text_color="#D0AE68",
-        ).pack(anchor="w", padx=PADDING, pady=(PADDING_LG, 0))
+        ).grid(row=0, column=0, sticky="w", padx=PADDING, pady=(PADDING_LG, 0))
 
         ctk.CTkLabel(
             sidebar, text="CAMPUS OPERATIONS",
             font=body_small_font(), text_color=COLOR_TEXT_MUTED,
-        ).pack(anchor="w", padx=PADDING, pady=(0, PADDING))
+        ).grid(row=1, column=0, sticky="w", padx=PADDING, pady=(0, PADDING))
 
         # Notification bell with unread-count badge overlay.
         bell_wrap = ctk.CTkFrame(sidebar, fg_color="transparent", height=44)
-        bell_wrap.pack(fill="x", padx=PADDING, pady=(0, PADDING))
+        bell_wrap.grid(row=2, column=0, sticky="ew", padx=PADDING, pady=(0, PADDING))
         bell_btn = ctk.CTkButton(
             bell_wrap, text="🔔  Alerts", anchor="w", height=40,
             corner_radius=CORNER_RADIUS, fg_color=COLOR_BORDER, hover_color=COLOR_ACCENT_HOVER,
@@ -367,6 +370,14 @@ class CBVMSDashboard(WorkspaceWindow):
             fg_color=COLOR_DANGER, text_color=COLOR_TEXT, font=body_small_font(),
         )
         # Placed/forgotten dynamically in _update_bell_badge().
+
+        # Only the menu shrinks/scrolls; reserve the footer even on short displays.
+        navigation = ctk.CTkScrollableFrame(
+            sidebar, height=1, fg_color="transparent", corner_radius=0,
+            scrollbar_button_color=COLOR_BORDER,
+            scrollbar_button_hover_color=COLOR_ACCENT_HOVER,
+        )
+        navigation.grid(row=3, column=0, sticky="nsew", padx=6)
 
         nav_items = [
             ("live",       "📹  Live Monitor"),
@@ -389,14 +400,14 @@ class CBVMSDashboard(WorkspaceWindow):
             if key in {"training", "accounts", "recycle_bin"} and not self._is_superadmin:
                 continue
             btn = ctk.CTkButton(
-                sidebar, text=label, anchor="w", height=40,
+                navigation, text=label, anchor="w", height=40,
                 corner_radius=CORNER_RADIUS,
                 fg_color=COLOR_ACCENT if key == "live" else "transparent",
                 hover_color=COLOR_ACCENT_HOVER if key == "live" else COLOR_BORDER,
                 text_color=COLOR_TEXT, font=body_small_font(),
                 command=lambda k=key: self._on_nav_select(k),
             )
-            btn.pack(fill="x", padx=PADDING, pady=4)
+            btn.pack(fill="x", padx=4, pady=4)
             self._nav_buttons[key] = btn
 
             def _enter(_e, b=btn, k=key):
@@ -411,7 +422,7 @@ class CBVMSDashboard(WorkspaceWindow):
             btn.bind("<Leave>", _leave)
 
         footer = ctk.CTkFrame(sidebar, fg_color="transparent")
-        footer.pack(side="bottom", fill="x", padx=PADDING, pady=PADDING)
+        footer.grid(row=4, column=0, sticky="ew", padx=PADDING, pady=PADDING)
 
         ctk.CTkLabel(
             footer, text=f"{'Superadmin' if self._is_superadmin else 'Administrator'}\n{self.username}",
@@ -447,11 +458,10 @@ class CBVMSDashboard(WorkspaceWindow):
         # IP camera instantly, without opening Settings. Persists the choice.
         self._cam_sources: dict[str, dict] = {}
         self._cam_source_var = ctk.StringVar(value=usb_camera_label(0))
-        self._cam_switcher = ctk.CTkOptionMenu(
+        self._cam_switcher = CameraSourceSelector(
             title_row, variable=self._cam_source_var, values=[usb_camera_label(0)],
             width=190, height=30, command=self._on_switch_camera,
-            fg_color=COLOR_SURFACE, button_color=COLOR_BORDER,
-            button_hover_color=COLOR_ACCENT_HOVER, font=body_small_font(),
+            fg_color=COLOR_SURFACE, hover_color=COLOR_ACCENT_HOVER, font=body_small_font(),
         )
         self._cam_switcher.pack(side="right", padx=(0, 12))
         ctk.CTkLabel(
@@ -1006,7 +1016,7 @@ class CBVMSDashboard(WorkspaceWindow):
         self._cam_sources = sources
         values = list(sources.keys())
         try:
-            self._cam_switcher.configure(values=values)
+            self._cam_switcher.set_values(values)
         except Exception:
             return
         # Reflect the currently-active source in the dropdown without re-triggering it.
@@ -1046,8 +1056,7 @@ class CBVMSDashboard(WorkspaceWindow):
                 pass
         if hasattr(self, '_monitor_cancel'):
             self._monitor_cancel.set()
-        # Reconfiguring CTkOptionMenu or laying out a toast while its native popup is
-        # executing can wedge Tk on macOS.  Run all real work after that callback exits.
+        # Dismiss the selector and finish its input event before lifecycle changes.
         self._camera_switch_job = self.after(
             1, lambda: self._commit_camera_switch(choice, dict(pref))
         )

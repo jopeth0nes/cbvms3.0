@@ -1,0 +1,23 @@
+{
+  "regression": {
+    "log": "cbvms-camera-20261027-regressions.log",
+    "summary": [
+      "Ran 74 tests in 7.849s",
+      "OK"
+    ]
+  },
+  "native_ui": {
+    "log": "cbvms-camera-20261027-native-tests.log",
+    "summary": [
+      "Ran 10 tests in 9.945s",
+      "OK"
+    ]
+  },
+  "network_decoder": {
+    "log": "cbvms-camera-20261027-decoder-tests.log",
+    "summary": [
+      "Ran 2 tests in 7.543s",
+      "OK"
+    ]
+  }
+}

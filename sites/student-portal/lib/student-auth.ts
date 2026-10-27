@@ -39,10 +39,13 @@ export async function verifyPassword(password: unknown, encoded: string): Promis
   const hash = await derivePassword(password, hexToBytes(parts[3]), Number(parts[2]));
   return equals(hash, parts[4]);
 }
-async function hashPassword(password: string) {
+export async function hashPassword(password: string) {
   const salt = crypto.getRandomValues(new Uint8Array(16));
   const value = await derivePassword(password, salt, 600000);
   return `pbkdf2_sha256$v1$600000$${bytesToHex(salt)}$${value}`;
+}
+export function passwordValid(password: unknown, confirmation: unknown, account: Row): password is string {
+  return typeof password === 'string' && password === confirmation && password.length >= 8 && password.length <= 1024 && !DEFAULTS.has(password.toLowerCase()) && ![account.username, account.student_id].includes(password);
 }
 function cookie(request: Request) {
   return (request.headers.get('Cookie') || '').split(';').map(s => s.trim()).find(s => s.startsWith(COOKIE + '='))?.slice(COOKIE.length + 1) || '';
@@ -105,7 +108,7 @@ export async function authRoute(request: Request, data: Row): Promise<Response |
   }
   if (path === '/api/setup/password' && !session.must_change_password) return json({ error: 'Password setup is already complete.' }, 409);
   const password = data.password;
-  if (typeof password !== 'string' || password !== data.confirmation || password.length < 8 || password.length > 1024 || DEFAULTS.has(password.toLowerCase()) || [session.username, session.student_id].includes(password)) return json({ error: 'Choose a personal password of 8–1024 characters and confirm it.' }, 400);
+  if (!passwordValid(password, data.confirmation, session)) return json({ error: 'Choose a personal password of 8–1024 characters and confirm it.' }, 400);
   if (!session.must_change_password && !await verifyPassword(data.current_password, session.password_hash)) return json({ error: 'Current password is incorrect.' }, 400);
   if (await verifyPassword(password, session.password_hash)) return json({ error: 'Choose a different password.' }, 400);
   if (session.pending_action_id) return json({ error: 'Your last password change is still syncing. Try again after campus sync.' }, 409);

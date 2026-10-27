@@ -1,0 +1,16 @@
+{
+  "kind": "minimal_scheduled_native_menu_probe",
+  "timeout_seconds": 12,
+  "post_enter_seconds": 0.611,
+  "selection_callback_seconds": 1.611,
+  "scheduled_destroy_seconds": 3,
+  "six_second_stack": [
+    "tkinter.Menu.post",
+    "DropdownMenu.open",
+    "CTkOptionMenu._open_dropdown_menu",
+    "scheduled show callback",
+    "Tk mainloop"
+  ],
+  "completed": false,
+  "limits": "Scheduled invoke/unpost is not physical macOS menu dismissal. Heartbeats ran while posted. This demonstrates the modal teardown boundary, not proof of the exact user mouse-triggered hang."
+}

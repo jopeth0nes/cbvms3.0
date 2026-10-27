@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 import queue
 import threading
+import webbrowser
 
 from auth.passwords import validate_new_password
 from database.db_manager import CBVMSDatabase
@@ -155,6 +156,14 @@ class CBVMSLoginWindow(WorkspaceWindow):
         self.login_btn.pack(fill="x")
         ctk.CTkLabel(inner, text="For students and administrators", font=body_font(12),
                      text_color=muted).pack(pady=(14, 0))
+        ctk.CTkButton(inner, text="Forgot student password?", height=28,
+                      fg_color="transparent", hover_color="#E2EBEE", text_color=teal,
+                      font=body_font(12, "bold"), command=self._open_password_recovery
+                      ).pack(fill="x", pady=(4, 0))
+        ctk.CTkLabel(inner,
+                     text="Online recovery needs internet, a verified email, and the campus SMTP computer online. Contact a campus administrator if you cannot access your email.",
+                     font=body_font(10), text_color=muted, wraplength=360,
+                     justify="left").pack(fill="x", pady=(2, 0))
         footer = ctk.CTkFrame(inner, fg_color="transparent")
         footer.pack(side="bottom", fill="x", pady=(16, 0))
         ctk.CTkFrame(footer, height=1, fg_color=border).pack(fill="x", pady=(0, 12))
@@ -162,6 +171,10 @@ class CBVMSLoginWindow(WorkspaceWindow):
                      font=body_font(11), text_color=muted, wraplength=360).pack()
         self.bind("<Return>", lambda _e: self._attempt_login())
         # The intro gives keyboard focus to the form once its reveal finishes.
+
+    @staticmethod
+    def _open_password_recovery() -> None:
+        webbrowser.open("https://studentportal.bond/?recovery=1")
 
     def _toggle_password(self) -> None:
         self._password_visible = not self._password_visible

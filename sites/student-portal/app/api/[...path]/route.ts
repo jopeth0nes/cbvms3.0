@@ -1,4 +1,6 @@
 import { env } from 'cloudflare:workers';
+import { recoveryRelayRoute } from '../../../lib/recovery-mail';
+import { recoveryRoute } from '../../../lib/password-recovery';
 import { authRoute, studentSession, csrfValid } from '../../../lib/student-auth';
 import { createHash } from 'node:crypto';
 import { incrementalSync } from '../../../lib/incremental-sync';
@@ -27,6 +29,11 @@ function picture(encoded: string, filename: string) {
 }
 async function route(request: Request) {
   const url = new URL(request.url), path = url.pathname;
+  if (path.startsWith('/api/relay/')) return recoveryRelayRoute(request);
+  if (path.startsWith('/api/recovery/')) {
+    try { return await recoveryRoute(request); }
+    catch { return json({error: 'Recovery service is temporarily unavailable. Please try again later or contact your campus administrator.'}, 503); }
+  }
   if (path.startsWith('/api/campus/')) return incrementalSync(request);
   if (path.startsWith('/api/sync/')) return cloudSync(request, path, body);
   if (['/api/login', '/api/logout', '/api/setup/password', '/api/password'].includes(path)) {

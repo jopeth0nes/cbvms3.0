@@ -124,8 +124,10 @@ def send_credentials(
       </tr>
     </table>
     <p style="color:#888;font-size:13px">
-      Please keep your credentials confidential. You can use them to log in to the
-      CBVMS student portal to view your violation records and submit appeals.
+      Please keep your credentials confidential. Website access requires campus
+      synchronization. After setting a personal password on the website, use that
+      password instead of this temporary password. A new campus enrollment email
+      does not automatically replace an existing website password.
     </p>
   </div>
 </body></html>
@@ -137,6 +139,9 @@ def send_credentials(
         f"Username   : {username}\n"
         f"Password   : {password}\n\n"
         "Please keep your credentials confidential.\n"
+        "Website access requires campus synchronization. After setting a personal password on the website, "
+        "use that password instead of this temporary password. A new campus enrollment email does not "
+        "automatically replace an existing website password.\n"
     )
 
     msg = MIMEMultipart("alternative")

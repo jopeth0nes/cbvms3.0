@@ -37,6 +37,15 @@ class CloudSyncTests(unittest.TestCase):
         return {'id': aid, 'student_id': 'S1', 'kind': kind, 'payload': payload,
                 'created_at': utc_now().isoformat()}
 
+    def test_missing_sync_configuration_is_explicitly_reported(self):
+        from core.cloud_sync import start_cloud_sync
+        from core.sync_status import read_status
+        with patch('core.cloud_sync.CONFIG', Path(self.temp.name)/'missing.json'):
+            self.assertIsNone(start_cloud_sync(self.db))
+        status=read_status(self.db.db_path)
+        self.assertEqual(status['state'], 'paused')
+        self.assertIn('does not publish', status['message'])
+
     def test_export_excludes_biometrics_credentials_and_other_students(self):
         self.db.log_violation('S2', 'S2', 'wrong_uniform')
         row = self.db.get_student_by_student_id('S1')

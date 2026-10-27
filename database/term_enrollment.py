@@ -94,6 +94,83 @@ class TermEnrollmentStore:
                 (student_id,semester_id,*values.values()))
             audit(conn,'enrollment',f'{student_id}:{semester_id}','draft',actor,'Demographics only',dict(old) if old else None,values)
 
+    def approve_enrollment_exception(self, student_id, semester_id, academics, *, actor,
+                                     reason, operation_id):
+        """Approve one audited administrative term exception without any capture."""
+        import uuid as uuid_module
+        try:
+            operation_id=str(uuid_module.UUID(str(operation_id)))
+        except (ValueError, TypeError, AttributeError):
+            raise ValueError('A valid operation UUID is required.')
+        reason=str(reason or '').strip()
+        if not reason:
+            raise ValueError('An explicit administrative exception reason is required.')
+        values={key:str((academics or {}).get(key,'')).strip() for key in ACADEMICS}
+        from core.academics import academic_values
+        normalized=academic_values(*(values[key] for key in ACADEMICS))
+        values={key:normalized[key] for key in ACADEMICS}
+        if not all(values.values()):
+            raise ValueError('Complete the term department, course, year and section.')
+        payload={'student_id':str(student_id),'semester_id':int(semester_id),
+                 'academics':values,'actor':str(actor),'reason':reason}
+        payload_hash=hashlib.sha256(json.dumps(payload,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+        with self.connect() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            self._term_admin(conn,actor)
+            prior=conn.execute('SELECT id,payload_hash FROM enrollment_administrative_exceptions WHERE operation_id=?',
+                               (operation_id,)).fetchone()
+            if prior:
+                if prior['payload_hash']!=payload_hash:
+                    raise ValueError('Operation UUID was already used for a different exception.')
+                return dict(exception_id=prior['id'],operation_id=operation_id,
+                            eligibility_method='administrative_exception',replayed=True)
+            student=conn.execute('SELECT student_id,registration_pending,is_archived FROM students WHERE student_id=?',
+                                 (student_id,)).fetchone()
+            if not student or student['is_archived']:
+                raise ValueError('Student is unavailable or archived.')
+            if student['registration_pending']:
+                raise ValueError('Pending registrations cannot receive an enrollment exception.')
+            account=conn.execute('SELECT is_disabled FROM student_accounts WHERE student_id=?',
+                                 (student_id,)).fetchone()
+            if not account or account['is_disabled']:
+                raise ValueError('Student account is missing or independently disabled.')
+            term=conn.execute("SELECT * FROM academic_terms WHERE id=? AND publication_state='published'",
+                              (semester_id,)).fetchone()
+            now=instant()
+            if not term or instant(term['ends_before'])<=now:
+                raise ValueError('Select a published current or upcoming term.')
+            old=conn.execute('SELECT * FROM student_term_enrollments WHERE student_id=? AND semester_id=?',
+                             (student_id,semester_id)).fetchone()
+            if old and old['status']!='draft':
+                raise ValueError('Only an uncaptured draft can receive an administrative exception.')
+            if old and old['capture_id']:
+                raise ValueError('An enrollment with capture evidence cannot receive an administrative exception.')
+            if not old:
+                cur=conn.execute('''INSERT INTO student_term_enrollments(student_id,semester_id,college_department,
+                    course,report_year_level,report_section,status) VALUES(?,?,?,?,?,?,'draft')''',
+                    (student_id,semester_id,*values.values()))
+                enrollment_id=cur.lastrowid
+            else:
+                enrollment_id=old['id']
+                conn.execute('''UPDATE student_term_enrollments SET college_department=?,course=?,
+                    report_year_level=?,report_section=? WHERE id=?''',(*values.values(),enrollment_id))
+            saved=conn.execute('SELECT * FROM student_term_enrollments WHERE id=?',(enrollment_id,)).fetchone()
+            stamp=now.isoformat()
+            conn.execute('''INSERT INTO enrollment_revisions(enrollment_id,student_id,semester_id,effective_at,snapshot)
+                VALUES(?,?,?,?,?)''',(enrollment_id,student_id,semester_id,stamp,json.dumps(dict(saved))))
+            cur=conn.execute('''INSERT INTO enrollment_administrative_exceptions
+                (enrollment_id,student_id,semester_id,actor,reason,effective_at,operation_id,payload_hash)
+                VALUES(?,?,?,?,?,?,?,?)''',
+                (enrollment_id,student_id,semester_id,actor,reason,stamp,operation_id,payload_hash))
+            exception_id=cur.lastrowid
+            audit(conn,'enrollment_exception',exception_id,'approve',actor,reason,
+                  before=dict(old) if old else None,
+                  after={'student_id':student_id,'semester_id':semester_id,
+                         'eligibility_method':'administrative_exception','capture_recorded':False,
+                         'effective_at':stamp,'operation_id':operation_id,'academics':values})
+            return dict(exception_id=exception_id,operation_id=operation_id,
+                        eligibility_method='administrative_exception',replayed=False)
+
     @staticmethod
     def _registration_capture_payload(captures, student_key):
         """Apply the same fresh, three-angle identity checks to both save paths."""
@@ -344,9 +421,16 @@ class TermEnrollmentStore:
             if self.student_session_ref and self._session_row(conn,self.student_session_ref['token'])['student_id']!=student_id:
                 raise PermissionError('Student history belongs to another account.')
             enrollments=[dict(r) for r in conn.execute('''SELECT e.id,e.semester_id,e.college_department,e.course,
-                e.report_year_level,e.report_section,e.status,e.confirmed_at,t.semester_name,t.school_year
-                FROM student_term_enrollments e JOIN academic_terms t ON t.id=e.semester_id WHERE student_id=?
-                ORDER BY t.starts_at DESC''',(student_id,))]
+                e.report_year_level,e.report_section,
+                CASE WHEN x.id IS NOT NULL AND e.status='draft' AND e.capture_id IS NULL
+                     THEN 'administrative_exception' ELSE e.status END status,
+                e.confirmed_at,t.semester_name,t.school_year,
+                CASE WHEN e.capture_id IS NOT NULL THEN 'camera_capture'
+                     WHEN x.id IS NOT NULL THEN 'administrative_exception' ELSE NULL END eligibility_method,
+                x.effective_at exception_effective_at
+                FROM student_term_enrollments e JOIN academic_terms t ON t.id=e.semester_id
+                LEFT JOIN enrollment_administrative_exceptions x ON x.enrollment_id=e.id
+                WHERE e.student_id=? ORDER BY t.starts_at DESC''',(student_id,))]
             totals=[dict(r) for r in conn.execute('''SELECT semester_id,COUNT(*) issued,SUM(is_active) valid
                 FROM strikes WHERE student_id=? GROUP BY semester_id''',(student_id,))]
             reviews=[dict(r) for r in conn.execute('''SELECT id,semester_id,enrollment_status,observed_at,last_seen,
@@ -382,10 +466,16 @@ class TermEnrollmentStore:
                 COALESCE(t.school_year,'') school_year,COALESCE(t.semester_name,'Legacy / Unassigned') semester_name,
                 COALESCE(e.college_department,'') college_department,COALESCE(e.course,'') course,
                 COALESCE(e.report_year_level,'') report_year_level,COALESCE(e.report_section,'') report_section,
-                COALESCE(e.status,'unverified') status,e.confirmed_at,
-                CASE WHEN e.capture_id IS NULL THEN 'Missing fresh capture' ELSE 'Capture recorded' END capture
+                COALESCE(CASE WHEN x.id IS NOT NULL AND e.status='draft' AND e.capture_id IS NULL
+                    THEN 'administrative_exception' ELSE e.status END,'unverified') status,e.confirmed_at,
+                CASE WHEN e.capture_id IS NOT NULL THEN 'Capture recorded'
+                     WHEN x.id IS NOT NULL THEN 'Administrative exception — no camera capture'
+                     ELSE 'Missing fresh capture' END capture,
+                CASE WHEN e.capture_id IS NOT NULL THEN 'camera_capture'
+                     WHEN x.id IS NOT NULL THEN 'administrative_exception' ELSE NULL END eligibility_method,
+                x.reason exception_reason,x.actor exception_actor,x.effective_at exception_effective_at
                 FROM students s LEFT JOIN student_term_enrollments e ON e.student_id=s.student_id'''+join+
-                ' LEFT JOIN academic_terms t ON t.id=e.semester_id'+(' WHERE '+' AND '.join(clauses) if clauses else '')+
+                ' LEFT JOIN academic_terms t ON t.id=e.semester_id LEFT JOIN enrollment_administrative_exceptions x ON x.enrollment_id=e.id'+(' WHERE '+' AND '.join(clauses) if clauses else '')+
                 ' ORDER BY s.student_id,t.starts_at',args).fetchall()
             return [dict(r) for r in rows]
 

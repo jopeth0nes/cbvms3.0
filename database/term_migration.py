@@ -4,6 +4,44 @@ import sqlite3
 from pathlib import Path
 
 VERSION = 'academic-enrollment-v1'
+EXCEPTION_VERSION = 'academic-enrollment-exception-v1'
+
+
+def migrate_enrollment_exceptions(conn):
+    """Add repeat-safe audited exception proof to an existing calendar schema.
+
+    This targeted helper does not initialize CBVMS or modify enrollment rows.
+    """
+    required = ('student_term_enrollments', 'students', 'academic_terms', 'users')
+    present = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    missing = [name for name in required if name not in present]
+    if missing:
+        raise ValueError('Academic exception migration requires existing tables: ' + ', '.join(missing))
+    conn.execute('''CREATE TABLE IF NOT EXISTS enrollment_administrative_exceptions (
+        id INTEGER PRIMARY KEY,
+        enrollment_id INTEGER NOT NULL UNIQUE REFERENCES student_term_enrollments(id),
+        student_id TEXT NOT NULL REFERENCES students(student_id),
+        semester_id INTEGER NOT NULL REFERENCES academic_terms(id),
+        actor TEXT NOT NULL REFERENCES users(username),
+        reason TEXT NOT NULL CHECK(length(trim(reason))>0),
+        effective_at TEXT NOT NULL,
+        operation_id TEXT NOT NULL UNIQUE,
+        payload_hash TEXT NOT NULL)''')
+    conn.execute('''CREATE TRIGGER IF NOT EXISTS enrollment_exception_owner_insert
+        BEFORE INSERT ON enrollment_administrative_exceptions
+        WHEN NOT EXISTS (SELECT 1 FROM student_term_enrollments e
+          WHERE e.id=NEW.enrollment_id AND e.student_id=NEW.student_id
+            AND e.semester_id=NEW.semester_id AND e.status='draft' AND e.capture_id IS NULL)
+        BEGIN SELECT RAISE(ABORT,'Administrative exception enrollment mismatch'); END''')
+    conn.execute('''CREATE TRIGGER IF NOT EXISTS enrollment_exception_immutable_update
+        BEFORE UPDATE ON enrollment_administrative_exceptions
+        BEGIN SELECT RAISE(ABORT,'Administrative enrollment exception is immutable'); END''')
+    conn.execute('''CREATE TRIGGER IF NOT EXISTS enrollment_exception_immutable_delete
+        BEFORE DELETE ON enrollment_administrative_exceptions
+        BEGIN SELECT RAISE(ABORT,'Administrative enrollment exception is immutable'); END''')
+    conn.execute('''CREATE TABLE IF NOT EXISTS campus_schema_versions (
+        version TEXT PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)''')
+    conn.execute('INSERT OR IGNORE INTO campus_schema_versions(version) VALUES(?)', (EXCEPTION_VERSION,))
 
 
 def migrate(conn):
@@ -112,6 +150,7 @@ def migrate(conn):
           legacy_summary,college_department,course,report_year_level,report_section,semester_id,semester_name,
           school_year,provenance FROM attendance WHERE legacy_summary=1''')
     conn.execute('INSERT OR IGNORE INTO campus_schema_versions(version) VALUES(?)', (VERSION,))
+    migrate_enrollment_exceptions(conn)
 
 
 def preview(path):

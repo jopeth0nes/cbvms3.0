@@ -74,7 +74,8 @@ class NativeTransitionTests(unittest.TestCase):
                     app.after(20,heartbeat)
                 def switch(label):
                     start = time.monotonic()
-                    app._cam_switcher._dropdown_callback(label)
+                    app._cam_switcher.open()
+                    app._cam_switcher.select(label)
                     requested.append(time.monotonic()-start)
                 app.after(20,heartbeat)
                 app.after(700,lambda:switch('front gate'))

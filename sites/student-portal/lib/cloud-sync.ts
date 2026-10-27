@@ -1,6 +1,7 @@
 /** Protocol v2: a registered writer, immutable evidence, atomic publication + ack. */
 import { env } from 'cloudflare:workers';
 import { timingSafeEqual, createHash } from 'node:crypto';
+import { recoveryMailSync } from './recovery-mail';
 import { validHash } from './student-auth';
 type Obj = Record<string, any>;
 const db = () => env.DB!;
@@ -18,6 +19,7 @@ export async function cloudSync(request: Request, path: string, readBody: (r: Re
   if (!control || control.protocol !== 2 || request.headers.get('X-CBVMS-Protocol') !== '2' ||
       request.headers.get('X-CBVMS-Source') !== control.source_id || request.headers.get('X-CBVMS-Writer') !== control.writer_id)
     return json({error: 'Sync paused: source registration or protocol mismatch.'}, 409);
+  if (path.startsWith('/api/sync/mail/')) return recoveryMailSync(request, path);
   if (path === '/api/sync/audit' && request.method === 'GET') {
     const ids = await db().prepare('SELECT id,snapshot FROM portal_students ORDER BY id').all<Obj>();
     const records = ids.results.flatMap(s => (JSON.parse(s.snapshot).violations || []).map((v: Obj) => ({id: v.id, identity: recordIdentity(s.id, v)})));
@@ -123,7 +125,7 @@ export async function cloudSync(request: Request, path: string, readBody: (r: Re
     if (!action || !data.students.some((s: Obj) => s.id === action.student_id)) throw Error('Receipt without student snapshot');
     if (receipt.status === 'rejected' && action.kind === 'password') {
       const account = data.students.find((s: Obj) => s.id === action.student_id).account;
-      statements.push(db().prepare(`UPDATE portal_accounts SET password_hash=?,must_change_password=?,pending_base_hash=NULL,pending_action_id=NULL WHERE pending_action_id=? AND ${guard}`).bind(account.password_hash, account.must_change_password ? 1 : 0, receipt.id, ...fence));
+      statements.push(db().prepare(`UPDATE portal_accounts SET password_hash=?,must_change_password=?,pending_base_hash=NULL,pending_action_id=NULL WHERE pending_action_id=? AND credential_version<=? AND ${guard}`).bind(account.password_hash, account.must_change_password ? 1 : 0, receipt.id, account.credential_version, ...fence));
     }
     statements.push(db().prepare(`UPDATE portal_actions SET status=?,result=? WHERE id=? AND status='queued' AND ${guard}`).bind(receipt.status, receipt.status === 'applied' ? 'Saved to campus records.' : 'Campus review required.', receipt.id, ...fence));
   }

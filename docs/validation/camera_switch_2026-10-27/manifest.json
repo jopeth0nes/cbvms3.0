@@ -1,0 +1,14 @@
+{
+  "head": "b6830f97f83356086551f43945812ee2f2def3a9",
+  "source_sha256": {
+    "ui/dashboard.py": "0c3e4ba48e62bee7dbaafd292facd26e2cfb5d31dfcc7c4ca48105b7fbb4dab9",
+    "scripts/verify_camera_switch.py": "d441f7fe7e5d7c49300d519984cf805f6a62e6c3ca74d11d294d90f8aaf7e165",
+    "tests/test_camera_transition_native_ui.py": "b7a7a7ffd5ef19c5e4be7c67fb8f9b27eec23a5e0f1a1dc3cb4bae27e26e4869",
+    "tests/test_camera_switching.py": "5f56f2fde5bdfa9b3fdb2b0c6d1b7ee04839238bc93b9c238ec357ee770a1d87",
+    "ui/camera_source_selector.py": "dae58282247998b872a90c9c4e533d27e67900c1017454bd95f0b21214ecf3a7",
+    "tests/test_camera_source_selector_native.py": "99c864e48dd540fa31ae5936d35cfb1fe0e3b3306f05d8997f6346e1bc860e4e"
+  },
+  "implementation_patch_sha256": "e16896b6ad0ae033c06e78bf2b98abedf595e950c6a82bcbdaef4492644fc0cd",
+  "dashboard_preexisting_edits_sha256": "c4de2ec808fefc8dcffca0276c8061ca624807b07337b3557135393c0d5d1fdf",
+  "note": "Patch includes only camera-selector changes and preserves the pre-existing dashboard sidebar edits; full source hashes include existing work."
+}

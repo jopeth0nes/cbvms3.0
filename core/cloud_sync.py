@@ -51,7 +51,7 @@ class CloudClient:
         self.opener = build_opener(NoRedirect)
 
     def call(self, path, data=None):
-        if path.split('?')[0] not in {'audit', 'actions', 'evidence', 'publish'}:
+        if path.split('?')[0] not in {'audit', 'actions', 'evidence', 'publish', 'mail/claim', 'mail/receipt'}:
             raise ValueError('Unknown sync operation')
         req = Request(self.origin + '/api/sync/' + path,
                       data=None if data is None else json.dumps(data).encode(), headers=self.headers)
@@ -370,8 +370,25 @@ def _sync_once(database, client, state_path=None):
     return len(students)
 
 
+def _recovery_mail_loop(stop):
+    """Poll the mail queue independently from snapshot publication."""
+    while not stop.is_set():
+        try:
+            config = json.loads(CONFIG.read_text(encoding='utf-8'))
+            if config.get('enabled') is True:
+                client = CloudClient(config)
+                from core.recovery_mail import process_recovery_mail_once
+                process_recovery_mail_once(client)
+        except Exception as exc:
+            logging.warning('Cloud recovery mail worker failed (%s).', type(exc).__name__)
+        stop.wait(10)
+
+
 def start_cloud_sync(database):
     if not CONFIG.exists():
+        from core.sync_status import write_status
+        write_status(database.db_path, state='paused',
+                     message='Website sync is not configured on this computer. Local enrollment does not publish a website account.')
         return None
     stop = threading.Event()
     def run():
@@ -387,4 +404,6 @@ def start_cloud_sync(database):
                 logging.warning('Cloud portal sync failed (%s); review Sync settings.', type(exc).__name__)
             stop.wait(60)
     threading.Thread(target=run, daemon=True, name='cloud-portal-sync').start()
+    threading.Thread(target=_recovery_mail_loop, args=(stop,), daemon=True,
+                     name='cloud-recovery-mail').start()
     return stop

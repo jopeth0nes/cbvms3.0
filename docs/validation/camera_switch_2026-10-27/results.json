@@ -1,0 +1,613 @@
+{
+  "baseline_scheduled": {
+    "interaction": "scheduled callbacks; native menu was not opened",
+    "heartbeat_count": 969,
+    "max_heartbeat_gap_ms": 1211.205,
+    "watchdog_captures": 0,
+    "source_callback_ms": [
+      0.051,
+      0.042,
+      0.046,
+      0.041,
+      0.042,
+      0.068,
+      0.065
+    ],
+    "selector_open_ms": [],
+    "selector_select_ms": [],
+    "gate_rates": [
+      {
+        "camera_generation": 2,
+        "preview_median": 16.722,
+        "tracking_median": 5.757,
+        "analysis_median": 1.945
+      },
+      {
+        "camera_generation": 4,
+        "preview_median": 19.992,
+        "tracking_median": 7.237,
+        "analysis_median": 1.812
+      },
+      {
+        "camera_generation": 8,
+        "preview_median": 19.56,
+        "tracking_median": 7.163,
+        "analysis_median": 1.798
+      }
+    ],
+    "milestones": [
+      {
+        "event": "first_frame",
+        "t": 10.208945,
+        "source_type": "usb",
+        "switch_ms": null,
+        "camera_generation": 1,
+        "monitor_generation": 1
+      },
+      {
+        "event": "first_valid_analysis",
+        "t": 18.791986,
+        "source_type": "usb",
+        "switch_ms": null,
+        "camera_generation": 1,
+        "monitor_generation": 1
+      },
+      {
+        "event": "model_readiness_failed",
+        "t": 21.778237,
+        "model": "earring"
+      },
+      {
+        "event": "first_frame",
+        "t": 24.542283,
+        "source_type": "rj45",
+        "switch_ms": 3582.111,
+        "camera_generation": 2,
+        "monitor_generation": 2
+      },
+      {
+        "event": "first_valid_analysis",
+        "t": 24.883148,
+        "source_type": "rj45",
+        "switch_ms": 3922.143,
+        "camera_generation": 2,
+        "monitor_generation": 2
+      },
+      {
+        "event": "release_return",
+        "t": 32.990296,
+        "camera_generation": null,
+        "monitor_generation": null,
+        "decoder_reaped": true,
+        "pipe_threads_stopped": true,
+        "error_code": null
+      },
+      {
+        "event": "first_frame",
+        "t": 34.071728,
+        "source_type": "usb",
+        "switch_ms": 1125.113,
+        "camera_generation": 3,
+        "monitor_generation": 3
+      },
+      {
+        "event": "first_valid_analysis",
+        "t": 34.211288,
+        "source_type": "usb",
+        "switch_ms": 1264.503,
+        "camera_generation": 3,
+        "monitor_generation": 3
+      },
+      {
+        "event": "first_frame",
+        "t": 47.123268,
+        "source_type": "rj45",
+        "switch_ms": 2165.522,
+        "camera_generation": 4,
+        "monitor_generation": 4
+      },
+      {
+        "event": "first_valid_analysis",
+        "t": 47.191586,
+        "source_type": "rj45",
+        "switch_ms": 2233.827,
+        "camera_generation": 4,
+        "monitor_generation": 4
+      },
+      {
+        "event": "release_return",
+        "t": 56.966651,
+        "camera_generation": null,
+        "monitor_generation": null,
+        "decoder_reaped": true,
+        "pipe_threads_stopped": true,
+        "error_code": null
+      },
+      {
+        "event": "first_frame",
+        "t": 58.042239,
+        "source_type": "usb",
+        "switch_ms": 1102.523,
+        "camera_generation": 5,
+        "monitor_generation": 5
+      },
+      {
+        "event": "first_valid_analysis",
+        "t": 58.254184,
+        "source_type": "usb",
+        "switch_ms": 1313.871,
+        "camera_generation": 5,
+        "monitor_generation": 5
+      },
+      {
+        "event": "first_frame",
+        "t": 63.030511,
+        "source_type": "usb",
+        "switch_ms": 982.067,
+        "camera_generation": 7,
+        "monitor_generation": 7
+      },
+      {
+        "event": "first_valid_analysis",
+        "t": 63.145779,
+        "source_type": "usb",
+        "switch_ms": 1097.403,
+        "camera_generation": 7,
+        "monitor_generation": 7
+      },
+      {
+        "event": "first_frame",
+        "t": 67.105022,
+        "source_type": "rj45",
+        "switch_ms": 2155.842,
+        "camera_generation": 8,
+        "monitor_generation": 10
+      },
+      {
+        "event": "first_valid_analysis",
+        "t": 67.177391,
+        "source_type": "rj45",
+        "switch_ms": 2228.182,
+        "camera_generation": 8,
+        "monitor_generation": 10
+      },
+      {
+        "event": "release_return",
+        "t": 73.948733,
+        "camera_generation": null,
+        "monitor_generation": null,
+        "decoder_reaped": true,
+        "pipe_threads_stopped": true,
+        "error_code": null
+      },
+      {
+        "event": "capture_owner_cleanup",
+        "t": 73.981143,
+        "done": true
+      },
+      {
+        "event": "analysis_cleanup",
+        "t": 73.981176,
+        "done": true,
+        "worker": "analysis"
+      },
+      {
+        "event": "analysis_cleanup",
+        "t": 73.997913,
+        "done": true,
+        "worker": "tracking"
+      },
+      {
+        "event": "analysis_cleanup",
+        "t": 74.139677,
+        "done": true,
+        "worker": "persistence"
+      },
+      {
+        "event": "analysis_cleanup",
+        "t": 74.13972,
+        "done": true,
+        "worker": "attendance"
+      },
+      {
+        "event": "analysis_cleanup",
+        "t": 74.139745,
+        "done": true,
+        "worker": "unknown"
+      },
+      {
+        "event": "run_finished",
+        "t": 74.141244
+      }
+    ],
+    "ended": true
+  },
+  "updated_scheduled": {
+    "interaction": "scheduled open and selection",
+    "heartbeat_count": 1052,
+    "max_heartbeat_gap_ms": 642.413,
+    "watchdog_captures": 0,
+    "source_callback_ms": [
+      0.059,
+      0.042,
+      0.097,
+      0.036,
+      0.051,
+      0.06,
+      0.047
+    ],
+    "selector_open_ms": [],
+    "selector_select_ms": [],
+    "gate_rates": [
+      {
+        "camera_generation": 2,
+        "preview_median": 19.489,
+        "tracking_median": 7.215,
+        "analysis_median": 1.792
+      },
+      {
+        "camera_generation": 4,
+        "preview_median": 19.28,
+        "tracking_median": 7.085,
+        "analysis_median": 1.767
+      },
+      {
+        "camera_generation": 9,
+        "preview_median": 19.64,
+        "tracking_median": 7.322,
+        "analysis_median": 1.829
+      }
+    ],
+    "milestones": [
+      {
+        "event": "model_readiness_failed",
+        "t": 5.928082,
+        "model": "earring"
+      },
+      {
+        "event": "first_frame",
+        "t": 6.114438,
+        "source_type": "usb",
+        "switch_ms": null,
+        "camera_generation": 1,
+        "monitor_generation": 1
+      },
+      {
+        "event": "first_valid_analysis",
+        "t": 6.515478,
+        "source_type": "usb",
+        "switch_ms": null,
+        "camera_generation": 1,
+        "monitor_generation": 1
+      },
+      {
+        "event": "first_frame",
+        "t": 21.443238,
+        "source_type": "rj45",
+        "switch_ms": 2097.819,
+        "camera_generation": 2,
+        "monitor_generation": 2
+      },
+      {
+        "event": "first_valid_analysis",
+        "t": 21.593979,
+        "source_type": "rj45",
+        "switch_ms": 2248.796,
+        "camera_generation": 2,
+        "monitor_generation": 2
+      },
+      {
+        "event": "release_return",
+        "t": 31.376428,
+        "camera_generation": null,
+        "monitor_generation": null,
+        "decoder_reaped": true,
+        "pipe_threads_stopped": true,
+        "error_code": null
+      },
+      {
+        "event": "first_frame",
+        "t": 32.456125,
+        "source_type": "usb",
+        "switch_ms": 1113.613,
+        "camera_generation": 3,
+        "monitor_generation": 3
+      },
+      {
+        "event": "first_valid_analysis",
+        "t": 32.566546,
+        "source_type": "usb",
+        "switch_ms": 1224.417,
+        "camera_generation": 3,
+        "monitor_generation": 3
+      },
+      {
+        "event": "first_frame",
+        "t": 45.566529,
+        "source_type": "rj45",
+        "switch_ms": 2165.912,
+        "camera_generation": 4,
+        "monitor_generation": 4
+      },
+      {
+        "event": "first_valid_analysis",
+        "t": 45.707976,
+        "source_type": "rj45",
+        "switch_ms": 2307.579,
+        "camera_generation": 4,
+        "monitor_generation": 4
+      },
+      {
+        "event": "release_return",
+        "t": 55.354167,
+        "camera_generation": null,
+        "monitor_generation": null,
+        "decoder_reaped": true,
+        "pipe_threads_stopped": true,
+        "error_code": null
+      },
+      {
+        "event": "first_frame",
+        "t": 56.438501,
+        "source_type": "usb",
+        "switch_ms": 1106.521,
+        "camera_generation": 5,
+        "monitor_generation": 5
+      },
+      {
+        "event": "first_valid_analysis",
+        "t": 56.555963,
+        "source_type": "usb",
+        "switch_ms": 1224.024,
+        "camera_generation": 5,
+        "monitor_generation": 5
+      },
+      {
+        "event": "first_frame",
+        "t": 61.559294,
+        "source_type": "usb",
+        "switch_ms": 1040.854,
+        "camera_generation": 7,
+        "monitor_generation": 7
+      },
+      {
+        "event": "first_valid_analysis",
+        "t": 61.634014,
+        "source_type": "usb",
+        "switch_ms": 1115.518,
+        "camera_generation": 7,
+        "monitor_generation": 7
+      },
+      {
+        "event": "first_frame",
+        "t": 65.992788,
+        "source_type": "rj45",
+        "switch_ms": 2442.145,
+        "camera_generation": 9,
+        "monitor_generation": 11
+      },
+      {
+        "event": "first_valid_analysis",
+        "t": 66.128162,
+        "source_type": "rj45",
+        "switch_ms": 2577.524,
+        "camera_generation": 9,
+        "monitor_generation": 11
+      },
+      {
+        "event": "release_return",
+        "t": 72.190987,
+        "camera_generation": null,
+        "monitor_generation": null,
+        "decoder_reaped": true,
+        "pipe_threads_stopped": true,
+        "error_code": null
+      },
+      {
+        "event": "capture_owner_cleanup",
+        "t": 72.221355,
+        "done": true
+      },
+      {
+        "event": "analysis_cleanup",
+        "t": 72.221393,
+        "done": true,
+        "worker": "analysis"
+      },
+      {
+        "event": "analysis_cleanup",
+        "t": 72.221438,
+        "done": true,
+        "worker": "tracking"
+      },
+      {
+        "event": "analysis_cleanup",
+        "t": 72.292144,
+        "done": true,
+        "worker": "persistence"
+      },
+      {
+        "event": "analysis_cleanup",
+        "t": 72.292202,
+        "done": true,
+        "worker": "attendance"
+      },
+      {
+        "event": "analysis_cleanup",
+        "t": 72.292228,
+        "done": true,
+        "worker": "unknown"
+      },
+      {
+        "event": "run_finished",
+        "t": 72.293591
+      }
+    ],
+    "ended": true
+  },
+  "updated_native_keyboard": {
+    "interaction": "desktop keyboard Tab/Return/Down/Up/Return; native window close while chooser open",
+    "heartbeat_count": 1519,
+    "max_heartbeat_gap_ms": 478.785,
+    "watchdog_captures": 0,
+    "source_callback_ms": [
+      0.11,
+      0.045,
+      0.067
+    ],
+    "selector_open_ms": [
+      1.202,
+      0.822,
+      0.973,
+      0.647
+    ],
+    "selector_select_ms": [
+      2.217,
+      1.999,
+      1.755
+    ],
+    "gate_rates": [
+      {
+        "camera_generation": 2,
+        "preview_median": 19.892,
+        "tracking_median": 7.209,
+        "analysis_median": 1.804
+      },
+      {
+        "camera_generation": 4,
+        "preview_median": 16.436,
+        "tracking_median": 3.64,
+        "analysis_median": 1.473
+      }
+    ],
+    "milestones": [
+      {
+        "event": "model_readiness_failed",
+        "t": 4.675413,
+        "model": "earring"
+      },
+      {
+        "event": "first_frame",
+        "t": 7.929426,
+        "source_type": "usb",
+        "switch_ms": null,
+        "camera_generation": 1,
+        "monitor_generation": 1
+      },
+      {
+        "event": "first_valid_analysis",
+        "t": 8.103107,
+        "source_type": "usb",
+        "switch_ms": null,
+        "camera_generation": 1,
+        "monitor_generation": 1
+      },
+      {
+        "event": "first_frame",
+        "t": 27.442072,
+        "source_type": "rj45",
+        "switch_ms": 2536.263,
+        "camera_generation": 2,
+        "monitor_generation": 2
+      },
+      {
+        "event": "first_valid_analysis",
+        "t": 27.586528,
+        "source_type": "rj45",
+        "switch_ms": 2680.791,
+        "camera_generation": 2,
+        "monitor_generation": 2
+      },
+      {
+        "event": "release_return",
+        "t": 38.818597,
+        "camera_generation": null,
+        "monitor_generation": null,
+        "decoder_reaped": true,
+        "pipe_threads_stopped": true,
+        "error_code": null
+      },
+      {
+        "event": "first_frame",
+        "t": 39.94549,
+        "source_type": "usb",
+        "switch_ms": 1151.027,
+        "camera_generation": 3,
+        "monitor_generation": 3
+      },
+      {
+        "event": "first_valid_analysis",
+        "t": 40.084272,
+        "source_type": "usb",
+        "switch_ms": 1289.927,
+        "camera_generation": 3,
+        "monitor_generation": 3
+      },
+      {
+        "event": "first_frame",
+        "t": 81.543772,
+        "source_type": "rj45",
+        "switch_ms": 2071.294,
+        "camera_generation": 4,
+        "monitor_generation": 4
+      },
+      {
+        "event": "first_valid_analysis",
+        "t": 81.996128,
+        "source_type": "rj45",
+        "switch_ms": 2524.374,
+        "camera_generation": 4,
+        "monitor_generation": 4
+      },
+      {
+        "event": "release_return",
+        "t": 107.060795,
+        "camera_generation": null,
+        "monitor_generation": null,
+        "decoder_reaped": true,
+        "pipe_threads_stopped": true,
+        "error_code": null
+      },
+      {
+        "event": "capture_owner_cleanup",
+        "t": 107.116819,
+        "done": true
+      },
+      {
+        "event": "analysis_cleanup",
+        "t": 107.11695,
+        "done": true,
+        "worker": "analysis"
+      },
+      {
+        "event": "analysis_cleanup",
+        "t": 107.200164,
+        "done": true,
+        "worker": "tracking"
+      },
+      {
+        "event": "analysis_cleanup",
+        "t": 107.200282,
+        "done": true,
+        "worker": "persistence"
+      },
+      {
+        "event": "analysis_cleanup",
+        "t": 107.200323,
+        "done": true,
+        "worker": "attendance"
+      },
+      {
+        "event": "analysis_cleanup",
+        "t": 107.200354,
+        "done": true,
+        "worker": "unknown"
+      },
+      {
+        "event": "run_finished",
+        "t": 107.202245
+      }
+    ],
+    "ended": true
+  }
+}

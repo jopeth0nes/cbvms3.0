@@ -1,0 +1,406 @@
+--- a/ui/dashboard.py
++++ b/ui/dashboard.py
+@@ -33,6 +33,7 @@
+ from core.violation_engine import LiveViolationChecker
+ from database.db_manager import CBVMSDatabase
+ from ui.camera_feed import CameraFeed
++from ui.camera_source_selector import CameraSourceSelector
+ from ui.welcome import welcome_banner
+ from ui.window_lifecycle import WorkspaceWindow
+ from ui.enrollment import EnrollmentPanel
+@@ -457,11 +458,10 @@
+         # IP camera instantly, without opening Settings. Persists the choice.
+         self._cam_sources: dict[str, dict] = {}
+         self._cam_source_var = ctk.StringVar(value=usb_camera_label(0))
+-        self._cam_switcher = ctk.CTkOptionMenu(
++        self._cam_switcher = CameraSourceSelector(
+             title_row, variable=self._cam_source_var, values=[usb_camera_label(0)],
+             width=190, height=30, command=self._on_switch_camera,
+-            fg_color=COLOR_SURFACE, button_color=COLOR_BORDER,
+-            button_hover_color=COLOR_ACCENT_HOVER, font=body_small_font(),
++            fg_color=COLOR_SURFACE, hover_color=COLOR_ACCENT_HOVER, font=body_small_font(),
+         )
+         self._cam_switcher.pack(side="right", padx=(0, 12))
+         ctk.CTkLabel(
+@@ -1016,7 +1016,7 @@
+         self._cam_sources = sources
+         values = list(sources.keys())
+         try:
+-            self._cam_switcher.configure(values=values)
++            self._cam_switcher.set_values(values)
+         except Exception:
+             return
+         # Reflect the currently-active source in the dropdown without re-triggering it.
+@@ -1056,8 +1056,7 @@
+                 pass
+         if hasattr(self, '_monitor_cancel'):
+             self._monitor_cancel.set()
+-        # Reconfiguring CTkOptionMenu or laying out a toast while its native popup is
+-        # executing can wedge Tk on macOS.  Run all real work after that callback exits.
++        # Dismiss the selector and finish its input event before lifecycle changes.
+         self._camera_switch_job = self.after(
+             1, lambda: self._commit_camera_switch(choice, dict(pref))
+         )
+diff --git a/scripts/verify_camera_switch.py b/scripts/verify_camera_switch.py
+index b931636..2dd7117 100644
+--- a/scripts/verify_camera_switch.py
++++ b/scripts/verify_camera_switch.py
+@@ -32,7 +32,7 @@ from scripts.camera_switch_diagnostics import (
+ 
+ def _parser():
+     parser = argparse.ArgumentParser(description=__doc__)
+-    parser.add_argument("--manual", action="store_true", help="leave native source menu available")
++    parser.add_argument("--manual", action="store_true", help="leave the camera source chooser available")
+     parser.add_argument("--output-dir", type=Path)
+     parser.add_argument("--duration", type=float, help="seconds (default: manual 600, automatic 68)")
+     parser.add_argument("--role", choices=("admin", "superadmin"), default="admin")
+@@ -151,6 +151,7 @@ def run(args) -> int:
+         from core.recognizer import FaceRecognizer
+         from core.monitor_models import MonitorModels
+         from ui.dashboard import CBVMSDashboard
++        from ui.camera_source_selector import CameraSourceSelector
+         from core.camera import CameraCapture
+         from database.db_manager import CBVMSDatabase
+         from customtkinter.windows.widgets.ctk_optionmenu import CTkOptionMenu
+@@ -207,6 +208,7 @@ def run(args) -> int:
+             for cls, names in ((CTkOptionMenu, ("_open_dropdown_menu", "_dropdown_callback")),
+                                (DropdownMenu, ("open", "unpost", "_button_callback", "destroy")),
+                                (WorkspaceWindow, ("destroy",)),
++                               (CameraSourceSelector, ("open", "select", "close")),
+                                (NetworkStream, ("_open_owned", "release")),
+                                (CameraCapture, ("open", "read", "release"))):
+                 for name in names:
+@@ -323,7 +325,8 @@ def run(args) -> int:
+ 
+             def switch(label):
+                 record("selection_requested", source_type="usb" if label == "MacBook Camera" else "ip")
+-                app._cam_switcher._dropdown_callback(label)
++                app._cam_switcher.open()
++                app.after(150, lambda: app._cam_switcher.select(label))
+ 
+             def close():
+                 record("summary", max_heartbeat_gap_ms=round(max(gaps, default=0)*1000, 2),
+diff --git a/tests/test_camera_switching.py b/tests/test_camera_switching.py
+index 70710e6..7c85428 100644
+--- a/tests/test_camera_switching.py
++++ b/tests/test_camera_switching.py
+@@ -201,7 +201,7 @@ class DashboardSwitchRegressionTests(unittest.TestCase):
+             _camera_source_url=None,
+             _camera_index_setting=2,
+             _cam_switcher=types.SimpleNamespace(
+-                configure=lambda **kwargs: configured.update(kwargs)
++                set_values=lambda values: configured.update(values=values)
+             ),
+             _cam_source_var=types.SimpleNamespace(set=lambda value: selected.append(value)),
+         )
+diff --git a/tests/test_camera_transition_native_ui.py b/tests/test_camera_transition_native_ui.py
+index 32c3930..19974f5 100644
+--- a/tests/test_camera_transition_native_ui.py
++++ b/tests/test_camera_transition_native_ui.py
+@@ -74,7 +74,8 @@ class NativeTransitionTests(unittest.TestCase):
+                     app.after(20,heartbeat)
+                 def switch(label):
+                     start = time.monotonic()
+-                    app._cam_switcher._dropdown_callback(label)
++                    app._cam_switcher.open()
++                    app._cam_switcher.select(label)
+                     requested.append(time.monotonic()-start)
+                 app.after(20,heartbeat)
+                 app.after(700,lambda:switch('front gate'))
+diff --git a/ui/camera_source_selector.py b/ui/camera_source_selector.py
+new file mode 100644
+index 0000000..49359e1
+--- /dev/null
++++ b/ui/camera_source_selector.py
+@@ -0,0 +1,158 @@
++"""Camera choices in the existing Tk loop, without a native modal menu.
++
++macOS Menu.post() enters a nested Cocoa menu loop. Camera selection must not
++keep that loop alive during source cancellation, navigation or root destruction.
++This list is a child of the workspace: no Menu, extra window, grab or wait loop.
++"""
++from __future__ import annotations
++
++import tkinter as tk
++
++import customtkinter as ctk
++
++from ui.components import COLOR_ACCENT, COLOR_BORDER, COLOR_SURFACE, COLOR_TEXT
++
++
++class CameraSourceSelector(ctk.CTkButton):
++    def __init__(self, master, *, variable, values, command, font=None, **kwargs):
++        self._selection = variable
++        self._values = tuple(values)
++        self._on_select = command
++        self._popup = None
++        self._list = None
++        self._return_focus = None
++        super().__init__(master, text="", command=self._toggle, font=font,
++                         anchor="w", **kwargs)
++        self._workspace = self.winfo_toplevel()
++        self._variable_trace = variable.trace_add("write", self._update_label)
++        self._update_label()
++        # Toplevel bindtags receive descendant clicks too; preserve other bindings.
++        self._workspace_bindings = {
++            "<Button-1>": self._workspace.bind("<Button-1>", self._outside_click, add="+"),
++            "<Escape>": self._workspace.bind("<Escape>", self._escape, add="+"),
++            "<Configure>": self._workspace.bind("<Configure>", self._workspace_changed, add="+"),
++        }
++        self.bind("<Unmap>", lambda _event: self.close(), add="+")
++        self._canvas.configure(takefocus=True)
++        self.bind("<Return>", lambda _event: self.open(), add="+")
++        self.bind("<space>", lambda _event: self.open(), add="+")
++        self.bind("<Down>", lambda _event: self.open(), add="+")
++
++    def _update_label(self, *_):
++        self.configure(text=f"{self._selection.get()}  ▾")
++
++    def set_values(self, values):
++        self.close()
++        self._values = tuple(dict.fromkeys(values))
++
++    def _toggle(self):
++        if self._popup is None:
++            self.open()
++        else:
++            self.close()
++
++    def open(self):
++        if self.cget("state") == "disabled" or not self._values or self._popup is not None:
++            return
++        self._return_focus = self.focus_get()
++        popup = self._popup = tk.Frame(self._workspace, bg=COLOR_BORDER, borderwidth=1)
++        self._list = tk.Listbox(
++            popup, height=min(8, len(self._values)), exportselection=False,
++            selectmode="single", activestyle="dotbox", relief="flat", borderwidth=0,
++            bg=COLOR_SURFACE, fg=COLOR_TEXT, selectbackground=COLOR_ACCENT,
++            selectforeground=COLOR_TEXT, highlightthickness=0, font=self.cget("font"),
++        )
++        self._list.pack(side="left", fill="both", expand=True)
++        if len(self._values) > 8:
++            scrollbar = tk.Scrollbar(popup, command=self._list.yview)
++            scrollbar.pack(side="right", fill="y")
++            self._list.configure(yscrollcommand=scrollbar.set)
++        for value in self._values:
++            self._list.insert("end", value)
++        current = self._selection.get()
++        index = self._values.index(current) if current in self._values else 0
++        self._list.selection_set(index)
++        self._list.activate(index)
++        self._list.see(index)
++        self._list.bind("<ButtonRelease-1>", self._released)
++        self._list.bind("<Return>", self._keyboard_select)
++        self._list.bind("<space>", self._keyboard_select)
++        self._list.bind("<Down>", lambda _event: self._move(1))
++        self._list.bind("<Up>", lambda _event: self._move(-1))
++        self._list.bind("<Tab>", self._tab)
++        # Geometry uses actual pixel sizes; tk.Frame.place does not rescale them.
++        width = min(max(self.winfo_width(), self._list.winfo_reqwidth()), self._workspace.winfo_width())
++        height = min(self._list.winfo_reqheight()+2, self._workspace.winfo_height())
++        x = max(0, min(self.winfo_rootx()-self._workspace.winfo_rootx(), self._workspace.winfo_width()-width))
++        below = self.winfo_rooty()-self._workspace.winfo_rooty()+self.winfo_height()
++        y = below if below+height <= self._workspace.winfo_height() else max(0, below-self.winfo_height()-height)
++        popup.place(x=x, y=y, width=width, height=height)
++        popup.lift()
++        self._list.focus_set()
++
++    def _released(self, event):
++        index = self._list.nearest(event.y)
++        box = self._list.bbox(index)
++        if box is not None and box[1] <= event.y < box[1]+box[3]:
++            self.select(self._values[index])
++        return "break"
++
++    def _keyboard_select(self, _event):
++        chosen = self._list.curselection()
++        if chosen:
++            self.select(self._values[chosen[0]])
++        return "break"
++
++    def _move(self, delta):
++        chosen = self._list.curselection()
++        index = max(0, min(len(self._values)-1, (chosen[0] if chosen else 0)+delta))
++        self._list.selection_clear(0, "end")
++        self._list.selection_set(index)
++        self._list.activate(index)
++        self._list.see(index)
++        return "break"
++
++    def select(self, value):
++        """Close before invoking the ordinary, asynchronous source-switch callback."""
++        if value not in self._values or self.cget("state") == "disabled":
++            return
++        self.close()
++        self._selection.set(value)
++        self._on_select(value)
++
++    def close(self, *, restore_focus=True):
++        popup, self._popup = self._popup, None
++        self._list = None
++        if popup is not None:
++            popup.destroy()
++            focus, self._return_focus = self._return_focus, None
++            if restore_focus and focus is not None and focus.winfo_exists():
++                focus.focus_set()
++
++    def _outside_click(self, event):
++        if self._popup is None:
++            return
++        path = str(event.widget)
++        if not any(path == str(widget) or path.startswith(str(widget)+".")
++                   for widget in (self, self._popup)):
++            self.close(restore_focus=False)
++
++    def _escape(self, _event):
++        if self._popup is not None:
++            self.close()
++            return "break"
++
++    def _tab(self, _event):
++        self.close()
++        return "break"
++
++    def _workspace_changed(self, event):
++        if event.widget is self._workspace:
++            self.close(restore_focus=False)
++
++    def destroy(self):
++        self.close(restore_focus=False)
++        self._selection.trace_remove("write", self._variable_trace)
++        for sequence, identifier in self._workspace_bindings.items():
++            self._workspace.unbind(sequence, identifier)
++        super().destroy()
+diff --git a/tests/test_camera_source_selector_native.py b/tests/test_camera_source_selector_native.py
+new file mode 100644
+index 0000000..3d05480
+--- /dev/null
++++ b/tests/test_camera_source_selector_native.py
+@@ -0,0 +1,127 @@
++"""Exercise the visible selector in Tk's main loop; requires a desktop session.
++
++Unlike a direct dashboard callback, these checks open the chooser, leave it open
++while heartbeat timers run, select/dismiss it and destroy its owning workspace.
++No cameras, database, inference, credentials or business records are involved.
++"""
++import time
++import tkinter as tk
++from types import SimpleNamespace
++import unittest
++from unittest.mock import patch
++
++import customtkinter as ctk
++
++from ui.camera_source_selector import CameraSourceSelector
++from ui.window_lifecycle import WorkspaceWindow
++
++
++class CameraSourceSelectorNativeTests(unittest.TestCase):
++    def setUp(self):
++        self.root = WorkspaceWindow()
++        self.root.geometry("500x280")
++        self.errors = []
++        self.root.report_callback_exception = lambda *args: self.errors.append(args)
++        self.variable = tk.StringVar(self.root, value="MacBook Camera")
++        self.selections = []
++        def selected(value):
++            self.selections.append((value, self.selector._popup is None))
++        self.selector = CameraSourceSelector(
++            self.root, variable=self.variable, values=["MacBook Camera", "front gate"],
++            command=selected, width=190, height=30, font=ctk.CTkFont(size=13),
++        )
++        self.selector.pack(pady=10)
++        self.other = ctk.CTkButton(self.root, text="Other control")
++        self.other.pack()
++        self.pump(200)
++
++    def tearDown(self):
++        if not getattr(self.root, "_destroying", False):
++            self.root.destroy()
++        self.assertEqual(self.errors, [])
++
++    def pump(self, milliseconds):
++        self.root.after(milliseconds, self.root.quit)
++        self.root.mainloop()
++
++    def test_open_menu_runs_heartbeat_and_closes_without_a_native_modal_loop(self):
++        ticks = []
++        def heartbeat():
++            ticks.append(time.monotonic())
++            self.root.after(15, heartbeat)
++        self.root.after(15, heartbeat)
++        # Catch accidentally routing this selector back through Tk's Menu.post.
++        with patch.object(tk.Menu, "post", side_effect=AssertionError("native menu entered")):
++            started = time.monotonic()
++            self.selector.open()
++            self.assertLess(time.monotonic()-started, .05)
++            self.pump(350)
++            self.assertIsNotNone(self.selector._popup)
++            self.assertTrue(self.selector._popup.winfo_ismapped())
++            self.assertGreater(self.selector._popup.winfo_height(), 30)
++            self.assertIsNone(self.root.grab_current())
++            self.assertGreater(len(ticks), 10)
++            self.assertLess(max(b-a for a,b in zip(ticks,ticks[1:])), .15)
++            # Closing the root while the chooser is still open must return.
++            self.root.after(20, self.root.destroy)
++            self.root.mainloop()
++        self.assertEqual(self.selections, [])
++
++    def test_mouse_and_keyboard_selection_dismiss_before_switch_callback(self):
++        self.selector.open()
++        self.pump(40)
++        box = self.selector._list.bbox(1)
++        self.selector._released(SimpleNamespace(y=box[1]+box[3]//2))
++        self.assertEqual(self.variable.get(), "front gate")
++        self.assertEqual(self.selections, [("front gate", True)])
++        self.selector.open()
++        self.selector._list.selection_clear(0, "end")
++        self.selector._list.selection_set(0)
++        self.selector._keyboard_select(None)
++        self.assertEqual(self.selections[-1], ("MacBook Camera", True))
++
++    def test_escape_outside_click_resize_and_values_refresh_cancel_without_switch(self):
++        self.selector.open()
++        self.assertEqual(self.selector._escape(None), "break")
++        self.assertIsNone(self.selector._popup)
++        self.selector.open()
++        self.selector._outside_click(SimpleNamespace(widget=self.other))
++        self.assertIsNone(self.selector._popup)
++        self.selector.open()
++        self.selector.set_values(["MacBook Camera", "front gate", "USB 2"])
++        self.assertIsNone(self.selector._popup)
++        self.selector.select("removed camera")
++        self.selector.open()
++        self.root.geometry("520x300")
++        self.pump(50)
++        self.assertIsNone(self.selector._popup)
++        self.assertEqual(self.variable.get(), "MacBook Camera")
++        self.assertEqual(self.selections, [])
++
++    def test_arrow_and_return_events_choose_the_highlighted_camera(self):
++        self.root.focus_force()
++        self.selector.open()
++        self.pump(30)
++        self.selector._list.event_generate("<Down>")
++        self.assertEqual(self.selector._list.curselection(), (1,))
++        self.selector._list.event_generate("<Return>")
++        self.assertEqual(self.selections, [("front gate", True)])
++        self.assertEqual(self.variable.get(), "front gate")
++
++    def test_repeated_open_select_close_and_destroy_leave_no_bindings_or_trace(self):
++        for index in range(40):
++            self.selector.open()
++            self.selector.select("front gate" if index%2 else "MacBook Camera")
++        self.assertEqual(len(self.selections), 40)
++        self.selector.open()
++        bindings = list(self.selector._workspace_bindings.values())
++        self.selector.destroy()
++        self.variable.set("No selector remains")
++        self.assertEqual(self.variable.trace_info(), [])
++        for identifier in bindings:
++            self.assertFalse(self.root.tk.call("info", "commands", identifier))
++        self.assertFalse(any(isinstance(child, tk.Menu) for child in self.root.winfo_children()))
++
++
++if __name__ == "__main__":
++    unittest.main()

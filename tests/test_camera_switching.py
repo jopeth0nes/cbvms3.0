@@ -201,7 +201,7 @@ class DashboardSwitchRegressionTests(unittest.TestCase):
             _camera_source_url=None,
             _camera_index_setting=2,
             _cam_switcher=types.SimpleNamespace(
-                configure=lambda **kwargs: configured.update(kwargs)
+                set_values=lambda values: configured.update(values=values)
             ),
             _cam_source_var=types.SimpleNamespace(set=lambda value: selected.append(value)),
         )

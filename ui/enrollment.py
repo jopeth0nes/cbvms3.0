@@ -78,6 +78,24 @@ _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 REGISTER_WITHOUT_TERM = 'Register now, assign term later'
 
 
+def enrollment_term_options(terms, now=None):
+    """Default new enrollments to the published campus term active today."""
+    from core.academic_calendar import instant
+    at = instant(now)
+    options = {}
+    current = []
+    for term in terms:
+        if term.get('publication_state') != 'published' or instant(term['ends_before']) <= at:
+            continue
+        label = f"{term['semester_name']} · {term['school_year']} (#{term['id']})"
+        options[label] = term['id']
+        if instant(term['starts_at']) <= at:
+            current.append(label)
+    if len(current) > 1:
+        raise ValueError('Overlapping campus calendar requires administrator review.')
+    return options, current[0] if current else REGISTER_WITHOUT_TERM
+
+
 class EnrollmentPanel(ctk.CTkFrame):
     """Student list with a selected-student summary. Enrolling swaps the panel's center to an
     in-panel flow (details form → guided face capture); Update Photo still uses a modal.
@@ -747,10 +765,8 @@ class EnrollmentPanel(ctk.CTkFrame):
             header, text="Student Registration", font=heading_font(18), text_color=COLOR_TEXT,
         ).grid(row=0, column=0, sticky="w")
         self._build_enroll_stepper(header).grid(row=0, column=1, sticky="e")
-        from core.academic_calendar import instant
-        self._enrollment_terms={f"{t['semester_name']} · {t['school_year']} (#{t['id']})":t['id']
-            for t in self.database.get_academic_terms() if t.get('publication_state')=='published' and instant(t['ends_before'])>instant()}
-        self._enrollment_term_var=tk.StringVar(value=REGISTER_WITHOUT_TERM)
+        self._enrollment_terms, default_term = enrollment_term_options(self.database.get_academic_terms())
+        self._enrollment_term_var=tk.StringVar(value=default_term)
         ctk.CTkOptionMenu(header,variable=self._enrollment_term_var,
             values=[REGISTER_WITHOUT_TERM,*self._enrollment_terms]).grid(row=1,column=0,pady=8)
 
@@ -1652,10 +1668,13 @@ class EnrollmentPanel(ctk.CTkFrame):
             else:
                 database.confirm_term_enrollment(sid,term_id,values,captures,student_key,actor=self.username,new_student=new_student)
             note = ''
+            from core.cloud_sync import CONFIG
+            if not CONFIG.exists():
+                note = ' Website sync is not configured on this computer; this save does not update website login.'
             try:
                 recognizer.load_known_faces()
             except Exception:
-                note = ' Saved; reopen the monitor to reload recognition.'
+                note += ' Saved; reopen the monitor to reload recognition.'
             username = None
             try:
                 with database.connect() as conn:

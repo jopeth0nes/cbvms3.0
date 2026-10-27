@@ -32,7 +32,7 @@ from scripts.camera_switch_diagnostics import (
 
 def _parser():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--manual", action="store_true", help="leave native source menu available")
+    parser.add_argument("--manual", action="store_true", help="leave the camera source chooser available")
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--duration", type=float, help="seconds (default: manual 600, automatic 68)")
     parser.add_argument("--role", choices=("admin", "superadmin"), default="admin")
@@ -151,6 +151,7 @@ def run(args) -> int:
         from core.recognizer import FaceRecognizer
         from core.monitor_models import MonitorModels
         from ui.dashboard import CBVMSDashboard
+        from ui.camera_source_selector import CameraSourceSelector
         from core.camera import CameraCapture
         from database.db_manager import CBVMSDatabase
         from customtkinter.windows.widgets.ctk_optionmenu import CTkOptionMenu
@@ -207,6 +208,7 @@ def run(args) -> int:
             for cls, names in ((CTkOptionMenu, ("_open_dropdown_menu", "_dropdown_callback")),
                                (DropdownMenu, ("open", "unpost", "_button_callback", "destroy")),
                                (WorkspaceWindow, ("destroy",)),
+                               (CameraSourceSelector, ("open", "select", "close")),
                                (NetworkStream, ("_open_owned", "release")),
                                (CameraCapture, ("open", "read", "release"))):
                 for name in names:
@@ -323,7 +325,8 @@ def run(args) -> int:
 
             def switch(label):
                 record("selection_requested", source_type="usb" if label == "MacBook Camera" else "ip")
-                app._cam_switcher._dropdown_callback(label)
+                app._cam_switcher.open()
+                app.after(150, lambda: app._cam_switcher.select(label))
 
             def close():
                 record("summary", max_heartbeat_gap_ms=round(max(gaps, default=0)*1000, 2),

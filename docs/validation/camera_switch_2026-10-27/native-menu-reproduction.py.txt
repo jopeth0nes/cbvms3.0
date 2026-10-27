@@ -1,0 +1,16 @@
+import customtkinter as ctk
+import time,faulthandler
+faulthandler.dump_traceback_later(6)
+root=ctk.CTk();root.geometry("450x180");root.title("Camera selector regression probe")
+start=time.monotonic()
+def record(name):print(name,round(time.monotonic()-start,3),flush=True)
+menu=ctk.CTkOptionMenu(root,values=["MacBook Camera","front gate"],command=lambda value:record("selected"))
+menu.pack(pady=30)
+def beat():
+ record("tick");root.after(100,beat)
+def show():
+ record("post_enter");menu._open_dropdown_menu();record("post_return")
+def choose():
+ record("invoke_enter");menu._dropdown_menu.invoke(1);menu._dropdown_menu.unpost();record("invoke_return")
+root.after(100,beat);root.after(500,show);root.after(1500,choose);root.after(3000,root.destroy)
+root.mainloop();record("finished")

@@ -53,12 +53,38 @@ def enrollment_context(conn, student_id, occurred_at=None):
         if version['confirmed_at'] and instant(version['confirmed_at'])<=at:
             historical.append(version)
     enrollment=next((e for e in historical if e['semester_id']==term.get('id') and e['status']=='confirmed'),None)
+    exception_rows=conn.execute('''SELECT x.*,e.status current_status,e.capture_id current_capture
+        FROM enrollment_administrative_exceptions x
+        JOIN student_term_enrollments e ON e.id=x.enrollment_id
+        WHERE x.student_id=? AND julianday(x.effective_at)<=julianday(?)''',
+        (student_id,at.isoformat())).fetchall()
+    exception_enrollments=[]
+    for exception in exception_rows:
+        # The latest occurrence-effective revision controls withdrawal. Exception
+        # proof grants eligibility only while this enrollment remains an uncaptured draft.
+        version=versions.get(exception['semester_id'])
+        if version is None:
+            saved=conn.execute('SELECT * FROM student_term_enrollments WHERE id=?',
+                               (exception['enrollment_id'],)).fetchone()
+            version=dict(saved) if saved else {}
+        if version.get('status')=='draft' and not version.get('capture_id'):
+            eligible_version=dict(version,eligibility_method='administrative_exception',
+                exception_effective_at=exception['effective_at'])
+            eligible_version['_eligibility_granted']=True
+            exception_enrollments.append(eligible_version)
+    if enrollment is None:
+        enrollment=next((e for e in exception_enrollments if e['semester_id']==term.get('id')),None)
+    eligible_enrollments=historical+exception_enrollments
     terms={r['id']:dict(r) for r in conn.execute('SELECT * FROM academic_terms')}
-    prior=[terms[e['semester_id']] for e in historical if terms[e['semester_id']]['starts_at']
+    prior=[terms[e['semester_id']] for e in eligible_enrollments if terms[e['semester_id']]['starts_at']
            and instant(terms[e['semester_id']]['starts_at'])<=at]
     last=max(prior,key=lambda t:instant(t['starts_at'])) if prior else None
-    upcoming=any(e['status']=='confirmed' and terms[e['semester_id']]['publication_state']=='published'
-                 and instant(terms[e['semester_id']]['starts_at'])>at for e in historical)
+    upcoming=any((e['status']=='confirmed' or e.get('_eligibility_granted'))
+                 and terms[e['semester_id']]['publication_state']=='published'
+                 and instant(terms[e['semester_id']]['starts_at'])>at for e in eligible_enrollments)
     status=(OUTSIDE if not term else ENROLLED if enrollment else UPCOMING if upcoming and not last
             else f"Not enrolled in current term — last verified enrollment: {last['semester_name']} {last['school_year']}" if last else UNVERIFIED)
-    return {'term':term,'enrollment':enrollment,'status':status,'eligible':bool(term and enrollment)}
+    if enrollment:
+        enrollment.pop('_eligibility_granted',None)
+    return {'term':term,'enrollment':enrollment,'status':status,'eligible':bool(term and enrollment),
+            'eligibility_method':enrollment.get('eligibility_method', 'camera_capture') if enrollment else None}
