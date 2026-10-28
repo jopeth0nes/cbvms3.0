@@ -26,6 +26,52 @@ def make_result(seq, *, presence="p1", torso=True, two=False, captured=None, gen
 
 
 class ClearFrameRouterTests(unittest.TestCase):
+    def test_unusable_visibility_wait_remains_in_passage_entry_latency(self):
+        from dataclasses import replace
+        router = ClearFrameRouter(fresh_selection=True)
+        first = make_result(301)
+        first.observations = (replace(first.observations[0], box=(-50,20,50,80)),)
+        router.observe(first)
+        self.assertIsNone(router.next())
+        later = make_result(302)
+        router.observe(later)
+        candidate = router.next()
+        self.assertEqual(candidate.task.passage_entered_at, first.task.context.captured_at)
+        self.assertEqual(candidate.task.first_usable_at, later.task.context.captured_at)
+        self.assertGreater(candidate.task.first_usable_at, candidate.task.passage_entered_at)
+
+    def test_fresh_completion_discards_old_sibling_work_without_cancelling_new_frame(self):
+        router = ClearFrameRouter(fresh_selection=True, refresh_interval=0)
+        for seq in (201, 202):
+            router.observe(make_result(seq, two=True), select=False)
+        candidate = router.next()
+        self.assertEqual(candidate.task.context.frame_id[1], 202)
+        router.observe(make_result(203, two=True), select=False)
+        self.assertTrue(candidate.task.valid())
+        router.complete(candidate.ticket_id, object(), 'completed')
+        following = router.next()
+        self.assertEqual(following.task.context.frame_id[1], 203)
+        router.complete(following.ticket_id, object(), 'completed')
+        self.assertIsNone(router.next())
+
+    def test_fresh_selection_replaces_equal_quality_waiting_frames(self):
+        router = ClearFrameRouter(fresh_selection=True, refresh_interval=0)
+        first = make_result(101)
+        # Equal pixels/quality, distinct captured observations. This is a queue
+        # freshness test, not additional independent recognition evidence.
+        later = make_result(102)
+        later.task = MonitorTask(later.task.context, first.task.frame,
+            later.task.observed_at, threading.Event(), camera_generation=9,
+            source_id="camera")
+        with patch.object(router, '_quality', return_value=(.8, (80,20,140,80),
+                          (50,10,170,220), (60,90,160,170), {})):
+            router.observe(first)
+            router.observe(later)
+        candidate = router.next()
+        self.assertEqual(candidate.task.context.frame_id, later.task.context.frame_id)
+        router.complete(candidate.ticket_id, object(), "completed")
+        self.assertIsNone(router.next(), "older evidence must not follow newer evidence")
+
     def test_dispatch_requires_completion_and_preserves_original_context(self):
         result = make_result(1)
         router = ClearFrameRouter()

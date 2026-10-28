@@ -1,0 +1,38 @@
+{
+  "state": "ready",
+  "module": "uniform",
+  "requested_device": "cpu",
+  "actual_device": {
+    "predictor_backend": "cpu",
+    "parameter": "cpu",
+    "matches_request": true
+  },
+  "weights": {
+    "name": "uniform_cls.pt",
+    "bytes": 2975105
+  },
+  "cold_load_ms": 687.779,
+  "first_call_ms": 12.755,
+  "steady_state": {
+    "n": 40,
+    "p50_ms": 3.244,
+    "p95_ms": 5.299,
+    "p99_ms": 5.346
+  },
+  "output": {
+    "shape": [
+      2
+    ],
+    "finite": true,
+    "count": 2,
+    "synthetic_classes": [
+      "correct_uniform",
+      "wrong_uniform"
+    ],
+    "synthetic_top1": "correct_uniform",
+    "same_outcome_as_cpu": true,
+    "max_abs_probability_delta_vs_cpu": 0.0,
+    "cpu_reference": "same_cpu_trial",
+    "cpu_reference_error": null
+  }
+}

@@ -19,6 +19,7 @@ import sys
 import tempfile
 import threading
 import time
+import subprocess
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -43,12 +44,17 @@ def main():
     p.add_argument('--busy', action='store_true')
     p.add_argument('--output', type=Path, required=True)
     args = p.parse_args()
+    def power_state():
+        return {name: subprocess.run(['pmset', '-g', name], capture_output=True,
+                    text=True, timeout=5).stdout for name in ('custom', 'batt')}
+    power_before = power_state()
     args.output.parent.mkdir(parents=True, exist_ok=True)
     progress = args.output.with_suffix('.progress.json')
     progress.write_text(json.dumps({'phase': 'imports'}))
     source_hashes = {name: hashlib.sha256(Path(name).read_bytes()).hexdigest()
         for name in ('core/camera.py', 'core/live_pipeline.py', 'core/assessment_candidates.py',
                      'core/person_detector.py', 'core/recognizer.py', 'ui/dashboard.py',
+                     'core/performance.py', 'core/trainer.py',
                      'ui/camera_feed.py', 'scripts/benchmark_camera_runtime.py')}
     if not 0 < args.seconds <= 3600 or args.warmup < 0:
         p.error('seconds must be in (0, 3600], warmup nonnegative')
@@ -62,7 +68,7 @@ def main():
     import cv2
     import psutil
     from core.camera import CameraCapture
-    from core.performance import PERF
+    from core.performance import PERF, TRACES, NAMES
     from ui.camera_feed import CameraFeed, next_preview_tick
     cv2.setNumThreads(2)
     PERF.enabled = True
@@ -85,7 +91,6 @@ def main():
 
     with tempfile.TemporaryDirectory(prefix='cbvms-fps-') as folder, ExitStack() as stack:
         if args.render_ref:
-            import subprocess
             namespace = {'__name__': 'benchmark_camera_feed_baseline'}
             code = subprocess.check_output(['git', 'show', args.render_ref+':ui/camera_feed.py'], text=True)
             exec(compile(code, 'camera_feed_baseline', 'exec'), namespace)
@@ -148,10 +153,7 @@ def main():
         observe = PERF.observe
         def observed(name, seconds):
             observe(name, seconds)
-            if time.monotonic() >= origin[0] and name in (
-                    'preview_age', 'capture_to_tracking', 'capture_to_assessment',
-                    'face_inference', 'recognition_inference', 'body_inference',
-                    'uniform_inference', 'database_read', 'persistence'):
+            if time.monotonic() >= origin[0] and name in NAMES:
                 costs[name+'_ms'].append(seconds*1000)
         stack.enter_context(patch.object(PERF, 'observe', observed))
         app = cap = reader = worker = models = None
@@ -365,16 +367,28 @@ def main():
                       sync_counts=sync_counts, errors=errors,
                       rates={}, costs_ms={k: distribution(list(v)) for k,v in costs.items()},
                       resources=rows, recent_timings=PERF.snapshot(),
+                      observation_traces=TRACES.snapshot(),
+                      measurement_start_monotonic=origin[0],
+                      power_before=power_before, power_after=power_state(),
                       workers_stopped=stopped,
                       opened_sources=opened_sources,
                       reader_stopped=reader is None or not reader.is_alive())
         report['models'] = ({name: state.state for name, state in models.readiness.snapshot().items()}
                             if models else {})
         if args.mode == 'full':
+            report['active_model_backends'] = {
+                'face_detection': (recognizer._detector.session.get_providers()
+                                   if recognizer._detector is not None else []),
+                'face_embedding': (recognizer._recognition.session.get_providers()
+                                   if recognizer._recognition is not None else []),
+                'uniform': (str(next(models.trainer._models['uniform'].model.parameters()).device)
+                            if 'uniform' in models.trainer._models else None),
+            }
             report['assessment_configuration'] = {
                 'observation_only': app._observation_only,
                 'clear_frame_selection': os.environ.get('CBVMS_CLEAR_FRAME_SELECTION', '0'),
                 'prioritized_assessment': os.environ.get('CBVMS_PRIORITIZED_ASSESSMENT', '0'),
+                'fresh_selection': os.environ.get('CBVMS_ASSESSMENT_FRESH_SELECTION', '0'),
                 'body_yolo': app._person_detector.backend_status(),
                 'candidate_limits': app._candidate_router.stats() if app._candidate_router else None,
             }

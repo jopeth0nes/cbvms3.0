@@ -1,0 +1,18 @@
+{
+  "core/assessment_candidates.py": "264d8bb40b40734a006f6a56e5458504ae55e8601ae92448d5b354f0ce4be5ea",
+  "core/live_pipeline.py": "2f23fe0e6759a56531fb5e6e26df48bbd79f0a382a2b1b9a38d878d01d2a90af",
+  "core/performance.py": "354b6ee32a098882694adef52a77f3b744770f3817b82cfdebdaaf4d495a44e9",
+  "core/recognizer.py": "2f9f724b1a82481a93c0f27b28c09ee044d442357e2834799621ac48270a50dd",
+  "core/trainer.py": "8f56df736c34e6c827064bbe08fec983b2c43f451e5ff27eefdb20baf32e9c45",
+  "docs/CAMERA_ASSESSMENT_EVALUATION.md": "e3f1b033fa604222636f07e7862a44919c361ce6c896cb27efade662ee0179f1",
+  "scripts/annotate_camera_replay.py": "ddf853548b222915e50022ba72da91b01ea1329dca2d48597c0f71113cec23b1",
+  "scripts/benchmark_camera_runtime.py": "5c6a4088b5b31def4915c84a736ad1d1e95c7f15ce682ac358833f3ff0f2b4bd",
+  "scripts/benchmark_monitor_devices.py": "77807bc7452fc7375426d18ac41ce0c0ea281b52fe37acb5224e180c04b4dcd6",
+  "scripts/replay_camera_assessment.py": "7b3adbfcc4ce401211875bd9fbcc6102e02222c28676645b2ef7a8a4f86e1cbb",
+  "tests/test_assessment_candidates.py": "b8d74fbe6d71371ef21cabbcc515dce8386375d49e66a7b80c697485cd3e41ad",
+  "tests/test_camera_replay.py": "aa93aa4e2e8b52e61f051e0071ebb486b09706a344e907d8ddcdfce1f52bf028",
+  "tests/test_monitor_devices.py": "c4a2d331470573752bd7afef56426c4ec97f3930db97c4ab74028ad7d32c8128",
+  "ui/dashboard.py": "f690248f409e426475a5c8969cdbce7928bbf3373f316407f89fc187726b12cd",
+  "scripts/benchmark_face_compatibility.py": "f2d8ca8c7a774cdc40f9706f5433ca473196994c6eda7ed00664ee728b6807e4",
+  "tests/test_observation_traces.py": "18f5e3c096885c912b0f8f753117b593815514d5a99521fc7dc4026a70f82044"
+}

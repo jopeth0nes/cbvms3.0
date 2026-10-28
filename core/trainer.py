@@ -380,7 +380,8 @@ class ViolationTrainer:
             # frame instead of ultralytics' default center-crop). Pass BGR as-is:
             # ultralytics' classification preprocess does cv2.cvtColor(im, BGR2RGB)
             # internally — converting here would double-swap R/B channels.
-            proc = _letterbox(image_bgr, IMG_SIZE)
+            with measure(module+"_preprocessing"):
+                proc = _letterbox(image_bgr, IMG_SIZE)
             with measure(module+"_inference"):
                 results = model.predict(proc, verbose=False)
             if not results:
@@ -409,7 +410,8 @@ class ViolationTrainer:
         if model is None or image_bgr is None or image_bgr.size == 0:
             return None
         try:
-            proc = _letterbox(image_bgr, IMG_SIZE)
+            with measure(module+"_preprocessing"):
+                proc = _letterbox(image_bgr, IMG_SIZE)
             with measure(module+"_inference"):
                 results = model.predict(proc, verbose=False)
             if not results:

@@ -23,7 +23,7 @@ from core.person_detector import MAX_TORSO_SKIN_FRACTION, skin_fraction
 from core.student_status import standing_label, suspension_label
 from core.uniform_matcher import fuse_uniform_prob
 from core.diagnostics import event
-from core.performance import PERF, measure
+from core.performance import PERF, TRACES, measure
 
 
 def put_latest(q, item):
@@ -74,9 +74,12 @@ class MonitorTask:
     candidate_on_complete: object | None = None
     assessment_order_ids: tuple[str, ...] = ()
     observation_only: bool = False
+    passage_entered_at: float | None = None
+    first_usable_at: float | None = None
 
     def __post_init__(self):
-        frame = self.frame.copy()
+        with measure("frame_copy"):
+            frame = self.frame.copy()
         frame.setflags(write=False)
         object.__setattr__(self, 'frame', frame)
 
@@ -431,7 +434,8 @@ class LiveProcessor:
         if not task.valid():
             event("frame_rejected", stage="uniform", reason=task.rejection())
             return None
-        assessments=self.state.update(task.context,rows,now=time.monotonic())
+        with measure("confirmation"):
+            assessments=self.state.update(task.context,rows,now=time.monotonic())
         if any(a.reliable_identity for a in assessments):
             PERF.first("first_stable_identity")
         if any(r.get("uniform_available") for r in rows):
@@ -863,8 +867,9 @@ class LiveWorker:
                 self.active_write = result.task
                 try:
                     if not self.stop_event.is_set() and result.task.valid():
-                        with measure("persistence"):
-                            self.processor.persist(result)
+                        with TRACES.observation(result.task, "persistence", None):
+                            with measure("persistence"):
+                                self.processor.persist(result)
                     else:
                         event("frame_rejected", stage="persistence", reason="stopped_or_expired")
                 except Exception as exc:
@@ -886,13 +891,16 @@ class LiveWorker:
                     self._ack_candidate(task, None, "worker_busy")
                     return False
                 self.requests.put_nowait(task)
+                if PERF.enabled or TRACES.enabled:
+                    with self._queue_clock_lock:
+                        self._queue_clock[id(task)] = time.monotonic()
                 self._request_ready.set()
             event("frame_submitted", worker=type(self.processor).__name__, frame_id=task.context.frame_id)
             return True
         if not candidate and not self.stop_event.is_set():
             event("frame_submitted", worker=type(self.processor).__name__, frame_id=task.context.frame_id)
             with self._dispatch_lock:
-                if not PERF.enabled:
+                if not PERF.enabled and not TRACES.enabled:
                     put_latest(self.requests, task)
                 else:
                     with self._queue_clock_lock:
@@ -958,10 +966,14 @@ class LiveWorker:
                     self.active_task = task
                     if self.requests.empty():
                         self._request_ready.clear()
+                with self._queue_clock_lock:
+                    offered_at = self._queue_clock.pop(id(task), None)
                 if task is None or not task.valid():
                     with self._dispatch_lock:
                         self.active_task = None
                     if task is not None:
+                        with TRACES.observation(task, self._metric_kind+"_rejected", offered_at):
+                            TRACES.result(None)
                         event("frame_rejected", stage="queue", reason=task.rejection())
                         self._ack_candidate(task, None, task.rejection())
                         if self.on_idle is not None:
@@ -973,13 +985,13 @@ class LiveWorker:
                 result = None
                 outcome = "analysis_failed"
                 try:
-                    if PERF.enabled:
-                        with self._queue_clock_lock:
-                            offered_at = self._queue_clock.pop(id(task), None)
+                    if PERF.enabled or TRACES.enabled:
                         if offered_at is not None:
                             PERF.observe("queue_"+self._metric_kind, time.monotonic()-offered_at)
                     self.active_since = time.monotonic()
-                    result=self.processor.analyze(task)
+                    with TRACES.observation(task, self._metric_kind, offered_at):
+                        result=self.processor.analyze(task)
+                        TRACES.result(result)
                     outcome = "completed" if result is not None and task.valid() and not self.stop_event.is_set() else "worker_stopped" if self.stop_event.is_set() else "no_result"
                     if result is not None and task.valid() and not self.stop_event.is_set():
                         PERF.observe("capture_to_"+self._metric_kind, time.monotonic()-task.context.captured_at)

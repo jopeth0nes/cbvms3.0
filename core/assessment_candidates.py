@@ -17,7 +17,7 @@ import cv2
 
 from core.diagnostics import event
 from core.live_state import validate_torso
-from core.performance import PERF
+from core.performance import PERF, measure
 
 
 def _enabled(name: str) -> bool:
@@ -93,13 +93,15 @@ class ClearFrameRouter:
 
     def __init__(self, *, max_tracks=48, per_passage=2, max_candidates=24,
                  max_bytes=24 * 1024 * 1024, ttl=3.0, max_queue=48,
-                 refresh_interval=.5):
+                 refresh_interval=.5, fresh_selection=None):
         if min(max_tracks, per_passage, max_candidates, max_bytes, max_queue) <= 0 or ttl <= 0:
             raise ValueError("candidate limits must be positive")
         self.max_tracks, self.per_passage = max_tracks, per_passage
         self.max_candidates, self.max_bytes = max_candidates, max_bytes
         self.ttl, self.max_queue = float(ttl), max_queue
         self.refresh_interval = max(0., float(refresh_interval))
+        self.fresh_selection = (_enabled("CBVMS_ASSESSMENT_FRESH_SELECTION")
+                                if fresh_selection is None else bool(fresh_selection))
         self._lock = threading.RLock()
         self._entries: dict[tuple, deque[Candidate]] = {}
         self._first_seen: dict[tuple, float] = {}
@@ -109,6 +111,7 @@ class ClearFrameRouter:
         self._active: Candidate | None = None
         self._sequence = 0
         self._completed_at: dict[tuple, float] = {}
+        self._waiting_since: dict[tuple, float] = {}
         self._passage_validity: dict[tuple, threading.Event] = {}
         self._torso_validity: dict[tuple, bool] = {}
         self._first_usable: dict[tuple, float] = {}
@@ -128,6 +131,7 @@ class ClearFrameRouter:
             self._last_capture.clear()
             self._pending.clear()
             self._completed_at.clear()
+            self._waiting_since.clear()
             self._passage_validity.clear()
             self._torso_validity.clear()
             self._first_usable.clear()
@@ -173,6 +177,7 @@ class ClearFrameRouter:
         self._last_frame.pop(key, None)
         self._last_capture.pop(key, None)
         self._completed_at.pop(key, None)
+        self._waiting_since.pop(key, None)
         token = self._passage_validity.pop(key, None)
         if token is not None:
             token.set()
@@ -203,13 +208,16 @@ class ClearFrameRouter:
         h, w = frame.shape[:2]
         face = tuple(map(int, observation.box))
         if _area(face) <= 0:
+            PERF.observe("candidate_invalid_face_box", 0.)
             return None
         visible_face = (max(0, face[0]), max(0, face[1]), min(w, face[2]), min(h, face[3]))
         if _area(visible_face) / _area(face) < .90:
+            PERF.observe("candidate_face_visibility_rejected", 0.)
             return None
         fx1, fy1, fx2, fy2 = visible_face
         face_crop = frame[fy1:fy2, fx1:fx2]
         if face_crop.size == 0:
+            PERF.observe("candidate_empty_face_crop", 0.)
             return None
         body = tuple(map(int, observation.body_box)) if observation.body_box is not None else None
         torso = tuple(map(int, observation.torso_box)) if observation.torso_box is not None else None
@@ -278,8 +286,9 @@ class ClearFrameRouter:
                     self._drop(key)
             # Sanitize every tracked person's geometry before any candidate task
             # receives the frame. The worker assesses all people in that frame.
-            quality_by_id = {o.presence_id: self._quality(task, o, result.observations)
-                             for o in result.observations}
+            with measure("candidate_quality"):
+                quality_by_id = {o.presence_id: self._quality(task, o, result.observations)
+                                 for o in result.observations}
             from dataclasses import replace
             safe_observations = tuple(
                 replace(o, body_index=None, body_box=None, torso_box=None,
@@ -333,7 +342,7 @@ class ClearFrameRouter:
                 values = self._entries.get(key, deque())
                 if values:
                     best = max(values, key=lambda candidate: candidate.score)
-                    if select and score < best.score - .08:
+                    if select and not self.fresh_selection and score < best.score - .08:
                         continue
                     if select and score <= best.score + .02:
                         reason = "confirmation"
@@ -358,13 +367,21 @@ class ClearFrameRouter:
                 if len(values) >= self.per_passage:
                     # Replace the least useful unstarted candidate. An active ticket
                     # is never removed from accounting until its worker callback.
-                    victim = min(values, key=lambda item: (item.score, item.task.context.captured_at))
+                    available = ([item for item in values if self._active is None
+                                  or item.ticket_id != self._active.ticket_id]
+                                 if self.fresh_selection else list(values))
+                    if not available:
+                        continue
+                    victim = min(available, key=lambda item:
+                        (item.task.context.captured_at,) if self.fresh_selection
+                        else (item.score, item.task.context.captured_at))
                     if (self._active is not None and self._active.ticket_id == victim.ticket_id
-                            or candidate.score <= victim.score):
+                            or (not self.fresh_selection and candidate.score <= victim.score)):
                         continue
                     self._remove_candidate(key, victim)
                     values = self._entries.setdefault(key, deque())
                 self._sequence += 1
+                self._waiting_since.setdefault(key, now)
                 values.append(candidate)
                 self._pending[candidate.ticket_id] = (candidate, self._sequence)
                 self._enforce_bounds()
@@ -408,21 +425,37 @@ class ClearFrameRouter:
                 last = self._completed_at.get(candidate.passage_key)
                 if last is not None and now - last < self.refresh_interval:
                     return (2, last + self.refresh_interval, seq)
-                aged = max(0, candidate.priority - int((now-candidate.queued_at)/.75)) if prioritize else 0
-                return (aged, candidate.queued_at, seq)
+                waiting = (self._waiting_since.get(candidate.passage_key, candidate.queued_at)
+                           if self.fresh_selection else candidate.queued_at)
+                aged = max(0, candidate.priority - int((now-waiting)/.75)) if prioritize else 0
+                return (aged, waiting, seq)
             ticket, candidate, _seq = min(eligible, key=rank)
             last = self._completed_at.get(candidate.passage_key)
             if last is not None and now - last < self.refresh_interval:
                 return None
+            if self.fresh_selection:
+                # Keep passage priority, but consume its newest usable evidence.
+                # Never replay an older retained frame after that evidence.
+                siblings = [entry for entry in eligible
+                            if entry[1].passage_key == candidate.passage_key]
+                ticket, candidate, _seq = max(siblings,
+                    key=lambda entry: entry[1].task.context.captured_at)
+                for old_ticket, old, _ in siblings:
+                    if old_ticket != ticket:
+                        self._remove_candidate(old.passage_key, old)
             selected_task = candidate.task.for_observation_candidate(
                 candidate.task.observations, candidate.presence_id, now,
                 candidate.ticket_id, candidate.cancelled, candidate.passage_validity)
+            object.__setattr__(selected_task, 'passage_entered_at', candidate.first_seen_at)
+            object.__setattr__(selected_task, 'first_usable_at',
+                               self._first_usable.get(candidate.passage_key, candidate.usable_at))
             selected = Candidate(candidate.ticket_id, selected_task, candidate.presence_id,
                 candidate.track_id, candidate.face_box, candidate.body_box, candidate.torso_box,
                 candidate.score, candidate.reason, candidate.first_seen_at,
                 candidate.usable_at, candidate.queued_at, candidate.quality_metrics,
                 candidate.cancelled, candidate.passage_validity)
             self._active = selected
+            self._waiting_since.pop(candidate.passage_key, None)
             passage_key = candidate.passage_key
             if passage_key not in self._first_assessment_started:
                 self._first_assessment_started.add(passage_key)
@@ -458,9 +491,12 @@ class ClearFrameRouter:
                     PERF.observe("usable_to_first_assessment", max(0., finished-self._first_usable.get(
                         key, candidate.usable_at)))
             self._active = None
+            assessed_keys = {key[:3] + (o.presence_id,) for o in candidate.task.observations or ()}
             for values_key, values in tuple(self._entries.items()):
                 for item in tuple(values):
-                    if item.ticket_id == ticket_id or (item.frame_key == candidate.frame_key and reason == "completed"):
+                    obsolete = (self.fresh_selection and succeeded and values_key in assessed_keys
+                                and item.task.context.captured_at <= candidate.task.context.captured_at)
+                    if obsolete or item.ticket_id == ticket_id or (item.frame_key == candidate.frame_key and reason == "completed"):
                         self._remove_candidate(values_key, item, cancel=not succeeded)
             self._pending.pop(ticket_id, None)
             event("assessment_candidate_completed", reason=reason)

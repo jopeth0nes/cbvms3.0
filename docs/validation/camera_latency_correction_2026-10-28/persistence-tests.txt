@@ -1,0 +1,26 @@
+======================================================================
+ERROR: test_guard_is_checked_inside_the_write_transaction (tests.test_live_persistence.LivePersistenceTests.test_guard_is_checked_inside_the_write_transaction) (table='violations')
+----------------------------------------------------------------------
+sqlite3.ProgrammingError: Cannot operate on a closed database.
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "REPOSITORY/tests/test_live_persistence.py", line 73, in test_guard_is_checked_inside_the_write_transaction
+    self.assertTrue(operation(guard))
+                    ^^^^^^^^^^^^^^^^
+  File "REPOSITORY/tests/test_live_persistence.py", line 32, in <lambda>
+    ("violations", lambda guard: self.db.log_violation(
+                                 ^^^^^^^^^^^^^^^^^^^^^^
+  File "REPOSITORY/database/db_manager.py", line 1002, in log_violation
+    with self.connect() as conn:
+         ^^^^^^^^^^^^^^
+  File "REPOSITORY/database/db_manager.py", line 232, in __exit__
+    result = super().__exit__(*args)
+             ^^^^^^^^^^^^^^^^^^^^^^^
+sqlite3.ProgrammingError: Cannot operate on a closed database.
+
+----------------------------------------------------------------------
+Ran 9 tests in 2.913s
+
+FAILED (errors=1)

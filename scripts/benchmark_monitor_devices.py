@@ -106,7 +106,7 @@ def _percentiles(values):
         low, high = math.floor(at), math.ceil(at)
         return ordered[low] if low == high else ordered[low]*(high-at)+ordered[high]*(at-low)
     return {"n": len(ordered), "p50_ms": round(percentile(.50), 3),
-            "p95_ms": round(percentile(.95), 3)}
+            "p95_ms": round(percentile(.95), 3), "p99_ms": round(percentile(.99), 3)}
 
 
 def _device_matches(expected, observed):

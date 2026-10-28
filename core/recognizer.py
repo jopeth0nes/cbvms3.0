@@ -238,7 +238,12 @@ class FaceRecognizer:
                 if points.shape != (5, 2) or not np.isfinite(points).all():
                     raise ValueError('Invalid same-frame face landmarks')
                 face = Face(bbox=np.asarray(row['box']), kps=points, det_score=row['score'])
-                self._recognition.get(frame_bgr, face)
+                from insightface.utils import face_align
+                with measure("face_alignment"):
+                    aligned = face_align.norm_crop(frame_bgr, landmark=points,
+                                                  image_size=self._recognition.input_size[0])
+                with measure("face_embedding"):
+                    face.embedding = self._recognition.get_feat(aligned).flatten()
                 result.append((list(row['box']), np.array(face.normed_embedding, copy=True), row['score'], None))
         return result
 
@@ -511,24 +516,25 @@ class FaceRecognizer:
             with self._lock:
                 known_snapshot = list(self._known)  # [(student_row, (K,512) unit array)]
 
-            F = len(dets)
-            S = len(known_snapshot)
+            with measure("gallery_matching"):
+                F = len(dets)
+                S = len(known_snapshot)
 
-            # Per-student minimum cosine distance for every detected face → D[F, S].
-            assignment = [-1] * F
-            embeddings = []
-            for _box, emb, _score, _sex in dets:
-                emb = np.asarray(emb, dtype=np.float32).reshape(-1)
-                norm = float(np.linalg.norm(emb))
-                embeddings.append(emb / norm if norm > 0 and np.isfinite(norm) else None)
-            D = np.full((F, S), np.inf, dtype=np.float32)
-            if S > 0:
-                for fi, emb in enumerate(embeddings):
-                    if emb is None:
-                        continue
-                    for si, (_student, embs) in enumerate(known_snapshot):
-                        D[fi, si] = self._min_distance_to_student(emb, embs)
-                assignment = self._assign_identities(D, self.threshold, self.identity_margin)
+                # Per-student minimum cosine distance for every detected face → D[F, S].
+                assignment = [-1] * F
+                embeddings = []
+                for _box, emb, _score, _sex in dets:
+                    emb = np.asarray(emb, dtype=np.float32).reshape(-1)
+                    norm = float(np.linalg.norm(emb))
+                    embeddings.append(emb / norm if norm > 0 and np.isfinite(norm) else None)
+                D = np.full((F, S), np.inf, dtype=np.float32)
+                if S > 0:
+                    for fi, emb in enumerate(embeddings):
+                        if emb is None:
+                            continue
+                        for si, (_student, embs) in enumerate(known_snapshot):
+                            D[fi, si] = self._min_distance_to_student(emb, embs)
+                    assignment = self._assign_identities(D, self.threshold, self.identity_margin)
 
             results = []
             for fi, (box, _emb, _score, sex) in enumerate(dets):

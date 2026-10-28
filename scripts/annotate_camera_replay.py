@@ -53,7 +53,7 @@ def main():
             while True:
                 display = frame.copy()
                 for person in people:
-                    x1, y1, x2, y2 = person["face_box"]
+                    x1, y1, x2, y2 = person["face_box"] or person["body_box"]
                     cv2.rectangle(display, (x1, y1), (x2, y2), (0, 255, 0), 2)
                     cv2.putText(display, person["passage_alias"], (x1, max(16, y1 - 5)),
                                 cv2.FONT_HERSHEY_SIMPLEX, .5, (0, 255, 0), 1)
@@ -69,16 +69,16 @@ def main():
                 if key != ord("a"):
                     continue
                 face = select_box(frame, "Select face; Enter accepts, Esc skips")
-                if face is None:
-                    continue
                 body = select_box(frame, "Select associated person body (Esc skips)")
+                if face is None and body is None:
+                    continue
                 torso = (select_box(frame, "Select visible shirt/torso region (Esc skips)")
                          if body is not None else None)
                 alias = input("Passage alias (reuse this short pseudonym across frames): ").strip()
                 if not alias:
                     print("Passage alias is required; person not added.")
                     continue
-                identity = input("Expected identity alias (blank if unavailable): ").strip()
+                identity = input("Expected identity alias (__unknown__ for known outsider; blank if unavailable): ").strip()
                 uniform = input("Uniform label [correct_uniform/wrong_uniform/unable]: ").strip().lower()
                 if uniform not in {"correct_uniform", "wrong_uniform", "unable"}:
                     print("Invalid label; use correct_uniform, wrong_uniform, or unable.")

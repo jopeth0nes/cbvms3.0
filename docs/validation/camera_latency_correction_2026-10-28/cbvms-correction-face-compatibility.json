@@ -1,0 +1,52 @@
+{
+  "public_faces": 4,
+  "model_sha256": "4c06341c33c2ca1f86781dab0e829f88ad5b64be9fba56e56bc9ebdefc619e43",
+  "labeled_student_accuracy": null,
+  "gallery_compatibility_verified": false,
+  "detector": "CPUExecutionProvider; CoreML detector not retried: prior static-output rank mismatch",
+  "hardware_note": "CoreML kernel execution is not proof of GPU or ANE placement",
+  "trials": [
+    {
+      "provider": "CPUExecutionProvider",
+      "actual_providers": [
+        "CPUExecutionProvider"
+      ],
+      "kernel_events": {
+        "CPUExecutionProvider": 9328
+      },
+      "load_ms": 98.40666700620204,
+      "warmup_ms": 297.8501250036061,
+      "samples": 80,
+      "latency_ms": {
+        "p50": 97.72868748405017,
+        "p95": 119.42309341975486,
+        "p99": 161.75754263531357
+      },
+      "min_same_face_cosine_vs_cpu": 0.9999998807907104,
+      "max_pairwise_cosine_delta": 0.0,
+      "split_alignment_max_delta": 1.4901161193847656e-08
+    },
+    {
+      "provider": "CoreMLExecutionProvider",
+      "actual_providers": [
+        "CoreMLExecutionProvider",
+        "CPUExecutionProvider"
+      ],
+      "kernel_events": {
+        "CoreMLExecutionProvider": 84,
+        "CPUExecutionProvider": 168
+      },
+      "load_ms": 2062.9972079768777,
+      "warmup_ms": 14.37379204435274,
+      "samples": 80,
+      "latency_ms": {
+        "p50": 2.452062501106411,
+        "p95": 2.7737090305890884,
+        "p99": 2.979491259320639
+      },
+      "min_same_face_cosine_vs_cpu": 0.9997066259384155,
+      "max_pairwise_cosine_delta": 0.0026719998568296432,
+      "split_alignment_max_delta": null
+    }
+  ]
+}

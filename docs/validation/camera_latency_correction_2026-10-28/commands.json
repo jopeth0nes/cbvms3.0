@@ -1,0 +1,199 @@
+{
+  "physical": [
+    {
+      "run": "baseline",
+      "environment": {
+        "CBVMS_ASSESSMENT_OBSERVATION_ONLY": "1",
+        "CBVMS_BODY_YOLO_BACKEND": "cpu"
+      },
+      "argv": [
+        ".venv/bin/python",
+        "scripts/benchmark_camera_runtime.py",
+        "--mode",
+        "full",
+        "--warmup",
+        "15",
+        "--source",
+        "usb",
+        "--seconds",
+        "60",
+        "--output",
+        "/private/tmp/cbvms-correction-baseline.json"
+      ]
+    },
+    {
+      "run": "baseline-cpu-600",
+      "environment": {
+        "CBVMS_ASSESSMENT_OBSERVATION_ONLY": "1",
+        "CBVMS_BODY_YOLO_BACKEND": "cpu",
+        "CBVMS_TRACE": "1"
+      },
+      "argv": [
+        ".venv/bin/python",
+        "scripts/benchmark_camera_runtime.py",
+        "--mode",
+        "full",
+        "--warmup",
+        "15",
+        "--source",
+        "usb",
+        "--seconds",
+        "600",
+        "--output",
+        "/private/tmp/cbvms-correction-baseline-cpu-600.json"
+      ]
+    },
+    {
+      "run": "fresh-cpu-600",
+      "environment": {
+        "CBVMS_ASSESSMENT_OBSERVATION_ONLY": "1",
+        "CBVMS_BODY_YOLO_BACKEND": "cpu",
+        "CBVMS_CLEAR_FRAME_SELECTION": "1",
+        "CBVMS_PRIORITIZED_ASSESSMENT": "1",
+        "CBVMS_ASSESSMENT_FRESH_SELECTION": "1",
+        "CBVMS_TRACE": "1"
+      },
+      "argv": [
+        ".venv/bin/python",
+        "scripts/benchmark_camera_runtime.py",
+        "--mode",
+        "full",
+        "--warmup",
+        "15",
+        "--source",
+        "usb",
+        "--seconds",
+        "600",
+        "--output",
+        "/private/tmp/cbvms-correction-fresh-cpu-600.json"
+      ]
+    },
+    {
+      "run": "fresh-mps-600",
+      "environment": {
+        "CBVMS_ASSESSMENT_OBSERVATION_ONLY": "1",
+        "CBVMS_BODY_YOLO_BACKEND": "mps",
+        "CBVMS_CLEAR_FRAME_SELECTION": "1",
+        "CBVMS_PRIORITIZED_ASSESSMENT": "1",
+        "CBVMS_ASSESSMENT_FRESH_SELECTION": "1",
+        "CBVMS_TRACE": "1"
+      },
+      "argv": [
+        ".venv/bin/python",
+        "scripts/benchmark_camera_runtime.py",
+        "--mode",
+        "full",
+        "--warmup",
+        "15",
+        "--source",
+        "usb",
+        "--seconds",
+        "600",
+        "--output",
+        "/private/tmp/cbvms-correction-fresh-mps-600.json"
+      ]
+    },
+    {
+      "run": "final-control-cpu",
+      "environment": {
+        "CBVMS_ASSESSMENT_OBSERVATION_ONLY": "1",
+        "CBVMS_BODY_YOLO_BACKEND": "cpu",
+        "CBVMS_CLEAR_FRAME_SELECTION": "1",
+        "CBVMS_PRIORITIZED_ASSESSMENT": "1",
+        "CBVMS_TRACE": "1"
+      },
+      "argv": [
+        ".venv/bin/python",
+        "scripts/benchmark_camera_runtime.py",
+        "--mode",
+        "full",
+        "--warmup",
+        "15",
+        "--source",
+        "usb",
+        "--seconds",
+        "60",
+        "--output",
+        "/private/tmp/cbvms-correction-final-control-cpu.json"
+      ]
+    },
+    {
+      "run": "final-control-mps",
+      "environment": {
+        "CBVMS_ASSESSMENT_OBSERVATION_ONLY": "1",
+        "CBVMS_BODY_YOLO_BACKEND": "mps",
+        "CBVMS_CLEAR_FRAME_SELECTION": "1",
+        "CBVMS_PRIORITIZED_ASSESSMENT": "1",
+        "CBVMS_TRACE": "1"
+      },
+      "argv": [
+        ".venv/bin/python",
+        "scripts/benchmark_camera_runtime.py",
+        "--mode",
+        "full",
+        "--warmup",
+        "15",
+        "--source",
+        "usb",
+        "--seconds",
+        "60",
+        "--output",
+        "/private/tmp/cbvms-correction-final-control-mps.json"
+      ]
+    },
+    {
+      "run": "front-gate",
+      "environment": {
+        "CBVMS_ASSESSMENT_OBSERVATION_ONLY": "1",
+        "CBVMS_BODY_YOLO_BACKEND": "mps",
+        "CBVMS_CLEAR_FRAME_SELECTION": "1",
+        "CBVMS_PRIORITIZED_ASSESSMENT": "1",
+        "CBVMS_ASSESSMENT_FRESH_SELECTION": "1",
+        "CBVMS_TRACE": "1"
+      },
+      "argv": [
+        ".venv/bin/python",
+        "scripts/benchmark_camera_runtime.py",
+        "--mode",
+        "full",
+        "--warmup",
+        "15",
+        "--source",
+        "front-gate",
+        "--seconds",
+        "60",
+        "--output",
+        "/private/tmp/cbvms-correction-front-gate.json",
+        "--busy"
+      ]
+    }
+  ],
+  "notes": [
+    "Unset experiment flags not shown before each command.",
+    "All runs sequential; power records are in individual reports."
+  ],
+  "public_probes": [
+    [
+      ".venv/bin/python",
+      "scripts/benchmark_yolo_backends.py",
+      "--backend",
+      "both",
+      "--repeats",
+      "100"
+    ],
+    [
+      ".venv/bin/python",
+      "scripts/benchmark_face_compatibility.py",
+      "--output",
+      "/private/tmp/cbvms-correction-face-compatibility.json",
+      "--repeats",
+      "20"
+    ]
+  ],
+  "initial_failed_attempt": {
+    "run": "sandbox baseline before native-camera access",
+    "exit": 134,
+    "phase": "model_warmup",
+    "measured": false
+  }
+}

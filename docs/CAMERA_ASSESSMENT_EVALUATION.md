@@ -104,3 +104,56 @@ These are not matched before/after or accuracy comparisons. No identity embeddin
 cache was enabled; passage refresh/dedup keeps fresh recognition. See the final
 report for the unmet latency/preview targets and the pre-existing persistence
 fixture error. Keep CPU and the original operational path for both cameras.
+
+## October 28 latency correction experiments
+
+Keep ordinary CPU operation as the production control. The new
+`CBVMS_ASSESSMENT_FRESH_SELECTION=1` flag only changes the already observation-only
+candidate router: select its newest usable frame and discard older pending
+observations for assessed passages. It does not lower recognition/confirmation
+thresholds, introduce recognition caching, or permit writes. Default is off.
+`CBVMS_TRACE=1 CBVMS_PERF=1` enables bounded numerical per-observation traces in the
+benchmark/replay JSON, including queue timestamps and nested model spans. Never
+sum overlapping spans. Trace overflow is reported; earliest entries can be lost.
+The native benchmark's `costs_ms`/`cost_sample_counts` exclude warmup;
+`recent_timings` is a bounded lifetime tail and may include startup samples.
+
+Example isolated physical test (MacBook, no saved frames, empty temporary DB):
+
+```sh
+CBVMS_TRACE=1 CBVMS_ASSESSMENT_OBSERVATION_ONLY=1 \
+CBVMS_CLEAR_FRAME_SELECTION=1 CBVMS_PRIORITIZED_ASSESSMENT=1 \
+CBVMS_ASSESSMENT_FRESH_SELECTION=1 CBVMS_BODY_YOLO_BACKEND=cpu \
+.venv/bin/python scripts/benchmark_camera_runtime.py --mode full --source usb \
+  --seconds 600 --warmup 15 --output /private/tmp/cbvms-fresh-cpu.json
+```
+
+Use `mps` only as a separate sequential test. Use `--source front-gate` for a
+separate network-camera test; no simultaneous-source claim. Restore ordinary
+operation by unsetting all four observation/selection/priority/freshness flags
+and `CBVMS_TRACE`, keeping `CBVMS_BODY_YOLO_BACKEND=cpu`, and restarting.
+
+### Remaining recording and annotation checklist
+
+1. Obtain local consented recordings at original resolution/FPS, retaining entry
+   before the face becomes usable and exit after brief visibility. Cover walking,
+   brisk walking, overlap/crossing, partial occlusion and lighting variations on
+   both cameras. Do not upload footage or test events.
+2. Prepare a disposable evaluation DB copy containing the authorized gallery and
+   current enrollment/eligibility; keep it separate from the live database. Use
+   an alias map and private local paths. Do not commit images, embeddings or IDs.
+3. Annotate every frame (`--every 1`), including empty frames. Keep a unique passage
+   alias across its frames; use a new alias on reentry. When only the body is
+   visible, skip face selection and annotate the body so entry time is preserved.
+   Label expected identity or `__unknown__` for a known outsider; blank means
+   unavailable truth. Annotate associated body/visible torso and uniform truth;
+   obscured garments are `unable`, never automatically violations.
+4. Split by person AND recording session before tuning; hold out the evaluation
+   split. Run baseline, candidate CPU, candidate MPS and freshness separately
+   using the same inputs, then reverse order. Baseline replay now calls the real
+   operational dashboard offer method. Pacing skips remain reported as misses.
+5. Report passage/error counts, all no-result passages and abstentions, latency
+   distributions, and uncertainty. Review flagged torso IoU mismatches manually.
+   Public-fixture probes, equal detection counts and high confidence are not
+   student identity/uniform accuracy evidence. Zero observed errors in a small
+   sample does not justify production rollout.

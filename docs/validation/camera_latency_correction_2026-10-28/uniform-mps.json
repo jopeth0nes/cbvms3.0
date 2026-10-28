@@ -1,0 +1,38 @@
+{
+  "state": "ready",
+  "module": "uniform",
+  "requested_device": "mps",
+  "actual_device": {
+    "predictor_backend": "mps",
+    "parameter": "mps:0",
+    "matches_request": true
+  },
+  "weights": {
+    "name": "uniform_cls.pt",
+    "bytes": 2975105
+  },
+  "cold_load_ms": 588.672,
+  "first_call_ms": 235.508,
+  "steady_state": {
+    "n": 40,
+    "p50_ms": 3.417,
+    "p95_ms": 3.839,
+    "p99_ms": 4.286
+  },
+  "output": {
+    "shape": [
+      2
+    ],
+    "finite": true,
+    "count": 2,
+    "synthetic_classes": [
+      "correct_uniform",
+      "wrong_uniform"
+    ],
+    "synthetic_top1": "correct_uniform",
+    "same_outcome_as_cpu": true,
+    "max_abs_probability_delta_vs_cpu": 2.56e-06,
+    "cpu_reference": "fresh_cpu_model_same_process",
+    "cpu_reference_error": null
+  }
+}

@@ -80,9 +80,17 @@ class ReplayMetrics:
                 "identity_correct": False, "wrong_identity": False,
                 "uniform_confirmed": None, "uniform_wrong_seen": False,
                 "uniform_correct_seen": False, "uniform_unassessed_seen": False,
+                "body_detected": False, "wrong_torso": False,
+                "body_labeled": bool(person.get('body_box')),
+                "face_labeled": bool(person.get('face_box')),
+                "torso_labeled": bool(person.get('torso_box')),
+                "unknown_rejected": False, "unknown_false_accept": False,
                 "uniform_attempted": False, "first_joint_correct_confirmation_ms": None})
             if media_ms < state["entry_ms"]:
                 state["entry_ms"], state["entry_frame"] = float(media_ms), int(frame_index)
+            state['body_labeled'] |= bool(person.get('body_box'))
+            state['face_labeled'] |= bool(person.get('face_box'))
+            state['torso_labeled'] |= bool(person.get('torso_box'))
 
     def _matches(self, people, observations):
         pairs = []
@@ -106,6 +114,15 @@ class ReplayMetrics:
         for li, person in enumerate(people):
             state = self.passages[str(person["passage_alias"])]
             if li in matches:
+                observation = observations[matches[li]]
+                expected_body = person.get('body_box')
+                observed_body = getattr(observation, 'body_box', None)
+                if expected_body and observed_body and overlap(expected_body, observed_body) >= .25:
+                    state['body_detected'] = True
+                observed_torso = getattr(observation, 'torso_box', None)
+                expected_torso = person.get('torso_box')
+                if observed_torso and expected_torso and overlap(observed_torso, expected_torso) < .25:
+                    state['wrong_torso'] = True
                 state["detected"] = True
                 if state["first_detection_ms"] is None:
                     state["first_detection_ms"] = float(media_ms)
@@ -129,11 +146,20 @@ class ReplayMetrics:
             oi = matches[li]
             observation = observations[oi]
             assessment = assessments[oi] if oi < len(assessments) else None
+            if assessment is None:
+                self.identity_counts["abstained"] += 1
+                continue
             if state["first_usable_ms"] is None:
                 # Face-only is usable for identity; torso is needed only for uniform.
                 state["first_usable_ms"] = float(media_ms)
             if state["first_assessment_ms"] is None:
                 state["first_assessment_ms"] = completed_at
+            if state['expected_identity'] == '__unknown__':
+                state['unknown_false_accept'] |= bool(assessment is not None
+                    and assessment.reliable_identity and assessment.student_id)
+                state['unknown_rejected'] |= bool(assessment is not None
+                    and getattr(assessment, 'unknown_confirmed', False))
+                continue
             if assessment is None or not assessment.reliable_identity or not assessment.student_id:
                 self.identity_counts["abstained"] += 1
                 continue
@@ -186,8 +212,28 @@ class ReplayMetrics:
         joint_latency = [s["first_joint_correct_confirmation_ms"] - s["entry_ms"]
             for s in self.passages.values() if s["first_joint_correct_confirmation_ms"] is not None]
         return {"passage_count": len(self.passages),
+            "no_completed_assessment_passages": sum(s['first_assessment_ms'] is None
+                for s in self.passages.values()),
+            "unknown_labeled_passages": sum(s['expected_identity'] == '__unknown__'
+                for s in self.passages.values()),
+            "unknown_false_accept_passages": sum(s['unknown_false_accept'] for s in self.passages.values()),
+            "confirmed_unknown_rejection_passages": sum(s['unknown_rejected'] for s in self.passages.values()),
+            "wrong_torso_association_passages": sum(s['wrong_torso'] for s in self.passages.values()),
+            "torso_labeled_passages": sum(s['torso_labeled'] for s in self.passages.values()),
+            "body_labeled_passages": sum(s['body_labeled'] for s in self.passages.values()),
+            "body_not_associated_passages": sum(s['body_labeled'] and not s['body_detected']
+                for s in self.passages.values()),
+            "association_metric_note": "Only scored where face and torso boxes are annotated; IoU below .25 marks mismatch, requires manual review",
+            "first_usable_to_assessment_ms": [s['first_assessment_ms']-s['first_usable_ms']
+                for s in self.passages.values() if s['first_assessment_ms'] is not None
+                and s['first_usable_ms'] is not None],
             "missed_passages": sum(not s["detected"] for s in self.passages.values()),
+            "face_labeled_passages": sum(s['face_labeled'] for s in self.passages.values()),
+            "face_detection_missed_passages": sum(s['face_labeled'] and not s['detected']
+                for s in self.passages.values()),
+            "no_visible_face_passages": sum(not s['face_labeled'] for s in self.passages.values()),
             "unable_to_identify_passages": sum(bool(s["expected_identity"])
+                and s["expected_identity"] != '__unknown__'
                 and not s["identity_correct"] and not s["wrong_identity"] for s in self.passages.values()),
             "confirmed_correct_passages": sum(s["identity_correct"] for s in self.passages.values()),
             "wrong_identity_passages": sum(s["wrong_identity"] for s in self.passages.values()),
@@ -266,6 +312,7 @@ def main():
     from core.recognizer import FaceRecognizer
     from core.trainer import ViolationTrainer
     from core.uniform_matcher import UniformColorMatcher
+    from core.performance import PERF, TRACES
 
     capture = cv2.VideoCapture(str(args.video))
     if not capture.isOpened():
@@ -377,9 +424,23 @@ def main():
                     assessment_calls += 1
                 worker.offer(task)
             worker.on_idle = dispatch_candidate
+            # Use the operational dispatch method itself, so the control cannot
+            # drift into a simplified reimplementation of its offer policy.
+            from ui.dashboard import CBVMSDashboard
+            def baseline_offer(task):
+                nonlocal selected_count, assessment_calls
+                accepted = worker.offer(task)
+                if accepted:
+                    with selected_guard:
+                        selected_count += 1
+                        assessment_calls += 1
+                return accepted
+            baseline_owner = SimpleNamespace(_observation_only=True, _candidate_router=None,
+                _readiness=SimpleNamespace(ready=lambda _: True), _monitor_generation=1,
+                _camera_generation=0, _monitor_offer_time=-1e9,
+                _live_worker=SimpleNamespace(offer=baseline_offer))
             index = 0
             next_frame_at = time.monotonic()
-            last_baseline_offer_at = -1e9
             while args.max_frames == 0 or index < args.max_frames:
                 delay = next_frame_at-time.monotonic()
                 if delay > 0:
@@ -404,7 +465,9 @@ def main():
                 task = MonitorTask(FrameContext(1, ("replay", index), captured), frame,
                     time.time(), threading.Event(), source_id="local-replay",
                     source_label="Local evaluation replay", observation_only=True)
-                tracked = tracker.analyze(task)
+                with TRACES.observation(task, 'tracking', captured):
+                    tracked = tracker.analyze(task)
+                    TRACES.result(tracked)
                 if tracked is not None:
                     if people and tracked.observations:
                         metric.record_detections(index, media_ms, people, tracked.observations)
@@ -413,16 +476,8 @@ def main():
                         router.observe(tracked, prioritize=args.prioritized_assessment,
                                        select=args.clear_frame_selection)
                         dispatch_candidate()
-                    elif captured-last_baseline_offer_at >= .5:
-                        candidate_task = tracked.task.with_observations(
-                            tracked.observations).for_observation_only(tracked.observations)
-                        if worker.offer(candidate_task):
-                            with selected_guard:
-                                selected_count += 1
-                                assessment_calls += 1
-                            last_baseline_offer_at = captured
                     else:
-                        candidate_task = None
+                        CBVMSDashboard._on_localized(baseline_owner, tracked)
                 while True:
                     try:
                         consume_result(worker_results.get_nowait())
@@ -474,6 +529,7 @@ def main():
         "live_processor_calls": assessment_calls, "live_processor_results": assessment_results,
         "assessment_rows": assessment_rows, "passage_metrics": metrics,
         "compute_wall_latency": compute_latency,
+        "stage_timings": PERF.snapshot(), "observation_traces": TRACES.snapshot(),
         "compute_latency_samples_dropped": compute_samples_dropped,
         "frames_skipped_for_lag": skipped_for_lag,
         "passage_latency_verified": skipped_for_lag == 0,
@@ -485,6 +541,7 @@ def main():
         "uniform_model_loaded": trainer.is_trained("uniform"),
         "observation_only": True, "database_writes": 0,
         "candidate_flags": {"clear_frame_selection": args.clear_frame_selection,
+                             "fresh_selection": router.fresh_selection if router else False,
                              "prioritized_assessment": args.prioritized_assessment},
         "evaluation_database_copied_to_private_temp_and_discarded": bool(args.evaluation_db),
         "passage_details_written": False,

@@ -7,6 +7,38 @@ from core.recognizer import FaceRecognizer
 
 
 class CameraReplayMetricsTests(unittest.TestCase):
+    def test_failed_worker_result_does_not_count_as_completed_assessment(self):
+        metrics = ReplayMetrics()
+        people = [dict(passage_alias='p', face_box=[0,0,20,20])]
+        metrics.observe_labels(0, 0, people)
+        metrics.record_assessments(0, 0, people, [self.observation((0,0,20,20))], [])
+        self.assertEqual(metrics.report()['no_completed_assessment_passages'], 1)
+
+    def test_unknown_false_accept_and_missing_assessment_are_separate(self):
+        metrics = ReplayMetrics()
+        people = [dict(passage_alias='unknown', identity_label='__unknown__',
+                       face_box=[0, 0, 20, 20]),
+                  dict(passage_alias='missed', face_box=[40, 0, 60, 20])]
+        metrics.observe_labels(0, 0, people)
+        metrics.record_assessments(0, 0, people, [self.observation((0, 0, 20, 20))],
+            [self.assessment('incorrect-student', True)], completion_ms=100)
+        report = metrics.report()
+        self.assertEqual(report['unknown_false_accept_passages'], 1)
+        self.assertEqual(report['no_completed_assessment_passages'], 1)
+        self.assertEqual(report['confirmed_unknown_rejection_passages'], 0)
+
+    def test_torso_mismatch_requires_annotated_geometry(self):
+        metrics = ReplayMetrics()
+        people = [dict(passage_alias='p', face_box=[0, 0, 20, 20],
+                       body_box=[0, 0, 30, 100], torso_box=[0, 25, 30, 70])]
+        metrics.observe_labels(0, 0, people)
+        observation = SimpleNamespace(box=(0,0,20,20), body_box=(0,0,30,100),
+                                      torso_box=(50,25,80,70))
+        metrics.record_detections(0, 0, people, [observation])
+        report = metrics.report()
+        self.assertEqual(report['wrong_torso_association_passages'], 1)
+        self.assertEqual(report['body_not_associated_passages'], 0)
+
     def observation(self, box):
         return SimpleNamespace(box=box)
 

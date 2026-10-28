@@ -1,0 +1,2296 @@
+{
+  "weights": {
+    "yolov8n.pt": {
+      "bytes": 6549796,
+      "sha256": "f59b3d833e2ff32e194b5bb8e08d211dc7c5bdf144b90d2c8412c47ccfc83b36"
+    },
+    "uniform_cls.pt": {
+      "bytes": 2975105,
+      "sha256": "8fba6e1da0c11c97873b16049b940ce21d5699838cc2040f069d5d5249a15680"
+    },
+    "det_10g.onnx": {
+      "bytes": 16923827,
+      "sha256": "5838f7fe053675b1c7a08b633df49e7af5495cee0493c7dcf6697200b85b5b91"
+    },
+    "w600k_r50.onnx": {
+      "bytes": 174383860,
+      "sha256": "4c06341c33c2ca1f86781dab0e829f88ad5b64be9fba56e56bc9ebdefc619e43"
+    }
+  },
+  "runs": {
+    "cbvms-correction-baseline-cpu-600": {
+      "costs_ms": {
+        "body_inference_ms": {
+          "p1": 36.22,
+          "p50": 51.132,
+          "p95": 110.282,
+          "p99": 128.077
+        },
+        "tracking_ms": {
+          "p1": 139.112,
+          "p50": 172.312,
+          "p95": 239.859,
+          "p99": 265.718
+        },
+        "capture_to_tracking_ms": {
+          "p1": 174.197,
+          "p50": 274.216,
+          "p95": 361.087,
+          "p99": 391.227
+        },
+        "queue_tracking_ms": {
+          "p1": 2.228,
+          "p50": 68.048,
+          "p95": 128.56,
+          "p99": 141.934
+        },
+        "lock_detector_ms": {
+          "p1": 0.0,
+          "p50": 0.0,
+          "p95": 0.001,
+          "p99": 0.001
+        },
+        "sample_copy_ms": {
+          "p1": 0.097,
+          "p50": 0.105,
+          "p95": 0.138,
+          "p99": 0.196
+        },
+        "projection_ms": {
+          "p1": 0.932,
+          "p50": 3.635,
+          "p95": 4.33,
+          "p99": 5.547
+        },
+        "render_ms": {
+          "p1": 2.368,
+          "p50": 2.629,
+          "p95": 3.155,
+          "p99": 3.67
+        },
+        "ui_render_ms": {
+          "p1": 2.664,
+          "p50": 3.089,
+          "p95": 3.621,
+          "p99": 4.374
+        },
+        "preview_age_ms": {
+          "p1": 7.257,
+          "p50": 24.14,
+          "p95": 39.206,
+          "p99": 41.541
+        },
+        "feed_callback_ms": {
+          "p1": 3.823,
+          "p50": 7.232,
+          "p95": 10.584,
+          "p99": 11.906
+        },
+        "frame_copy_ms": {
+          "p1": 0.089,
+          "p50": 0.095,
+          "p95": 0.127,
+          "p99": 0.185
+        },
+        "face_inference_ms": {
+          "p1": 101.23,
+          "p50": 120.169,
+          "p95": 132.106,
+          "p99": 151.005
+        },
+        "lock_person_ms": {
+          "p1": 0.0,
+          "p50": 0.0,
+          "p95": 0.0,
+          "p99": 0.001
+        },
+        "queue_assessment_ms": {
+          "p1": 0.12,
+          "p50": 0.15,
+          "p95": 0.222,
+          "p99": 0.678
+        },
+        "lock_recognition_ms": {
+          "p1": 0.0,
+          "p50": 0.001,
+          "p95": 0.001,
+          "p99": 0.001
+        },
+        "face_alignment_ms": {
+          "p1": 0.448,
+          "p50": 0.584,
+          "p95": 0.728,
+          "p99": 0.863
+        },
+        "replaced_tracking_ms": {
+          "p1": 0.0,
+          "p50": 0.0,
+          "p95": 0.0,
+          "p99": 0.0
+        },
+        "face_embedding_ms": {
+          "p1": 202.271,
+          "p50": 228.792,
+          "p95": 245.754,
+          "p99": 272.859
+        },
+        "recognition_inference_ms": {
+          "p1": 202.329,
+          "p50": 229.496,
+          "p95": 246.902,
+          "p99": 273.623
+        },
+        "gallery_matching_ms": {
+          "p1": 0.023,
+          "p50": 0.032,
+          "p95": 0.047,
+          "p99": 0.074
+        },
+        "recognition_ms": {
+          "p1": 202.476,
+          "p50": 229.672,
+          "p95": 247.091,
+          "p99": 273.816
+        },
+        "database_read_ms": {
+          "p1": 2.451,
+          "p50": 2.877,
+          "p95": 4.234,
+          "p99": 5.371
+        },
+        "body_ms": {
+          "p1": 0.0,
+          "p50": 0.0,
+          "p95": 0.001,
+          "p99": 0.001
+        },
+        "confirmation_ms": {
+          "p1": 0.171,
+          "p50": 0.231,
+          "p95": 0.334,
+          "p99": 0.421
+        },
+        "capture_to_assessment_ms": {
+          "p1": 375.272,
+          "p50": 482.021,
+          "p95": 559.676,
+          "p99": 587.631
+        },
+        "result_to_ui_ms": {
+          "p1": 0.411,
+          "p50": 20.421,
+          "p95": 42.485,
+          "p99": 46.519
+        },
+        "first_face_ms": {
+          "p1": 69.891,
+          "p50": 69.891,
+          "p95": 69.891,
+          "p99": 69.891
+        },
+        "rejected_ms": {
+          "p1": 0.0,
+          "p50": 0.0,
+          "p95": 0.0,
+          "p99": 0.0
+        }
+      },
+      "cost_sample_counts": {
+        "body_inference_ms": 3186,
+        "tracking_ms": 3193,
+        "capture_to_tracking_ms": 3193,
+        "queue_tracking_ms": 3193,
+        "lock_detector_ms": 6386,
+        "sample_copy_ms": 13670,
+        "projection_ms": 13670,
+        "render_ms": 13588,
+        "ui_render_ms": 13588,
+        "preview_age_ms": 13588,
+        "feed_callback_ms": 13670,
+        "frame_copy_ms": 4443,
+        "face_inference_ms": 3193,
+        "lock_person_ms": 6370,
+        "queue_assessment_ms": 1046,
+        "lock_recognition_ms": 1046,
+        "face_alignment_ms": 1045,
+        "replaced_tracking_ms": 1251,
+        "face_embedding_ms": 1045,
+        "recognition_inference_ms": 1046,
+        "gallery_matching_ms": 1045,
+        "recognition_ms": 1046,
+        "database_read_ms": 1045,
+        "body_ms": 1045,
+        "confirmation_ms": 1045,
+        "capture_to_assessment_ms": 1045,
+        "result_to_ui_ms": 1045,
+        "first_face_ms": 1,
+        "rejected_ms": 2
+      },
+      "rates": {
+        "preview": {
+          "count": 13565,
+          "hz": 22.608,
+          "ten_second_hz": {
+            "p1": 21.372,
+            "p50": 22.6,
+            "p95": 23.105,
+            "p99": 23.3
+          },
+          "first_30s_hz": 22.533333333333335,
+          "last_30s_hz": 22.7,
+          "gap_ms": {
+            "p1": 29.2,
+            "p50": 44.233,
+            "p95": 49.561,
+            "p99": 58.565
+          }
+        },
+        "tracking": {
+          "count": 3193,
+          "hz": 5.322,
+          "ten_second_hz": {
+            "p1": 4.759,
+            "p50": 5.2,
+            "p95": 6.4,
+            "p99": 6.582
+          },
+          "first_30s_hz": 6.533333333333333,
+          "last_30s_hz": 5.333333333333333,
+          "gap_ms": {
+            "p1": 124.391,
+            "p50": 178.93,
+            "p95": 261.634,
+            "p99": 274.12
+          }
+        },
+        "assessment": {
+          "count": 1045,
+          "hz": 1.742,
+          "ten_second_hz": {
+            "p1": 1.6,
+            "p50": 1.7,
+            "p95": 1.8,
+            "p99": 1.8
+          },
+          "first_30s_hz": 1.7666666666666666,
+          "last_30s_hz": 1.7666666666666666,
+          "gap_ms": {
+            "p1": 383.314,
+            "p50": 576.58,
+            "p95": 680.157,
+            "p99": 769.383
+          }
+        },
+        "capture": {
+          "count": 17993,
+          "hz": 29.988,
+          "ten_second_hz": {
+            "p1": 29.818,
+            "p50": 30.0,
+            "p95": 30.0,
+            "p99": 30.041
+          },
+          "first_30s_hz": 30.0,
+          "last_30s_hz": 30.0,
+          "gap_ms": {
+            "p1": 31.165,
+            "p50": 33.324,
+            "p95": 34.199,
+            "p99": 35.331
+          }
+        },
+        "redraw": {
+          "count": 13587,
+          "hz": 22.645,
+          "ten_second_hz": {
+            "p1": 21.472,
+            "p50": 22.6,
+            "p95": 23.205,
+            "p99": 23.382
+          },
+          "first_30s_hz": 22.566666666666666,
+          "last_30s_hz": 22.7,
+          "gap_ms": {
+            "p1": 27.659,
+            "p50": 44.189,
+            "p95": 49.031,
+            "p99": 58.55
+          }
+        }
+      },
+      "errors": [],
+      "workers_stopped": {
+        "camera": true,
+        "tracking": true,
+        "assessment": true
+      }
+    },
+    "cbvms-correction-baseline": {
+      "costs_ms": {
+        "face_inference_ms": {
+          "p1": 47.429,
+          "p50": 56.777,
+          "p95": 69.791,
+          "p99": 74.814
+        },
+        "sample_copy_ms": {
+          "p1": 0.059,
+          "p50": 0.078,
+          "p95": 0.172,
+          "p99": 0.239
+        },
+        "body_inference_ms": {
+          "p1": 23.384,
+          "p50": 27.515,
+          "p95": 32.025,
+          "p99": 35.464
+        },
+        "capture_to_tracking_ms": {
+          "p1": 77.982,
+          "p50": 103.272,
+          "p95": 123.914,
+          "p99": 133.347
+        },
+        "projection_ms": {
+          "p1": 0.556,
+          "p50": 1.974,
+          "p95": 2.363,
+          "p99": 2.576
+        },
+        "render_ms": {
+          "p1": 1.182,
+          "p50": 1.453,
+          "p95": 1.808,
+          "p99": 1.986
+        },
+        "preview_age_ms": {
+          "p1": 4.053,
+          "p50": 19.787,
+          "p95": 35.049,
+          "p99": 36.573
+        },
+        "feed_callback_ms": {
+          "p1": 0.744,
+          "p50": 4.056,
+          "p95": 5.124,
+          "p99": 5.767
+        },
+        "recognition_inference_ms": {
+          "p1": 94.658,
+          "p50": 112.678,
+          "p95": 124.608,
+          "p99": 132.412
+        },
+        "database_read_ms": {
+          "p1": 1.194,
+          "p50": 1.483,
+          "p95": 2.437,
+          "p99": 3.399
+        },
+        "capture_to_assessment_ms": {
+          "p1": 175.746,
+          "p50": 214.347,
+          "p95": 239.681,
+          "p99": 248.599
+        }
+      },
+      "cost_sample_counts": {
+        "face_inference_ms": 454,
+        "sample_copy_ms": 1814,
+        "body_inference_ms": 454,
+        "capture_to_tracking_ms": 454,
+        "projection_ms": 1814,
+        "render_ms": 1777,
+        "preview_age_ms": 1777,
+        "feed_callback_ms": 1814,
+        "recognition_inference_ms": 111,
+        "database_read_ms": 111,
+        "capture_to_assessment_ms": 111
+      },
+      "rates": {
+        "preview": {
+          "count": 1761,
+          "hz": 29.35,
+          "ten_second_hz": {
+            "p1": 28.81,
+            "p50": 29.45,
+            "p95": 29.7,
+            "p99": 29.7
+          },
+          "first_30s_hz": 29.4,
+          "last_30s_hz": 29.3,
+          "gap_ms": {
+            "p1": 24.251,
+            "p50": 33.07,
+            "p95": 41.235,
+            "p99": 65.729
+          }
+        },
+        "tracking": {
+          "count": 454,
+          "hz": 7.567,
+          "ten_second_hz": {
+            "p1": 7.41,
+            "p50": 7.6,
+            "p95": 7.6,
+            "p99": 7.6
+          },
+          "first_30s_hz": 7.533333333333333,
+          "last_30s_hz": 7.6,
+          "gap_ms": {
+            "p1": 97.755,
+            "p50": 131.982,
+            "p95": 164.39,
+            "p99": 167.691
+          }
+        },
+        "assessment": {
+          "count": 111,
+          "hz": 1.85,
+          "ten_second_hz": {
+            "p1": 1.8,
+            "p50": 1.85,
+            "p95": 1.9,
+            "p99": 1.9
+          },
+          "first_30s_hz": 1.8666666666666667,
+          "last_30s_hz": 1.8333333333333333,
+          "gap_ms": {
+            "p1": 485.625,
+            "p50": 528.103,
+            "p95": 646.919,
+            "p99": 684.19
+          }
+        },
+        "capture": {
+          "count": 1800,
+          "hz": 30.0,
+          "ten_second_hz": {
+            "p1": 30.0,
+            "p50": 30.0,
+            "p95": 30.0,
+            "p99": 30.0
+          },
+          "first_30s_hz": 30.0,
+          "last_30s_hz": 30.0,
+          "gap_ms": {
+            "p1": 31.278,
+            "p50": 33.393,
+            "p95": 34.314,
+            "p99": 34.841
+          }
+        },
+        "redraw": {
+          "count": 1777,
+          "hz": 29.617,
+          "ten_second_hz": {
+            "p1": 29.02,
+            "p50": 29.75,
+            "p95": 29.95,
+            "p99": 29.99
+          },
+          "first_30s_hz": 29.566666666666666,
+          "last_30s_hz": 29.666666666666668,
+          "gap_ms": {
+            "p1": 24.219,
+            "p50": 33.092,
+            "p95": 38.982,
+            "p99": 65.382
+          }
+        }
+      },
+      "errors": [],
+      "workers_stopped": {
+        "camera": true,
+        "tracking": true,
+        "assessment": true
+      }
+    },
+    "cbvms-correction-candidate-cpu": {
+      "costs_ms": {
+        "sample_copy_ms": {
+          "p1": 0.062,
+          "p50": 0.078,
+          "p95": 0.156,
+          "p99": 0.215
+        },
+        "projection_ms": {
+          "p1": 0.606,
+          "p50": 2.1,
+          "p95": 2.45,
+          "p99": 2.637
+        },
+        "render_ms": {
+          "p1": 1.165,
+          "p50": 1.452,
+          "p95": 1.763,
+          "p99": 1.957
+        },
+        "preview_age_ms": {
+          "p1": 4.079,
+          "p50": 20.113,
+          "p95": 35.244,
+          "p99": 36.699
+        },
+        "feed_callback_ms": {
+          "p1": 0.87,
+          "p50": 4.167,
+          "p95": 5.157,
+          "p99": 5.968
+        },
+        "face_inference_ms": {
+          "p1": 52.685,
+          "p50": 59.374,
+          "p95": 73.196,
+          "p99": 79.056
+        },
+        "body_inference_ms": {
+          "p1": 24.006,
+          "p50": 27.865,
+          "p95": 32.501,
+          "p99": 39.246
+        },
+        "capture_to_tracking_ms": {
+          "p1": 84.738,
+          "p50": 107.93,
+          "p95": 127.205,
+          "p99": 133.148
+        },
+        "recognition_inference_ms": {
+          "p1": 108.449,
+          "p50": 120.393,
+          "p95": 127.924,
+          "p99": 133.285
+        },
+        "database_read_ms": {
+          "p1": 1.208,
+          "p50": 1.6,
+          "p95": 2.852,
+          "p99": 3.523
+        },
+        "capture_to_assessment_ms": {
+          "p1": 342.512,
+          "p50": 886.991,
+          "p95": 1412.17,
+          "p99": 1430.419
+        }
+      },
+      "cost_sample_counts": {
+        "sample_copy_ms": 1813,
+        "projection_ms": 1813,
+        "render_ms": 1780,
+        "preview_age_ms": 1780,
+        "feed_callback_ms": 1813,
+        "face_inference_ms": 454,
+        "body_inference_ms": 454,
+        "capture_to_tracking_ms": 454,
+        "recognition_inference_ms": 91,
+        "database_read_ms": 91,
+        "capture_to_assessment_ms": 91
+      },
+      "rates": {
+        "preview": {
+          "count": 1762,
+          "hz": 29.367,
+          "ten_second_hz": {
+            "p1": 29.105,
+            "p50": 29.35,
+            "p95": 29.6,
+            "p99": 29.6
+          },
+          "first_30s_hz": 29.366666666666667,
+          "last_30s_hz": 29.366666666666667,
+          "gap_ms": {
+            "p1": 24.817,
+            "p50": 33.071,
+            "p95": 41.479,
+            "p99": 65.6
+          }
+        },
+        "tracking": {
+          "count": 453,
+          "hz": 7.55,
+          "ten_second_hz": {
+            "p1": 7.5,
+            "p50": 7.55,
+            "p95": 7.6,
+            "p99": 7.6
+          },
+          "first_30s_hz": 7.566666666666666,
+          "last_30s_hz": 7.533333333333333,
+          "gap_ms": {
+            "p1": 98.124,
+            "p50": 132.013,
+            "p95": 165.148,
+            "p99": 165.783
+          }
+        },
+        "assessment": {
+          "count": 91,
+          "hz": 1.517,
+          "ten_second_hz": {
+            "p1": 1.5,
+            "p50": 1.5,
+            "p95": 1.575,
+            "p99": 1.595
+          },
+          "first_30s_hz": 1.5,
+          "last_30s_hz": 1.5333333333333334,
+          "gap_ms": {
+            "p1": 627.093,
+            "p50": 660.088,
+            "p95": 692.867,
+            "p99": 693.734
+          }
+        },
+        "redraw": {
+          "count": 1780,
+          "hz": 29.667,
+          "ten_second_hz": {
+            "p1": 29.4,
+            "p50": 29.7,
+            "p95": 29.9,
+            "p99": 29.9
+          },
+          "first_30s_hz": 29.7,
+          "last_30s_hz": 29.633333333333333,
+          "gap_ms": {
+            "p1": 24.936,
+            "p50": 33.11,
+            "p95": 40.138,
+            "p99": 60.426
+          }
+        },
+        "capture": {
+          "count": 1800,
+          "hz": 30.0,
+          "ten_second_hz": {
+            "p1": 30.0,
+            "p50": 30.0,
+            "p95": 30.0,
+            "p99": 30.0
+          },
+          "first_30s_hz": 30.0,
+          "last_30s_hz": 30.0,
+          "gap_ms": {
+            "p1": 31.803,
+            "p50": 33.378,
+            "p95": 34.195,
+            "p99": 34.715
+          }
+        }
+      },
+      "errors": [],
+      "workers_stopped": {
+        "camera": true,
+        "tracking": true,
+        "assessment": true
+      }
+    },
+    "cbvms-correction-candidate-mps": {
+      "costs_ms": {
+        "sample_copy_ms": {
+          "p1": 0.065,
+          "p50": 0.095,
+          "p95": 0.193,
+          "p99": 0.267
+        },
+        "projection_ms": {
+          "p1": 0.456,
+          "p50": 1.614,
+          "p95": 2.219,
+          "p99": 2.595
+        },
+        "render_ms": {
+          "p1": 1.017,
+          "p50": 1.26,
+          "p95": 1.645,
+          "p99": 1.919
+        },
+        "preview_age_ms": {
+          "p1": 3.966,
+          "p50": 19.466,
+          "p95": 34.27,
+          "p99": 36.316
+        },
+        "feed_callback_ms": {
+          "p1": 0.616,
+          "p50": 3.496,
+          "p95": 4.574,
+          "p99": 5.237
+        },
+        "face_inference_ms": {
+          "p1": 38.954,
+          "p50": 42.537,
+          "p95": 50.612,
+          "p99": 65.748
+        },
+        "body_inference_ms": {
+          "p1": 13.046,
+          "p50": 23.358,
+          "p95": 26.438,
+          "p99": 39.643
+        },
+        "capture_to_tracking_ms": {
+          "p1": 63.58,
+          "p50": 81.67,
+          "p95": 105.471,
+          "p99": 114.317
+        },
+        "recognition_inference_ms": {
+          "p1": 72.174,
+          "p50": 82.215,
+          "p95": 94.362,
+          "p99": 127.062
+        },
+        "database_read_ms": {
+          "p1": 1.089,
+          "p50": 1.278,
+          "p95": 2.128,
+          "p99": 3.423
+        },
+        "capture_to_assessment_ms": {
+          "p1": 285.406,
+          "p50": 809.233,
+          "p95": 1352.598,
+          "p99": 1360.722
+        }
+      },
+      "cost_sample_counts": {
+        "sample_copy_ms": 1818,
+        "projection_ms": 1818,
+        "render_ms": 1759,
+        "preview_age_ms": 1759,
+        "feed_callback_ms": 1818,
+        "face_inference_ms": 455,
+        "body_inference_ms": 455,
+        "capture_to_tracking_ms": 454,
+        "recognition_inference_ms": 91,
+        "database_read_ms": 91,
+        "capture_to_assessment_ms": 91
+      },
+      "rates": {
+        "preview": {
+          "count": 1751,
+          "hz": 29.183,
+          "ten_second_hz": {
+            "p1": 29.005,
+            "p50": 29.15,
+            "p95": 29.375,
+            "p99": 29.395
+          },
+          "first_30s_hz": 29.166666666666668,
+          "last_30s_hz": 29.2,
+          "gap_ms": {
+            "p1": 26.226,
+            "p50": 33.011,
+            "p95": 42.784,
+            "p99": 66.136
+          }
+        },
+        "tracking": {
+          "count": 454,
+          "hz": 7.567,
+          "ten_second_hz": {
+            "p1": 7.5,
+            "p50": 7.6,
+            "p95": 7.6,
+            "p99": 7.6
+          },
+          "first_30s_hz": 7.566666666666666,
+          "last_30s_hz": 7.566666666666666,
+          "gap_ms": {
+            "p1": 93.273,
+            "p50": 132.034,
+            "p95": 165.05,
+            "p99": 166.067
+          }
+        },
+        "assessment": {
+          "count": 91,
+          "hz": 1.517,
+          "ten_second_hz": {
+            "p1": 1.5,
+            "p50": 1.5,
+            "p95": 1.575,
+            "p99": 1.595
+          },
+          "first_30s_hz": 1.5,
+          "last_30s_hz": 1.5333333333333334,
+          "gap_ms": {
+            "p1": 615.395,
+            "p50": 660.005,
+            "p95": 693.098,
+            "p99": 725.856
+          }
+        },
+        "capture": {
+          "count": 1800,
+          "hz": 30.0,
+          "ten_second_hz": {
+            "p1": 30.0,
+            "p50": 30.0,
+            "p95": 30.0,
+            "p99": 30.0
+          },
+          "first_30s_hz": 30.0,
+          "last_30s_hz": 30.0,
+          "gap_ms": {
+            "p1": 26.672,
+            "p50": 33.498,
+            "p95": 37.087,
+            "p99": 38.761
+          }
+        },
+        "redraw": {
+          "count": 1759,
+          "hz": 29.317,
+          "ten_second_hz": {
+            "p1": 29.2,
+            "p50": 29.3,
+            "p95": 29.475,
+            "p99": 29.495
+          },
+          "first_30s_hz": 29.3,
+          "last_30s_hz": 29.333333333333332,
+          "gap_ms": {
+            "p1": 25.67,
+            "p50": 33.0,
+            "p95": 41.064,
+            "p99": 66.397
+          }
+        }
+      },
+      "errors": [],
+      "workers_stopped": {
+        "camera": true,
+        "tracking": true,
+        "assessment": true
+      }
+    },
+    "cbvms-correction-final-control-cpu": {
+      "costs_ms": {
+        "sample_copy_ms": {
+          "p1": 0.06,
+          "p50": 0.079,
+          "p95": 0.151,
+          "p99": 0.208
+        },
+        "projection_ms": {
+          "p1": 0.003,
+          "p50": 1.93,
+          "p95": 2.583,
+          "p99": 2.78
+        },
+        "render_ms": {
+          "p1": 1.062,
+          "p50": 1.47,
+          "p95": 1.869,
+          "p99": 2.08
+        },
+        "ui_render_ms": {
+          "p1": 1.149,
+          "p50": 1.739,
+          "p95": 2.197,
+          "p99": 2.478
+        },
+        "preview_age_ms": {
+          "p1": 4.08,
+          "p50": 20.939,
+          "p95": 35.308,
+          "p99": 37.005
+        },
+        "feed_callback_ms": {
+          "p1": 0.729,
+          "p50": 4.062,
+          "p95": 5.59,
+          "p99": 6.684
+        },
+        "face_inference_ms": {
+          "p1": 41.002,
+          "p50": 59.068,
+          "p95": 75.021,
+          "p99": 87.221
+        },
+        "lock_person_ms": {
+          "p1": 0.0,
+          "p50": 0.0,
+          "p95": 0.0,
+          "p99": 0.0
+        },
+        "body_inference_ms": {
+          "p1": 24.238,
+          "p50": 28.313,
+          "p95": 34.96,
+          "p99": 38.294
+        },
+        "tracking_ms": {
+          "p1": 41.06,
+          "p50": 88.097,
+          "p95": 108.008,
+          "p99": 123.643
+        },
+        "candidate_quality_ms": {
+          "p1": 0.0,
+          "p50": 1.219,
+          "p95": 1.533,
+          "p99": 1.618
+        },
+        "capture_to_tracking_ms": {
+          "p1": 52.475,
+          "p50": 108.764,
+          "p95": 131.88,
+          "p99": 146.52
+        },
+        "frame_copy_ms": {
+          "p1": 0.051,
+          "p50": 0.07,
+          "p95": 0.134,
+          "p99": 0.177
+        },
+        "queue_tracking_ms": {
+          "p1": 0.019,
+          "p50": 0.06,
+          "p95": 0.08,
+          "p99": 0.102
+        },
+        "lock_detector_ms": {
+          "p1": 0.0,
+          "p50": 0.0,
+          "p95": 0.0,
+          "p99": 0.001
+        },
+        "candidate_selection_wait_ms": {
+          "p1": 0.852,
+          "p50": 664.548,
+          "p95": 1182.563,
+          "p99": 1199.402
+        },
+        "queue_assessment_ms": {
+          "p1": 0.046,
+          "p50": 0.056,
+          "p95": 0.088,
+          "p99": 0.132
+        },
+        "lock_recognition_ms": {
+          "p1": 0.0,
+          "p50": 0.0,
+          "p95": 0.0,
+          "p99": 0.001
+        },
+        "face_alignment_ms": {
+          "p1": 0.245,
+          "p50": 0.308,
+          "p95": 0.401,
+          "p99": 0.482
+        },
+        "face_embedding_ms": {
+          "p1": 98.058,
+          "p50": 119.397,
+          "p95": 142.641,
+          "p99": 149.326
+        },
+        "recognition_inference_ms": {
+          "p1": 98.458,
+          "p50": 119.767,
+          "p95": 143.076,
+          "p99": 149.759
+        },
+        "gallery_matching_ms": {
+          "p1": 0.015,
+          "p50": 0.02,
+          "p95": 0.033,
+          "p99": 0.045
+        },
+        "recognition_ms": {
+          "p1": 98.592,
+          "p50": 119.864,
+          "p95": 143.236,
+          "p99": 149.895
+        },
+        "database_read_ms": {
+          "p1": 1.145,
+          "p50": 1.674,
+          "p95": 2.485,
+          "p99": 3.159
+        },
+        "body_ms": {
+          "p1": 0.0,
+          "p50": 0.0,
+          "p95": 0.0,
+          "p99": 0.001
+        },
+        "confirmation_ms": {
+          "p1": 0.087,
+          "p50": 0.126,
+          "p95": 0.185,
+          "p99": 0.233
+        },
+        "capture_to_assessment_ms": {
+          "p1": 185.024,
+          "p50": 910.935,
+          "p95": 1445.261,
+          "p99": 1456.529
+        },
+        "candidate_to_assessment_ms": {
+          "p1": 100.388,
+          "p50": 122.301,
+          "p95": 145.604,
+          "p99": 152.46
+        },
+        "result_to_ui_ms": {
+          "p1": 0.416,
+          "p50": 20.635,
+          "p95": 31.668,
+          "p99": 32.46
+        },
+        "rejected_ms": {
+          "p1": 0.0,
+          "p50": 0.0,
+          "p95": 0.0,
+          "p99": 0.0
+        },
+        "passage_entry_to_assessment_ms": {
+          "p1": 70.655,
+          "p50": 85.651,
+          "p95": 94.139,
+          "p99": 94.893
+        },
+        "usable_to_assessment_ms": {
+          "p1": 70.655,
+          "p50": 85.651,
+          "p95": 94.139,
+          "p99": 94.893
+        },
+        "passage_entry_to_first_assessment_ms": {
+          "p1": 164.126,
+          "p50": 189.116,
+          "p95": 201.782,
+          "p99": 202.908
+        },
+        "usable_to_first_assessment_ms": {
+          "p1": 164.126,
+          "p50": 189.116,
+          "p95": 201.782,
+          "p99": 202.908
+        },
+        "first_face_ms": {
+          "p1": 53.453,
+          "p50": 53.453,
+          "p95": 53.453,
+          "p99": 53.453
+        }
+      },
+      "cost_sample_counts": {
+        "sample_copy_ms": 1798,
+        "projection_ms": 1798,
+        "render_ms": 1752,
+        "ui_render_ms": 1752,
+        "preview_age_ms": 1752,
+        "feed_callback_ms": 1798,
+        "face_inference_ms": 451,
+        "lock_person_ms": 836,
+        "body_inference_ms": 418,
+        "tracking_ms": 450,
+        "candidate_quality_ms": 450,
+        "capture_to_tracking_ms": 450,
+        "frame_copy_ms": 450,
+        "queue_tracking_ms": 450,
+        "lock_detector_ms": 900,
+        "candidate_selection_wait_ms": 85,
+        "queue_assessment_ms": 85,
+        "lock_recognition_ms": 85,
+        "face_alignment_ms": 85,
+        "face_embedding_ms": 85,
+        "recognition_inference_ms": 85,
+        "gallery_matching_ms": 85,
+        "recognition_ms": 85,
+        "database_read_ms": 85,
+        "body_ms": 85,
+        "confirmation_ms": 85,
+        "capture_to_assessment_ms": 85,
+        "candidate_to_assessment_ms": 85,
+        "result_to_ui_ms": 84,
+        "rejected_ms": 6,
+        "passage_entry_to_assessment_ms": 3,
+        "usable_to_assessment_ms": 3,
+        "passage_entry_to_first_assessment_ms": 3,
+        "usable_to_first_assessment_ms": 3,
+        "first_face_ms": 1
+      },
+      "rates": {
+        "preview": {
+          "count": 1737,
+          "hz": 28.95,
+          "ten_second_hz": {
+            "p1": 28.6,
+            "p50": 28.9,
+            "p95": 29.425,
+            "p99": 29.485
+          },
+          "first_30s_hz": 28.933333333333334,
+          "last_30s_hz": 28.966666666666665,
+          "gap_ms": {
+            "p1": 23.542,
+            "p50": 33.041,
+            "p95": 46.511,
+            "p99": 66.393
+          }
+        },
+        "tracking": {
+          "count": 450,
+          "hz": 7.5,
+          "ten_second_hz": {
+            "p1": 7.4,
+            "p50": 7.5,
+            "p95": 7.6,
+            "p99": 7.6
+          },
+          "first_30s_hz": 7.533333333333333,
+          "last_30s_hz": 7.466666666666667,
+          "gap_ms": {
+            "p1": 92.466,
+            "p50": 132.02,
+            "p95": 165.43,
+            "p99": 178.944
+          }
+        },
+        "assessment": {
+          "count": 84,
+          "hz": 1.4,
+          "ten_second_hz": {
+            "p1": 0.93,
+            "p50": 1.5,
+            "p95": 1.5,
+            "p99": 1.5
+          },
+          "first_30s_hz": 1.3,
+          "last_30s_hz": 1.5,
+          "gap_ms": {
+            "p1": 626.757,
+            "p50": 660.326,
+            "p95": 697.847,
+            "p99": 2477.663
+          }
+        },
+        "capture": {
+          "count": 1801,
+          "hz": 30.017,
+          "ten_second_hz": {
+            "p1": 30.0,
+            "p50": 30.0,
+            "p95": 30.075,
+            "p99": 30.095
+          },
+          "first_30s_hz": 30.0,
+          "last_30s_hz": 30.033333333333335,
+          "gap_ms": {
+            "p1": 29.745,
+            "p50": 33.37,
+            "p95": 34.349,
+            "p99": 37.259
+          }
+        },
+        "redraw": {
+          "count": 1752,
+          "hz": 29.2,
+          "ten_second_hz": {
+            "p1": 28.805,
+            "p50": 29.15,
+            "p95": 29.65,
+            "p99": 29.69
+          },
+          "first_30s_hz": 29.233333333333334,
+          "last_30s_hz": 29.166666666666668,
+          "gap_ms": {
+            "p1": 23.569,
+            "p50": 33.066,
+            "p95": 44.319,
+            "p99": 66.325
+          }
+        }
+      },
+      "errors": [],
+      "workers_stopped": {
+        "camera": true,
+        "tracking": true,
+        "assessment": true
+      }
+    },
+    "cbvms-correction-final-control-mps": {
+      "costs_ms": {
+        "sample_copy_ms": {
+          "p1": 0.078,
+          "p50": 0.122,
+          "p95": 0.218,
+          "p99": 0.433
+        },
+        "frame_copy_ms": {
+          "p1": 0.066,
+          "p50": 0.109,
+          "p95": 0.216,
+          "p99": 0.344
+        },
+        "queue_tracking_ms": {
+          "p1": 0.024,
+          "p50": 0.063,
+          "p95": 52.977,
+          "p99": 81.993
+        },
+        "lock_detector_ms": {
+          "p1": 0.0,
+          "p50": 0.0,
+          "p95": 0.001,
+          "p99": 0.001
+        },
+        "projection_ms": {
+          "p1": 0.661,
+          "p50": 2.77,
+          "p95": 3.85,
+          "p99": 4.097
+        },
+        "render_ms": {
+          "p1": 1.365,
+          "p50": 2.095,
+          "p95": 2.786,
+          "p99": 3.319
+        },
+        "ui_render_ms": {
+          "p1": 1.601,
+          "p50": 2.501,
+          "p95": 3.286,
+          "p99": 3.998
+        },
+        "preview_age_ms": {
+          "p1": 5.83,
+          "p50": 24.285,
+          "p95": 38.091,
+          "p99": 40.962
+        },
+        "feed_callback_ms": {
+          "p1": 1.002,
+          "p50": 5.952,
+          "p95": 8.794,
+          "p99": 9.649
+        },
+        "face_embedding_ms": {
+          "p1": 101.971,
+          "p50": 156.933,
+          "p95": 221.472,
+          "p99": 271.296
+        },
+        "recognition_inference_ms": {
+          "p1": 102.305,
+          "p50": 157.394,
+          "p95": 222.112,
+          "p99": 272.113
+        },
+        "gallery_matching_ms": {
+          "p1": 0.017,
+          "p50": 0.024,
+          "p95": 0.035,
+          "p99": 0.043
+        },
+        "recognition_ms": {
+          "p1": 102.395,
+          "p50": 157.534,
+          "p95": 222.293,
+          "p99": 272.281
+        },
+        "database_read_ms": {
+          "p1": 1.458,
+          "p50": 2.309,
+          "p95": 3.71,
+          "p99": 4.16
+        },
+        "body_ms": {
+          "p1": 0.0,
+          "p50": 0.0,
+          "p95": 0.0,
+          "p99": 0.001
+        },
+        "confirmation_ms": {
+          "p1": 0.105,
+          "p50": 0.155,
+          "p95": 0.237,
+          "p99": 0.271
+        },
+        "capture_to_assessment_ms": {
+          "p1": 349.545,
+          "p50": 947.485,
+          "p95": 1558.09,
+          "p99": 1752.625
+        },
+        "candidate_to_assessment_ms": {
+          "p1": 104.147,
+          "p50": 160.491,
+          "p95": 225.702,
+          "p99": 277.501
+        },
+        "face_inference_ms": {
+          "p1": 50.088,
+          "p50": 83.058,
+          "p95": 119.641,
+          "p99": 156.008
+        },
+        "lock_person_ms": {
+          "p1": 0.0,
+          "p50": 0.0,
+          "p95": 0.0,
+          "p99": 0.001
+        },
+        "body_inference_ms": {
+          "p1": 16.053,
+          "p50": 23.951,
+          "p95": 28.23,
+          "p99": 42.606
+        },
+        "tracking_ms": {
+          "p1": 73.758,
+          "p50": 104.267,
+          "p95": 146.072,
+          "p99": 197.627
+        },
+        "result_to_ui_ms": {
+          "p1": 1.279,
+          "p50": 21.922,
+          "p95": 38.485,
+          "p99": 53.438
+        },
+        "candidate_quality_ms": {
+          "p1": 1.113,
+          "p50": 1.743,
+          "p95": 2.271,
+          "p99": 2.479
+        },
+        "capture_to_tracking_ms": {
+          "p1": 81.274,
+          "p50": 127.56,
+          "p95": 212.602,
+          "p99": 275.279
+        },
+        "candidate_selection_wait_ms": {
+          "p1": 116.29,
+          "p50": 665.375,
+          "p95": 1243.179,
+          "p99": 1299.145
+        },
+        "queue_assessment_ms": {
+          "p1": 0.045,
+          "p50": 0.067,
+          "p95": 0.139,
+          "p99": 0.219
+        },
+        "lock_recognition_ms": {
+          "p1": 0.0,
+          "p50": 0.0,
+          "p95": 0.001,
+          "p99": 0.001
+        },
+        "face_alignment_ms": {
+          "p1": 0.27,
+          "p50": 0.411,
+          "p95": 0.601,
+          "p99": 0.994
+        },
+        "replaced_tracking_ms": {
+          "p1": 0.0,
+          "p50": 0.0,
+          "p95": 0.0,
+          "p99": 0.0
+        },
+        "rejected_ms": {
+          "p1": 0.0,
+          "p50": 0.0,
+          "p95": 0.0,
+          "p99": 0.0
+        },
+        "first_face_ms": {
+          "p1": 70.23,
+          "p50": 70.23,
+          "p95": 70.23,
+          "p99": 70.23
+        }
+      },
+      "cost_sample_counts": {
+        "sample_copy_ms": 1625,
+        "frame_copy_ms": 438,
+        "queue_tracking_ms": 434,
+        "lock_detector_ms": 868,
+        "projection_ms": 1625,
+        "render_ms": 1572,
+        "ui_render_ms": 1572,
+        "preview_age_ms": 1572,
+        "feed_callback_ms": 1625,
+        "face_embedding_ms": 83,
+        "recognition_inference_ms": 83,
+        "gallery_matching_ms": 83,
+        "recognition_ms": 83,
+        "database_read_ms": 82,
+        "body_ms": 82,
+        "confirmation_ms": 82,
+        "capture_to_assessment_ms": 82,
+        "candidate_to_assessment_ms": 82,
+        "face_inference_ms": 434,
+        "lock_person_ms": 868,
+        "body_inference_ms": 434,
+        "tracking_ms": 433,
+        "result_to_ui_ms": 82,
+        "candidate_quality_ms": 433,
+        "capture_to_tracking_ms": 433,
+        "candidate_selection_wait_ms": 82,
+        "queue_assessment_ms": 82,
+        "lock_recognition_ms": 82,
+        "face_alignment_ms": 82,
+        "replaced_tracking_ms": 4,
+        "rejected_ms": 3,
+        "first_face_ms": 1
+      },
+      "rates": {
+        "preview": {
+          "count": 1564,
+          "hz": 26.067,
+          "ten_second_hz": {
+            "p1": 22.17,
+            "p50": 26.55,
+            "p95": 28.875,
+            "p99": 28.895
+          },
+          "first_30s_hz": 28.566666666666666,
+          "last_30s_hz": 23.566666666666666,
+          "gap_ms": {
+            "p1": 22.846,
+            "p50": 36.479,
+            "p95": 50.184,
+            "p99": 63.166
+          }
+        },
+        "tracking": {
+          "count": 432,
+          "hz": 7.2,
+          "ten_second_hz": {
+            "p1": 6.81,
+            "p50": 7.3,
+            "p95": 7.4,
+            "p99": 7.4
+          },
+          "first_30s_hz": 7.266666666666667,
+          "last_30s_hz": 7.133333333333334,
+          "gap_ms": {
+            "p1": 88.337,
+            "p50": 134.074,
+            "p95": 178.606,
+            "p99": 222.746
+          }
+        },
+        "assessment": {
+          "count": 82,
+          "hz": 1.367,
+          "ten_second_hz": {
+            "p1": 1.205,
+            "p50": 1.35,
+            "p95": 1.5,
+            "p99": 1.5
+          },
+          "first_30s_hz": 1.4666666666666666,
+          "last_30s_hz": 1.2666666666666666,
+          "gap_ms": {
+            "p1": 646.69,
+            "p50": 716.076,
+            "p95": 823.523,
+            "p99": 881.983
+          }
+        },
+        "capture": {
+          "count": 1800,
+          "hz": 30.0,
+          "ten_second_hz": {
+            "p1": 30.0,
+            "p50": 30.0,
+            "p95": 30.0,
+            "p99": 30.0
+          },
+          "first_30s_hz": 30.0,
+          "last_30s_hz": 30.0,
+          "gap_ms": {
+            "p1": 28.71,
+            "p50": 33.349,
+            "p95": 35.426,
+            "p99": 37.045
+          }
+        },
+        "redraw": {
+          "count": 1571,
+          "hz": 26.183,
+          "ten_second_hz": {
+            "p1": 22.265,
+            "p50": 26.65,
+            "p95": 29.075,
+            "p99": 29.095
+          },
+          "first_30s_hz": 28.766666666666666,
+          "last_30s_hz": 23.6,
+          "gap_ms": {
+            "p1": 21.078,
+            "p50": 36.277,
+            "p95": 49.197,
+            "p99": 61.161
+          }
+        }
+      },
+      "errors": [],
+      "workers_stopped": {
+        "camera": true,
+        "tracking": true,
+        "assessment": true
+      }
+    },
+    "cbvms-correction-fresh-cpu-600": {
+      "costs_ms": {
+        "face_inference_ms": {
+          "p1": 50.864,
+          "p50": 91.862,
+          "p95": 109.896,
+          "p99": 117.989
+        },
+        "sample_copy_ms": {
+          "p1": 0.067,
+          "p50": 0.091,
+          "p95": 0.121,
+          "p99": 0.168
+        },
+        "projection_ms": {
+          "p1": 0.783,
+          "p50": 3.103,
+          "p95": 3.762,
+          "p99": 4.056
+        },
+        "render_ms": {
+          "p1": 1.255,
+          "p50": 2.173,
+          "p95": 2.632,
+          "p99": 2.905
+        },
+        "preview_age_ms": {
+          "p1": 5.24,
+          "p50": 22.764,
+          "p95": 37.541,
+          "p99": 39.603
+        },
+        "feed_callback_ms": {
+          "p1": 0.997,
+          "p50": 5.976,
+          "p95": 8.082,
+          "p99": 9.119
+        },
+        "body_inference_ms": {
+          "p1": 24.822,
+          "p50": 35.668,
+          "p95": 49.012,
+          "p99": 63.184
+        },
+        "capture_to_tracking_ms": {
+          "p1": 87.729,
+          "p50": 159.762,
+          "p95": 250.701,
+          "p99": 288.101
+        },
+        "recognition_inference_ms": {
+          "p1": 102.273,
+          "p50": 185.241,
+          "p95": 206.549,
+          "p99": 224.73
+        },
+        "database_read_ms": {
+          "p1": 1.239,
+          "p50": 2.477,
+          "p95": 3.295,
+          "p99": 4.345
+        },
+        "capture_to_assessment_ms": {
+          "p1": 197.14,
+          "p50": 338.649,
+          "p95": 444.922,
+          "p99": 495.335
+        }
+      },
+      "cost_sample_counts": {
+        "face_inference_ms": 4230,
+        "sample_copy_ms": 16210,
+        "projection_ms": 16210,
+        "render_ms": 15725,
+        "preview_age_ms": 15725,
+        "feed_callback_ms": 16210,
+        "body_inference_ms": 4230,
+        "capture_to_tracking_ms": 4229,
+        "recognition_inference_ms": 824,
+        "database_read_ms": 819,
+        "capture_to_assessment_ms": 819
+      },
+      "rates": {
+        "preview": {
+          "count": 15609,
+          "hz": 26.015,
+          "ten_second_hz": {
+            "p1": 23.19,
+            "p50": 25.55,
+            "p95": 29.205,
+            "p99": 29.441
+          },
+          "first_30s_hz": 28.866666666666667,
+          "last_30s_hz": 23.666666666666668,
+          "gap_ms": {
+            "p1": 18.619,
+            "p50": 37.679,
+            "p95": 51.478,
+            "p99": 65.678
+          }
+        },
+        "tracking": {
+          "count": 4228,
+          "hz": 7.047,
+          "ten_second_hz": {
+            "p1": 6.577,
+            "p50": 7.0,
+            "p95": 7.6,
+            "p99": 7.6
+          },
+          "first_30s_hz": 7.533333333333333,
+          "last_30s_hz": 6.8,
+          "gap_ms": {
+            "p1": 95.114,
+            "p50": 139.321,
+            "p95": 180.536,
+            "p99": 214.04
+          }
+        },
+        "assessment": {
+          "count": 819,
+          "hz": 1.365,
+          "ten_second_hz": {
+            "p1": 1.259,
+            "p50": 1.3,
+            "p95": 1.5,
+            "p99": 1.5
+          },
+          "first_30s_hz": 1.5,
+          "last_30s_hz": 1.3666666666666667,
+          "gap_ms": {
+            "p1": 627.176,
+            "p50": 723.983,
+            "p95": 843.069,
+            "p99": 877.585
+          }
+        },
+        "redraw": {
+          "count": 15724,
+          "hz": 26.207,
+          "ten_second_hz": {
+            "p1": 23.249,
+            "p50": 25.75,
+            "p95": 29.41,
+            "p99": 29.7
+          },
+          "first_30s_hz": 29.066666666666666,
+          "last_30s_hz": 23.7,
+          "gap_ms": {
+            "p1": 17.617,
+            "p50": 37.663,
+            "p95": 49.912,
+            "p99": 62.938
+          }
+        },
+        "capture": {
+          "count": 17997,
+          "hz": 29.995,
+          "ten_second_hz": {
+            "p1": 29.9,
+            "p50": 30.0,
+            "p95": 30.0,
+            "p99": 30.041
+          },
+          "first_30s_hz": 29.966666666666665,
+          "last_30s_hz": 30.0,
+          "gap_ms": {
+            "p1": 31.748,
+            "p50": 33.335,
+            "p95": 34.093,
+            "p99": 34.727
+          }
+        }
+      },
+      "errors": [],
+      "workers_stopped": {
+        "camera": true,
+        "tracking": true,
+        "assessment": true
+      }
+    },
+    "cbvms-correction-fresh-mps-600": {
+      "costs_ms": {
+        "sample_copy_ms": {
+          "p1": 0.073,
+          "p50": 0.105,
+          "p95": 0.151,
+          "p99": 0.214
+        },
+        "projection_ms": {
+          "p1": 0.005,
+          "p50": 2.108,
+          "p95": 2.75,
+          "p99": 3.082
+        },
+        "render_ms": {
+          "p1": 1.157,
+          "p50": 1.555,
+          "p95": 1.969,
+          "p99": 2.386
+        },
+        "ui_render_ms": {
+          "p1": 1.246,
+          "p50": 1.801,
+          "p95": 2.332,
+          "p99": 2.773
+        },
+        "preview_age_ms": {
+          "p1": 4.423,
+          "p50": 20.87,
+          "p95": 35.581,
+          "p99": 37.812
+        },
+        "feed_callback_ms": {
+          "p1": 0.799,
+          "p50": 4.421,
+          "p95": 5.935,
+          "p99": 7.36
+        },
+        "frame_copy_ms": {
+          "p1": 0.06,
+          "p50": 0.088,
+          "p95": 0.121,
+          "p99": 0.18
+        },
+        "queue_tracking_ms": {
+          "p1": 0.021,
+          "p50": 0.03,
+          "p95": 0.086,
+          "p99": 1.891
+        },
+        "lock_detector_ms": {
+          "p1": 0.0,
+          "p50": 0.0,
+          "p95": 0.0,
+          "p99": 0.001
+        },
+        "face_embedding_ms": {
+          "p1": 97.703,
+          "p50": 112.186,
+          "p95": 143.882,
+          "p99": 167.51
+        },
+        "recognition_inference_ms": {
+          "p1": 98.001,
+          "p50": 112.515,
+          "p95": 144.317,
+          "p99": 168.001
+        },
+        "gallery_matching_ms": {
+          "p1": 0.016,
+          "p50": 0.02,
+          "p95": 0.028,
+          "p99": 0.042
+        },
+        "recognition_ms": {
+          "p1": 98.084,
+          "p50": 112.626,
+          "p95": 144.432,
+          "p99": 168.144
+        },
+        "database_read_ms": {
+          "p1": 1.395,
+          "p50": 1.733,
+          "p95": 3.044,
+          "p99": 4.321
+        },
+        "body_ms": {
+          "p1": 0.0,
+          "p50": 0.0,
+          "p95": 0.0,
+          "p99": 0.001
+        },
+        "confirmation_ms": {
+          "p1": 0.104,
+          "p50": 0.132,
+          "p95": 0.19,
+          "p99": 0.233
+        },
+        "capture_to_assessment_ms": {
+          "p1": 180.325,
+          "p50": 215.616,
+          "p95": 264.439,
+          "p99": 300.294
+        },
+        "candidate_to_assessment_ms": {
+          "p1": 99.911,
+          "p50": 114.892,
+          "p95": 147.856,
+          "p99": 170.192
+        },
+        "face_inference_ms": {
+          "p1": 41.32,
+          "p50": 57.897,
+          "p95": 77.828,
+          "p99": 97.088
+        },
+        "lock_person_ms": {
+          "p1": 0.0,
+          "p50": 0.0,
+          "p95": 0.0,
+          "p99": 0.0
+        },
+        "result_to_ui_ms": {
+          "p1": 0.437,
+          "p50": 15.516,
+          "p95": 31.932,
+          "p99": 40.124
+        },
+        "body_inference_ms": {
+          "p1": 14.968,
+          "p50": 23.935,
+          "p95": 26.744,
+          "p99": 30.113
+        },
+        "tracking_ms": {
+          "p1": 41.369,
+          "p50": 82.123,
+          "p95": 104.243,
+          "p99": 125.105
+        },
+        "candidate_quality_ms": {
+          "p1": 0.0,
+          "p50": 0.8,
+          "p95": 1.876,
+          "p99": 2.099
+        },
+        "capture_to_tracking_ms": {
+          "p1": 61.139,
+          "p50": 103.049,
+          "p95": 127.662,
+          "p99": 157.924
+        },
+        "candidate_selection_wait_ms": {
+          "p1": 0.713,
+          "p50": 0.894,
+          "p95": 1.942,
+          "p99": 2.132
+        },
+        "queue_assessment_ms": {
+          "p1": 0.041,
+          "p50": 0.055,
+          "p95": 0.084,
+          "p99": 0.116
+        },
+        "lock_recognition_ms": {
+          "p1": 0.0,
+          "p50": 0.0,
+          "p95": 0.0,
+          "p99": 0.001
+        },
+        "face_alignment_ms": {
+          "p1": 0.235,
+          "p50": 0.289,
+          "p95": 0.388,
+          "p99": 0.485
+        },
+        "replaced_tracking_ms": {
+          "p1": 0.0,
+          "p50": 0.0,
+          "p95": 0.0,
+          "p99": 0.0
+        },
+        "first_torso_ms": {
+          "p1": 252772.088,
+          "p50": 252772.088,
+          "p95": 252772.088,
+          "p99": 252772.088
+        },
+        "rejected_ms": {
+          "p1": 0.0,
+          "p50": 0.0,
+          "p95": 0.0,
+          "p99": 0.0
+        },
+        "passage_entry_to_assessment_ms": {
+          "p1": 56814.82,
+          "p50": 56814.82,
+          "p95": 56814.82,
+          "p99": 56814.82
+        },
+        "usable_to_assessment_ms": {
+          "p1": 110.309,
+          "p50": 110.309,
+          "p95": 110.309,
+          "p99": 110.309
+        },
+        "passage_entry_to_first_assessment_ms": {
+          "p1": 56980.732,
+          "p50": 56980.732,
+          "p95": 56980.732,
+          "p99": 56980.732
+        },
+        "usable_to_first_assessment_ms": {
+          "p1": 276.221,
+          "p50": 276.221,
+          "p95": 276.221,
+          "p99": 276.221
+        },
+        "first_face_ms": {
+          "p1": 26.728,
+          "p50": 26.728,
+          "p95": 26.728,
+          "p99": 26.728
+        }
+      },
+      "cost_sample_counts": {
+        "sample_copy_ms": 17996,
+        "projection_ms": 17996,
+        "render_ms": 17473,
+        "ui_render_ms": 17473,
+        "preview_age_ms": 17473,
+        "feed_callback_ms": 17996,
+        "frame_copy_ms": 4496,
+        "queue_tracking_ms": 4492,
+        "lock_detector_ms": 8984,
+        "face_embedding_ms": 784,
+        "recognition_inference_ms": 784,
+        "gallery_matching_ms": 784,
+        "recognition_ms": 784,
+        "database_read_ms": 782,
+        "body_ms": 782,
+        "confirmation_ms": 782,
+        "capture_to_assessment_ms": 782,
+        "candidate_to_assessment_ms": 782,
+        "face_inference_ms": 4492,
+        "lock_person_ms": 8808,
+        "result_to_ui_ms": 782,
+        "body_inference_ms": 4404,
+        "tracking_ms": 4491,
+        "candidate_quality_ms": 4491,
+        "capture_to_tracking_ms": 4491,
+        "candidate_selection_wait_ms": 783,
+        "queue_assessment_ms": 783,
+        "lock_recognition_ms": 783,
+        "face_alignment_ms": 783,
+        "replaced_tracking_ms": 4,
+        "first_torso_ms": 1,
+        "rejected_ms": 20,
+        "passage_entry_to_assessment_ms": 1,
+        "usable_to_assessment_ms": 1,
+        "passage_entry_to_first_assessment_ms": 1,
+        "usable_to_first_assessment_ms": 1,
+        "first_face_ms": 1
+      },
+      "rates": {
+        "preview": {
+          "count": 17285,
+          "hz": 28.808,
+          "ten_second_hz": {
+            "p1": 26.513,
+            "p50": 29.0,
+            "p95": 29.5,
+            "p99": 29.582
+          },
+          "first_30s_hz": 29.066666666666666,
+          "last_30s_hz": 28.766666666666666,
+          "gap_ms": {
+            "p1": 24.85,
+            "p50": 33.09,
+            "p95": 49.036,
+            "p99": 66.218
+          }
+        },
+        "tracking": {
+          "count": 4492,
+          "hz": 7.487,
+          "ten_second_hz": {
+            "p1": 7.118,
+            "p50": 7.5,
+            "p95": 7.6,
+            "p99": 7.6
+          },
+          "first_30s_hz": 7.533333333333333,
+          "last_30s_hz": 7.466666666666667,
+          "gap_ms": {
+            "p1": 97.115,
+            "p50": 132.028,
+            "p95": 164.853,
+            "p99": 179.581
+          }
+        },
+        "assessment": {
+          "count": 782,
+          "hz": 1.303,
+          "ten_second_hz": {
+            "p1": 0.0,
+            "p50": 1.5,
+            "p95": 1.505,
+            "p99": 1.6
+          },
+          "first_30s_hz": 1.5333333333333334,
+          "last_30s_hz": 1.4666666666666666,
+          "gap_ms": {
+            "p1": 624.868,
+            "p50": 660.214,
+            "p95": 726.12,
+            "p99": 805.28
+          }
+        },
+        "capture": {
+          "count": 17999,
+          "hz": 29.998,
+          "ten_second_hz": {
+            "p1": 29.9,
+            "p50": 30.0,
+            "p95": 30.0,
+            "p99": 30.041
+          },
+          "first_30s_hz": 30.0,
+          "last_30s_hz": 30.0,
+          "gap_ms": {
+            "p1": 29.436,
+            "p50": 33.334,
+            "p95": 35.711,
+            "p99": 36.959
+          }
+        },
+        "redraw": {
+          "count": 17473,
+          "hz": 29.122,
+          "ten_second_hz": {
+            "p1": 26.877,
+            "p50": 29.3,
+            "p95": 29.7,
+            "p99": 29.8
+          },
+          "first_30s_hz": 29.433333333333334,
+          "last_30s_hz": 29.133333333333333,
+          "gap_ms": {
+            "p1": 24.659,
+            "p50": 33.055,
+            "p95": 46.161,
+            "p99": 66.017
+          }
+        }
+      },
+      "errors": [],
+      "workers_stopped": {
+        "camera": true,
+        "tracking": true,
+        "assessment": true
+      }
+    },
+    "cbvms-correction-front-gate": {
+      "costs_ms": {
+        "sample_copy_ms": {
+          "p1": 0.143,
+          "p50": 0.193,
+          "p95": 0.248,
+          "p99": 0.333
+        },
+        "projection_ms": {
+          "p1": 0.003,
+          "p50": 0.004,
+          "p95": 0.005,
+          "p99": 0.006
+        },
+        "render_ms": {
+          "p1": 1.09,
+          "p50": 1.281,
+          "p95": 1.637,
+          "p99": 1.757
+        },
+        "ui_render_ms": {
+          "p1": 1.233,
+          "p50": 1.436,
+          "p95": 1.8,
+          "p99": 1.916
+        },
+        "preview_age_ms": {
+          "p1": 5.382,
+          "p50": 24.794,
+          "p95": 48.353,
+          "p99": 54.648
+        },
+        "feed_callback_ms": {
+          "p1": 0.21,
+          "p50": 1.642,
+          "p95": 2.256,
+          "p99": 2.437
+        },
+        "frame_copy_ms": {
+          "p1": 0.126,
+          "p50": 0.147,
+          "p95": 0.196,
+          "p99": 0.268
+        },
+        "queue_tracking_ms": {
+          "p1": 0.017,
+          "p50": 0.034,
+          "p95": 0.048,
+          "p99": 0.056
+        },
+        "lock_detector_ms": {
+          "p1": 0.0,
+          "p50": 0.0,
+          "p95": 0.0,
+          "p99": 0.001
+        },
+        "face_inference_ms": {
+          "p1": 41.364,
+          "p50": 44.867,
+          "p95": 48.393,
+          "p99": 50.07
+        },
+        "tracking_ms": {
+          "p1": 41.407,
+          "p50": 44.916,
+          "p95": 48.446,
+          "p99": 50.136
+        },
+        "candidate_quality_ms": {
+          "p1": 0.0,
+          "p50": 0.0,
+          "p95": 0.001,
+          "p99": 0.001
+        },
+        "capture_to_tracking_ms": {
+          "p1": 50.411,
+          "p50": 75.657,
+          "p95": 97.818,
+          "p99": 102.603
+        },
+        "isolated_writer_wait_ms": {
+          "p1": 0.145,
+          "p50": 0.197,
+          "p95": 0.378,
+          "p99": 0.452
+        }
+      },
+      "cost_sample_counts": {
+        "sample_copy_ms": 1819,
+        "projection_ms": 1819,
+        "render_ms": 1338,
+        "ui_render_ms": 1338,
+        "preview_age_ms": 1338,
+        "feed_callback_ms": 1819,
+        "frame_copy_ms": 453,
+        "queue_tracking_ms": 453,
+        "lock_detector_ms": 906,
+        "face_inference_ms": 453,
+        "tracking_ms": 453,
+        "candidate_quality_ms": 453,
+        "capture_to_tracking_ms": 453,
+        "isolated_writer_wait_ms": 107
+      },
+      "rates": {
+        "preview": {
+          "count": 1196,
+          "hz": 19.933,
+          "ten_second_hz": {
+            "p1": 19.805,
+            "p50": 19.95,
+            "p95": 20.0,
+            "p99": 20.0
+          },
+          "first_30s_hz": 19.9,
+          "last_30s_hz": 19.966666666666665,
+          "gap_ms": {
+            "p1": 27.37,
+            "p50": 58.904,
+            "p95": 66.824,
+            "p99": 74.259
+          }
+        },
+        "tracking": {
+          "count": 452,
+          "hz": 7.533,
+          "ten_second_hz": {
+            "p1": 7.5,
+            "p50": 7.5,
+            "p95": 7.6,
+            "p99": 7.6
+          },
+          "first_30s_hz": 7.533333333333333,
+          "last_30s_hz": 7.533333333333333,
+          "gap_ms": {
+            "p1": 114.066,
+            "p50": 131.978,
+            "p95": 137.223,
+            "p99": 164.906
+          }
+        },
+        "assessment": {
+          "count": 0,
+          "hz": 0.0,
+          "ten_second_hz": {
+            "p1": 0.0,
+            "p50": 0.0,
+            "p95": 0.0,
+            "p99": 0.0
+          },
+          "first_30s_hz": 0.0,
+          "last_30s_hz": 0.0,
+          "gap_ms": {}
+        },
+        "redraw": {
+          "count": 1337,
+          "hz": 22.283,
+          "ten_second_hz": {
+            "p1": 21.915,
+            "p50": 22.25,
+            "p95": 22.575,
+            "p99": 22.595
+          },
+          "first_30s_hz": 22.433333333333334,
+          "last_30s_hz": 22.133333333333333,
+          "gap_ms": {
+            "p1": 27.367,
+            "p50": 33.526,
+            "p95": 67.066,
+            "p99": 71.578
+          }
+        },
+        "capture": {
+          "count": 1196,
+          "hz": 19.933,
+          "ten_second_hz": {
+            "p1": 19.9,
+            "p50": 19.9,
+            "p95": 20.0,
+            "p99": 20.0
+          },
+          "first_30s_hz": 19.933333333333334,
+          "last_30s_hz": 19.933333333333334,
+          "gap_ms": {
+            "p1": 48.445,
+            "p50": 50.136,
+            "p95": 51.233,
+            "p99": 51.885
+          }
+        }
+      },
+      "errors": [],
+      "workers_stopped": {
+        "camera": true,
+        "tracking": true,
+        "assessment": true
+      }
+    }
+  },
+  "accuracy_evaluated": false,
+  "notes": [
+    "Physical runs use changing live scenes and empty temporary galleries, not matched labeled recordings.",
+    "Traces bounded with explicit overflow; costs_ms after warmup, recent_timings lifetime tail.",
+    "Do not sum overlapping stage durations."
+  ]
+}

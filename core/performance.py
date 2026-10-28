@@ -9,6 +9,7 @@ import math
 import os
 import threading
 import time
+import hashlib
 
 
 NAMES = frozenset({
@@ -26,6 +27,12 @@ NAMES = frozenset({
     "candidate_to_assessment", "passage_entry_to_assessment",
     "passage_entry_to_first_assessment", "usable_to_assessment",
     "usable_to_first_assessment",
+    "face_alignment", "face_embedding", "gallery_matching", "frame_copy",
+    "uniform_preprocessing", "earring_preprocessing", "result_to_ui",
+    "confirmation",
+    "candidate_quality",
+    "candidate_invalid_face_box", "candidate_face_visibility_rejected",
+    "candidate_empty_face_crop",
 })
 
 
@@ -83,25 +90,91 @@ class PerformanceMetrics:
 PERF = PerformanceMetrics(os.environ.get("CBVMS_PERF") == "1")
 
 
+class ObservationTraces:
+    """Bounded local numerical traces; no pixels, labels or gallery identities."""
+    def __init__(self, enabled=False, capacity=4096):
+        self.enabled = enabled
+        self.rows = deque(maxlen=capacity)
+        self.dropped = 0
+        self._lock = threading.Lock()
+        self._local = threading.local()
+        self._salt = os.urandom(16)
+
+    def key(self, value):
+        return hashlib.sha256(self._salt + repr(value).encode()).hexdigest()[:20]
+
+    def span(self, name, start, end):
+        row = getattr(self._local, "row", None)
+        if row is not None and len(row['spans']) < 256:
+            row['spans'].append(dict(stage=name, start=start, end=end))
+
+    def result(self, result):
+        row = getattr(self._local, 'row', None)
+        if row is not None:
+            row['completed'] = result is not None
+            if result is not None:
+                assessments = getattr(result, 'assessments', ())
+                row['passages'] = [self.key(a.presence_id) for a in assessments]
+                row['assessment_count'] = len(assessments)
+                row['confirmed_identity_count'] = sum(bool(a.reliable_identity)
+                    for a in assessments)
+
+    @contextmanager
+    def observation(self, task, kind, offered_at):
+        if not self.enabled:
+            yield
+            return
+        row = dict(frame=self.key((task.source_id, task.camera_generation,
+                   task.context.generation, task.context.frame_id)), kind=kind,
+                   passages=[self.key(o.presence_id) for o in task.observations or ()],
+                   captured_at=task.context.captured_at, queue_entered=offered_at,
+                   passage_entered_at=getattr(task, 'passage_entered_at', None),
+                   first_usable_at=getattr(task, 'first_usable_at', None),
+                   worker_started=time.monotonic(), selected_at=task.candidate_selected_at,
+                   spans=[])
+        previous = getattr(self._local, 'row', None)
+        self._local.row = row
+        try:
+            yield
+        finally:
+            row['worker_finished'] = time.monotonic()
+            self._local.row = previous
+            with self._lock:
+                self.dropped += len(self.rows) == self.rows.maxlen
+                self.rows.append(row)
+
+    def snapshot(self):
+        with self._lock:
+            return dict(rows=list(self.rows), dropped=self.dropped,
+                        clock='monotonic seconds; spans may overlap, do not sum')
+
+
+TRACES = ObservationTraces(os.environ.get('CBVMS_TRACE') == '1')
+
+
 @contextmanager
 def measure(name):
-    if not PERF.enabled:
+    if not PERF.enabled and not TRACES.enabled:
         yield
         return
     started = time.monotonic()
     try:
         yield
     finally:
-        PERF.observe(name, time.monotonic()-started)
+        ended = time.monotonic()
+        PERF.observe(name, ended-started)
+        TRACES.span(name, started, ended)
 
 
 @contextmanager
 def timed_lock(lock, name):
-    if not PERF.enabled:
+    if not PERF.enabled and not TRACES.enabled:
         with lock:
             yield
         return
     started = time.monotonic()
     with lock:
-        PERF.observe(name, time.monotonic()-started)
+        ended = time.monotonic()
+        PERF.observe(name, ended-started)
+        TRACES.span(name, started, ended)
         yield

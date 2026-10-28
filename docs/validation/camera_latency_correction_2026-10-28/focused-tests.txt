@@ -1,0 +1,8 @@
+----------------------------------------------------------------------
+Ran 153 tests in 8.991s
+
+OK
+[LiveMonitor] assessment unavailable: test
+[PersonDetector] detect error: simulated MPS inference failure
+[PersonDetector] detect error: simulated MPS inference failure
+[LiveMonitor] assessment unavailable: synthetic inference failure

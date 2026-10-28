@@ -14,7 +14,7 @@ SPEC.loader.exec_module(benchmark)
 class MonitorDeviceBenchmarkTests(unittest.TestCase):
     def test_percentiles_are_compact_and_order_independent(self):
         self.assertEqual(benchmark._percentiles([9, 1, 5]),
-                         {"n": 3, "p50_ms": 5.0, "p95_ms": 8.6})
+                         {"n": 3, "p50_ms": 5.0, "p95_ms": 8.6, "p99_ms": 8.92})
         self.assertIsNone(benchmark._percentiles([]))
 
     def test_device_check_normalizes_torch_device_index(self):

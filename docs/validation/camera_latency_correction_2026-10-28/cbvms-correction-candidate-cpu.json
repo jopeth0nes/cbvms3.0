@@ -1,0 +1,548 @@
+{
+  "configuration": {
+    "mode": "full",
+    "source": "usb",
+    "render_ref": null,
+    "fps": 30,
+    "width": 1280,
+    "height": 720,
+    "seconds": 60.0,
+    "warmup": 15.0,
+    "busy": false
+  },
+  "settings": {
+    "backend": "AVFOUNDATION",
+    "width": 1280.0,
+    "height": 720.0,
+    "fps": 30.0,
+    "requested_fps": 30
+  },
+  "measured_seconds": 60.0,
+  "accuracy_evaluated": false,
+  "empty_gallery": true,
+  "sensor_latency_measured": false,
+  "business_writes": 0,
+  "frames_saved": 0,
+  "contention": "idle",
+  "sync_counts": {
+    "accepted": 0,
+    "batches": 0
+  },
+  "errors": [],
+  "rates": {
+    "preview": {
+      "count": 1762,
+      "hz": 29.367,
+      "ten_second_hz": {
+        "p1": 29.105,
+        "p50": 29.35,
+        "p95": 29.6,
+        "p99": 29.6
+      },
+      "first_30s_hz": 29.366666666666667,
+      "last_30s_hz": 29.366666666666667,
+      "gap_ms": {
+        "p1": 24.817,
+        "p50": 33.071,
+        "p95": 41.479,
+        "p99": 65.6
+      }
+    },
+    "tracking": {
+      "count": 453,
+      "hz": 7.55,
+      "ten_second_hz": {
+        "p1": 7.5,
+        "p50": 7.55,
+        "p95": 7.6,
+        "p99": 7.6
+      },
+      "first_30s_hz": 7.566666666666666,
+      "last_30s_hz": 7.533333333333333,
+      "gap_ms": {
+        "p1": 98.124,
+        "p50": 132.013,
+        "p95": 165.148,
+        "p99": 165.783
+      }
+    },
+    "assessment": {
+      "count": 91,
+      "hz": 1.517,
+      "ten_second_hz": {
+        "p1": 1.5,
+        "p50": 1.5,
+        "p95": 1.575,
+        "p99": 1.595
+      },
+      "first_30s_hz": 1.5,
+      "last_30s_hz": 1.5333333333333334,
+      "gap_ms": {
+        "p1": 627.093,
+        "p50": 660.088,
+        "p95": 692.867,
+        "p99": 693.734
+      }
+    },
+    "redraw": {
+      "count": 1780,
+      "hz": 29.667,
+      "ten_second_hz": {
+        "p1": 29.4,
+        "p50": 29.7,
+        "p95": 29.9,
+        "p99": 29.9
+      },
+      "first_30s_hz": 29.7,
+      "last_30s_hz": 29.633333333333333,
+      "gap_ms": {
+        "p1": 24.936,
+        "p50": 33.11,
+        "p95": 40.138,
+        "p99": 60.426
+      }
+    },
+    "capture": {
+      "count": 1800,
+      "hz": 30.0,
+      "ten_second_hz": {
+        "p1": 30.0,
+        "p50": 30.0,
+        "p95": 30.0,
+        "p99": 30.0
+      },
+      "first_30s_hz": 30.0,
+      "last_30s_hz": 30.0,
+      "gap_ms": {
+        "p1": 31.803,
+        "p50": 33.378,
+        "p95": 34.195,
+        "p99": 34.715
+      }
+    }
+  },
+  "costs_ms": {
+    "sample_copy_ms": {
+      "p1": 0.062,
+      "p50": 0.078,
+      "p95": 0.156,
+      "p99": 0.215
+    },
+    "projection_ms": {
+      "p1": 0.606,
+      "p50": 2.1,
+      "p95": 2.45,
+      "p99": 2.637
+    },
+    "render_ms": {
+      "p1": 1.165,
+      "p50": 1.452,
+      "p95": 1.763,
+      "p99": 1.957
+    },
+    "preview_age_ms": {
+      "p1": 4.079,
+      "p50": 20.113,
+      "p95": 35.244,
+      "p99": 36.699
+    },
+    "feed_callback_ms": {
+      "p1": 0.87,
+      "p50": 4.167,
+      "p95": 5.157,
+      "p99": 5.968
+    },
+    "face_inference_ms": {
+      "p1": 52.685,
+      "p50": 59.374,
+      "p95": 73.196,
+      "p99": 79.056
+    },
+    "body_inference_ms": {
+      "p1": 24.006,
+      "p50": 27.865,
+      "p95": 32.501,
+      "p99": 39.246
+    },
+    "capture_to_tracking_ms": {
+      "p1": 84.738,
+      "p50": 107.93,
+      "p95": 127.205,
+      "p99": 133.148
+    },
+    "recognition_inference_ms": {
+      "p1": 108.449,
+      "p50": 120.393,
+      "p95": 127.924,
+      "p99": 133.285
+    },
+    "database_read_ms": {
+      "p1": 1.208,
+      "p50": 1.6,
+      "p95": 2.852,
+      "p99": 3.523
+    },
+    "capture_to_assessment_ms": {
+      "p1": 342.512,
+      "p50": 886.991,
+      "p95": 1412.17,
+      "p99": 1430.419
+    }
+  },
+  "recent_timings": {
+    "lock_detector": {
+      "count": 1114,
+      "retained": 256,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "p99_ms": 0.001
+    },
+    "lock_recognition": {
+      "count": 113,
+      "retained": 113,
+      "p50_ms": 0.0,
+      "p95_ms": 0.001,
+      "p99_ms": 0.001
+    },
+    "face_load": {
+      "count": 1,
+      "retained": 1,
+      "p50_ms": 1181.146,
+      "p95_ms": 1181.146,
+      "p99_ms": 1181.146
+    },
+    "recognition_load": {
+      "count": 1,
+      "retained": 1,
+      "p50_ms": 1259.303,
+      "p95_ms": 1259.303,
+      "p99_ms": 1259.303
+    },
+    "face_warm": {
+      "count": 1,
+      "retained": 1,
+      "p50_ms": 78.669,
+      "p95_ms": 78.669,
+      "p99_ms": 78.669
+    },
+    "lock_person": {
+      "count": 1113,
+      "retained": 256,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "p99_ms": 0.0
+    },
+    "recognition_warm": {
+      "count": 1,
+      "retained": 1,
+      "p50_ms": 73.355,
+      "p95_ms": 73.355,
+      "p99_ms": 73.355
+    },
+    "lock_trainer": {
+      "count": 3,
+      "retained": 3,
+      "p50_ms": 0.0,
+      "p95_ms": 0.001,
+      "p99_ms": 0.001
+    },
+    "body_load": {
+      "count": 1,
+      "retained": 1,
+      "p50_ms": 96.549,
+      "p95_ms": 96.549,
+      "p99_ms": 96.549
+    },
+    "uniform_load": {
+      "count": 1,
+      "retained": 1,
+      "p50_ms": 494.459,
+      "p95_ms": 494.459,
+      "p99_ms": 494.459
+    },
+    "uniform_preprocessing": {
+      "count": 1,
+      "retained": 1,
+      "p50_ms": 0.033,
+      "p95_ms": 0.033,
+      "p99_ms": 0.033
+    },
+    "uniform_inference": {
+      "count": 1,
+      "retained": 1,
+      "p50_ms": 16.822,
+      "p95_ms": 16.822,
+      "p99_ms": 16.822
+    },
+    "body_inference": {
+      "count": 556,
+      "retained": 256,
+      "p50_ms": 28.01,
+      "p95_ms": 32.775,
+      "p99_ms": 40.007
+    },
+    "first_camera_frame": {
+      "count": 1,
+      "retained": 1,
+      "p50_ms": 1278.949,
+      "p95_ms": 1278.949,
+      "p99_ms": 1278.949
+    },
+    "frame_copy": {
+      "count": 556,
+      "retained": 256,
+      "p50_ms": 0.069,
+      "p95_ms": 0.123,
+      "p99_ms": 0.155
+    },
+    "queue_tracking": {
+      "count": 556,
+      "retained": 256,
+      "p50_ms": 0.06,
+      "p95_ms": 0.083,
+      "p99_ms": 0.108
+    },
+    "ui_render": {
+      "count": 2173,
+      "retained": 256,
+      "p50_ms": 1.678,
+      "p95_ms": 1.961,
+      "p99_ms": 2.126
+    },
+    "preview_age": {
+      "count": 2173,
+      "retained": 256,
+      "p50_ms": 18.081,
+      "p95_ms": 35.685,
+      "p99_ms": 36.543
+    },
+    "face_inference": {
+      "count": 556,
+      "retained": 256,
+      "p50_ms": 60.068,
+      "p95_ms": 75.634,
+      "p99_ms": 80.347
+    },
+    "tracking": {
+      "count": 556,
+      "retained": 256,
+      "p50_ms": 89.353,
+      "p95_ms": 105.721,
+      "p99_ms": 114.309
+    },
+    "capture_to_tracking": {
+      "count": 556,
+      "retained": 256,
+      "p50_ms": 109.057,
+      "p95_ms": 129.364,
+      "p99_ms": 139.708
+    },
+    "first_face": {
+      "count": 1,
+      "retained": 1,
+      "p50_ms": 1488.889,
+      "p95_ms": 1488.889,
+      "p99_ms": 1488.889
+    },
+    "passage_entry_to_assessment": {
+      "count": 1,
+      "retained": 1,
+      "p50_ms": 216.304,
+      "p95_ms": 216.304,
+      "p99_ms": 216.304
+    },
+    "usable_to_assessment": {
+      "count": 1,
+      "retained": 1,
+      "p50_ms": 216.304,
+      "p95_ms": 216.304,
+      "p99_ms": 216.304
+    },
+    "candidate_selection_wait": {
+      "count": 111,
+      "retained": 111,
+      "p50_ms": 658.284,
+      "p95_ms": 1175.483,
+      "p99_ms": 1181.895
+    },
+    "queue_assessment": {
+      "count": 111,
+      "retained": 111,
+      "p50_ms": 0.045,
+      "p95_ms": 0.063,
+      "p99_ms": 0.074
+    },
+    "face_alignment": {
+      "count": 111,
+      "retained": 111,
+      "p50_ms": 0.295,
+      "p95_ms": 0.388,
+      "p99_ms": 0.465
+    },
+    "face_embedding": {
+      "count": 111,
+      "retained": 111,
+      "p50_ms": 119.178,
+      "p95_ms": 127.567,
+      "p99_ms": 134.099
+    },
+    "recognition_inference": {
+      "count": 111,
+      "retained": 111,
+      "p50_ms": 119.597,
+      "p95_ms": 127.924,
+      "p99_ms": 134.528
+    },
+    "gallery_matching": {
+      "count": 111,
+      "retained": 111,
+      "p50_ms": 0.02,
+      "p95_ms": 0.035,
+      "p99_ms": 0.046
+    },
+    "recognition": {
+      "count": 111,
+      "retained": 111,
+      "p50_ms": 119.728,
+      "p95_ms": 128.013,
+      "p99_ms": 134.659
+    },
+    "database_read": {
+      "count": 111,
+      "retained": 111,
+      "p50_ms": 1.543,
+      "p95_ms": 2.831,
+      "p99_ms": 3.441
+    },
+    "body": {
+      "count": 111,
+      "retained": 111,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "p99_ms": 0.001
+    },
+    "capture_to_assessment": {
+      "count": 111,
+      "retained": 111,
+      "p50_ms": 867.436,
+      "p95_ms": 1411.361,
+      "p99_ms": 1428.328
+    },
+    "candidate_to_assessment": {
+      "count": 111,
+      "retained": 111,
+      "p50_ms": 122.063,
+      "p95_ms": 129.852,
+      "p99_ms": 137.087
+    },
+    "passage_entry_to_first_assessment": {
+      "count": 1,
+      "retained": 1,
+      "p50_ms": 531.063,
+      "p95_ms": 531.063,
+      "p99_ms": 531.063
+    },
+    "usable_to_first_assessment": {
+      "count": 1,
+      "retained": 1,
+      "p50_ms": 531.063,
+      "p95_ms": 531.063,
+      "p99_ms": 531.063
+    },
+    "result_to_ui": {
+      "count": 111,
+      "retained": 111,
+      "p50_ms": 17.758,
+      "p95_ms": 29.637,
+      "p99_ms": 32.009
+    }
+  },
+  "workers_stopped": {
+    "camera": true,
+    "tracking": true,
+    "assessment": true
+  },
+  "opened_sources": [
+    {
+      "kind": "usb",
+      "settings": {
+        "backend": "AVFOUNDATION",
+        "width": 1280.0,
+        "height": 720.0,
+        "fps": 30.0,
+        "requested_fps": 30
+      }
+    }
+  ],
+  "reader_stopped": true,
+  "models": {
+    "face": "ready",
+    "recognition": "ready",
+    "body": "ready",
+    "uniform": "ready",
+    "earring": "failed"
+  },
+  "assessment_configuration": {
+    "observation_only": true,
+    "clear_frame_selection": "1",
+    "prioritized_assessment": "1",
+    "fresh_selection": "0",
+    "body_yolo": {
+      "requested": "cpu",
+      "active": "cpu",
+      "model_parameter_device": "cpu",
+      "warm": true,
+      "fallback_reason": null
+    },
+    "candidate_limits": {
+      "active_tracks": 0,
+      "candidate_count": 0,
+      "queued": 0,
+      "in_flight": 0,
+      "retained_bytes": 0,
+      "max_tracks": 48,
+      "per_passage": 2,
+      "max_candidates": 24,
+      "max_bytes": 25165824,
+      "observation_only": true
+    }
+  },
+  "cost_sample_counts": {
+    "sample_copy_ms": 1813,
+    "projection_ms": 1813,
+    "render_ms": 1780,
+    "preview_age_ms": 1780,
+    "feed_callback_ms": 1813,
+    "face_inference_ms": 454,
+    "body_inference_ms": 454,
+    "capture_to_tracking_ms": 454,
+    "recognition_inference_ms": 91,
+    "database_read_ms": 91,
+    "capture_to_assessment_ms": 91
+  },
+  "source_sha256_at_start": {
+    "core/camera.py": "c04baec8892ffcc83fff5b4422eb829ee2183c16afb84baa3db0c5ad1745327d",
+    "core/live_pipeline.py": "6609535e98c9b8d09f661ec01689bb4eb1574fcfe04ec4eb59ab85af9ee77f84",
+    "core/assessment_candidates.py": "757cceea41cb1adb675d850946af42ee32a4be1c98a89e7fa21ddbb67ec265d4",
+    "core/person_detector.py": "4ce03422fd959b7c6bc7858484dd70c7c5c6c093e84db20b7dbf018a74ab6540",
+    "core/recognizer.py": "2f9f724b1a82481a93c0f27b28c09ee044d442357e2834799621ac48270a50dd",
+    "ui/dashboard.py": "b5af26e2f3a40d1b6bb57a2819079beeee94d43512174489639052586b20a5cf",
+    "ui/camera_feed.py": "0ba6f02cdff4a7d6e6a60b6d3bc6a40852610d03767bd788d5962c65ae963dc7",
+    "scripts/benchmark_camera_runtime.py": "cf9a7c1e798bb292307990faee4f9e54b2d0832935b836d8aad11acc7d1ec2e4"
+  },
+  "timestamp_semantics": "Capture timestamps follow backend read/decode. Preview measures unique Tk image submissions, not compositor presentation or sensor-to-screen latency. OpenCV exposes no sensor sequence/PTS here; no hashes are used to discard static scenes.",
+  "acquired_not_presented": 38,
+  "source_dropped_before_decode": null,
+  "trace_retained_rows": 667,
+  "trace_dropped_rows": 0,
+  "resource_summary": {
+    "rss_mb": {
+      "min": 779.81,
+      "max": 824.5
+    },
+    "cpu_percent": {
+      "min": 769.9,
+      "max": 897.8
+    }
+  }
+}

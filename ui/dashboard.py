@@ -24,7 +24,7 @@ from dataclasses import asdict, replace
 from core.live_state import FrameContext, LiveConfig, LiveState
 from core.monitor_models import MonitorModels
 from core.diagnostics import event
-from core.performance import PERF, measure
+from core.performance import PERF, TRACES, measure
 from core.live_pipeline import LiveProcessor, LiveWorker, MonitorTask, MotionProjection, FaceTrackingProcessor
 from core.assessment_candidates import (ClearFrameRouter, OBSERVATION_ONLY,
     CLEAR_FRAME_SELECTION, PRIORITIZED_ASSESSMENT)
@@ -1630,6 +1630,10 @@ class CBVMSDashboard(WorkspaceWindow):
                         if self._monitor_result is None or self._monitor_result.task.context.frame_id != result.task.context.frame_id:
                             self._analysis_times.append(started)
                         self._monitor_result = result
+                        PERF.observe("result_to_ui", max(0., time.monotonic()-result.finished_at))
+                        if TRACES.enabled:
+                            with TRACES.observation(result.task, "ui_available", None):
+                                TRACES.result(result)
                         self._monitor_projections = {
                             a.track_id: MotionProjection(result.task.frame, a.face_box)
                             for a in result.assessments}
