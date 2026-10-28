@@ -85,6 +85,52 @@ class PipelineFixture:
 
 
 class LivePipelineTests(unittest.TestCase):
+    def test_observation_only_session_blocks_writes_even_for_unmarked_task(self):
+        fx = PipelineFixture()
+        fx.processor.observation_only = True
+        result = fx.confirmed()
+        fx.persist(result)
+        fx.database.record_attendance.assert_not_called()
+        fx.database.record_premises_entry.assert_not_called()
+        fx.database.log_violation.assert_not_called()
+        fx.database.log_security_event.assert_not_called()
+        fx.notifier.notify.assert_not_called()
+
+    def test_observation_only_direct_writer_calls_and_writer_construction_are_blocked(self):
+        fx = PipelineFixture()
+        fx.processor.observation_only = True
+        result = fx.confirmed()
+        fx.processor.submit_attendance(result)
+        fx.processor.submit_unknowns(result)
+        worker = LiveWorker(fx.processor, persistence_worker=True)
+        self.assertFalse(worker.persistence_worker)
+        self.assertIsNone(worker.attendance_writer)
+        fx.database.record_attendance.assert_not_called()
+        fx.database.log_security_event.assert_not_called()
+
+    def test_observation_only_worker_never_calls_processor_persistence(self):
+        fx = PipelineFixture()
+        fx.processor.observation_only = True
+        original = fx.processor.persist
+        calls = []
+        fx.processor.persist = lambda result: calls.append(result)
+        worker = LiveWorker(fx.processor, observation_only=True)
+        worker.start()
+        task = fx.task(20)
+        task = replace(task, context=FrameContext(task.context.generation,
+            task.context.frame_id, time.monotonic()-.01))
+        worker.offer(task)
+        deadline = time.monotonic() + 2
+        while worker.results.empty() and time.monotonic() < deadline:
+            time.sleep(.01)
+        worker.stop()
+        worker.thread.join(2)
+        self.assertFalse(worker.results.empty())
+        self.assertEqual(calls, [])
+        fx.database.record_attendance.assert_not_called()
+        fx.database.log_violation.assert_not_called()
+        fx.processor.persist = original
+
     def test_monitor_task_owns_a_frozen_copy_of_captured_pixels(self):
         source = np.zeros((32, 48, 3), np.uint8)
         task = MonitorTask(FrameContext(1, ("camera", 1), 100.), source, 1000., threading.Event())

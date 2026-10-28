@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from threading import RLock
 from pathlib import Path
+import os
 from core.diagnostics import event
 
 import cv2
@@ -107,7 +108,7 @@ class PersonDetector:
     _CONF = 0.25
     _IOU = 0.50
 
-    def __init__(self) -> None:
+    def __init__(self, *, backend: str | None = None) -> None:
         self._model_lock = RLock()
         self._model = None
         self.last_error = None
@@ -115,6 +116,94 @@ class PersonDetector:
         self._load_failed = False
         self._pose_model = None
         self._pose_load_failed = False
+        requested = (backend if backend is not None else
+                     os.environ.get("CBVMS_BODY_YOLO_BACKEND", "cpu"))
+        self.backend_requested = str(requested).strip().lower()
+        if self.backend_requested not in {"cpu", "mps"}:
+            self.last_error = f"Unsupported body YOLO backend: {self.backend_requested}"
+            self.backend_requested = "cpu"
+        self.backend_active = "cpu"
+        self.backend_fallback_reason = ""
+        self._fallback_attempted = False
+        self._backend_initialized = False
+        self._warm = False
+
+    @staticmethod
+    def _sync_mps(device):
+        if device == "mps":
+            import torch
+            torch.mps.synchronize()
+
+    @staticmethod
+    def _model_device(model):
+        try:
+            return str(next(model.model.parameters()).device)
+        except (AttributeError, StopIteration, TypeError):
+            return "unknown"
+
+    def _initialize_backend(self, model):
+        """Select and verify model parameter placement once; CPU is the fallback."""
+        if self._backend_initialized:
+            return
+        target = self.backend_requested
+        if target == "mps":
+            try:
+                import torch
+                if not torch.backends.mps.is_available():
+                    raise RuntimeError("PyTorch MPS is unavailable")
+                model.to(torch.device("mps"))
+                actual = self._model_device(model)
+                if not actual.startswith("mps"):
+                    raise RuntimeError(f"YOLO parameters remained on {actual}")
+                self.backend_active = "mps"
+            except Exception as exc:
+                reason = " ".join(str(exc).split())[:180]
+                self.backend_fallback_reason = f"initialization: {type(exc).__name__}: {reason}"
+                try:
+                    model.to("cpu")
+                    self.backend_active = ("cpu" if self._model_device(model).startswith("cpu")
+                                           else "unverified")
+                except Exception as move_exc:
+                    self.backend_active = "unavailable"
+                    self._fallback_attempted = True
+                    self.backend_fallback_reason += "; cpu_move: " + type(move_exc).__name__
+        else:
+            try:
+                model.to("cpu")
+                self.backend_active = ("cpu" if self._model_device(model).startswith("cpu")
+                                       else "unverified")
+            except Exception as exc:
+                self.backend_active = "unavailable"
+                self.backend_fallback_reason = f"cpu_initialization: {type(exc).__name__}"
+                self._fallback_attempted = True
+        actual = self._model_device(model)
+        event("yolo_backend", component="body", requested=self.backend_requested,
+              active=self.backend_active, model_parameter_device=actual,
+              fallback_reason=self.backend_fallback_reason or None)
+        self._backend_initialized = True
+
+    def _fallback_to_cpu(self, model, exc):
+        """Change placement once; this failed frame is dropped, never retried."""
+        if self.backend_active == "cpu" or self._fallback_attempted:
+            return
+        self._fallback_attempted = True
+        reason = " ".join(str(exc).split())[:180]
+        self.backend_fallback_reason = f"inference: {type(exc).__name__}: {reason}"
+        try:
+            model.to("cpu")
+            self.backend_active = "cpu" if self._model_device(model).startswith("cpu") else "unverified"
+        except Exception as move_exc:
+            self.backend_active = "unavailable"
+            move_reason = " ".join(str(move_exc).split())[:120]
+            self.backend_fallback_reason += f"; cpu_move: {type(move_exc).__name__}: {move_reason}"
+        event("yolo_backend_fallback", component="body", requested=self.backend_requested,
+              active=self.backend_active, model_parameter_device=self._model_device(model),
+              reason=self.backend_fallback_reason)
+
+    def backend_status(self):
+        return {"requested": self.backend_requested, "active": self.backend_active,
+                "model_parameter_device": self._model_device(self._model) if self._model is not None else "not_loaded",
+                "warm": self._warm, "fallback_reason": self.backend_fallback_reason or None}
 
     # ------------------------------------------------------------------
     # Models (lazy)
@@ -133,6 +222,7 @@ class PersonDetector:
             with measure("body_load"):
                 from ultralytics import YOLO
                 self._model = YOLO(self._MODEL_PATH)  # validated local weights only
+            self._initialize_backend(self._model)
             return self._model
         except Exception as exc:
             print(f"[PersonDetector] model load failed: {exc}")
@@ -167,12 +257,29 @@ class PersonDetector:
         model = self._ensure_model()
         if model is None or frame_bgr is None or frame_bgr.size == 0:
             return []
+        if self._fallback_attempted and self.backend_active != "cpu":
+            return []
         try:
             # Pass BGR directly — ultralytics expects BGR numpy frames.
+            self._initialize_backend(model)
+            device = self.backend_active
+            if device not in {"cpu", "mps"}:
+                raise RuntimeError("Body YOLO backend is unavailable")
+            actual_before = self._model_device(model)
+            if self.backend_active not in {"cpu", "mps"}:
+                raise RuntimeError("Body YOLO placement unavailable or unverified")
+            if not actual_before.startswith(device):
+                raise RuntimeError(f"Body YOLO placement changed: expected {device}, got {actual_before}")
             with measure("body_inference"):
+                self._sync_mps(device)
                 results = model.predict(
-                    frame_bgr, conf=self._CONF, iou=self._IOU, classes=[0], verbose=False
+                    frame_bgr, conf=self._CONF, iou=self._IOU, classes=[0],
+                    device=device, verbose=False
                 )
+                self._sync_mps(device)
+            actual_after = self._model_device(model)
+            if not actual_after.startswith(device):
+                raise RuntimeError(f"Body YOLO placement changed after inference: {actual_after}")
             boxes: list[list[int]] = []
             if results:
                 for b in results[0].boxes:
@@ -180,9 +287,14 @@ class PersonDetector:
                     boxes.append([x1, y1, x2, y2])
             boxes.sort(key=lambda b: (b[2] - b[0]) * (b[3] - b[1]), reverse=True)
             self.last_error = None
+            if not self._warm:
+                self._warm = True
+                event("model_warmed", component="body", backend=self.backend_active,
+                      model_parameter_device=actual_after)
             return boxes
         except Exception as exc:
             self.last_error = str(exc)
+            self._fallback_to_cpu(model, exc)
             event("body_inference_failed", error=str(exc))
             print(f"[PersonDetector] detect error: {exc}")
             return []

@@ -2,6 +2,8 @@
 from dataclasses import replace
 from types import SimpleNamespace
 import unittest
+import time
+import threading
 from unittest.mock import patch, MagicMock
 
 import numpy as np
@@ -12,6 +14,8 @@ from ui.dashboard import CBVMSDashboard
 from ui.live_alerts import LiveAlertsModel
 from tests.test_live_pipeline import PipelineFixture, detection
 from tests.test_live_dashboard import dashboard, result_for, sample
+from tests.test_assessment_candidates import make_result
+from core.assessment_candidates import ClearFrameRouter
 
 
 class CoordinatedMonitorTests(unittest.TestCase):
@@ -162,6 +166,27 @@ class CoordinatedMonitorTests(unittest.TestCase):
         self.assertEqual(task.context,local.task.context)
         self.assertEqual(task.observations,())
         np.testing.assert_array_equal(task.frame,local.task.frame)
+
+    def test_observation_route_submits_original_candidate_task_with_all_tracks(self):
+        panel=dashboard()
+        panel._monitor_generation=4
+        panel._camera_generation=9
+        panel._readiness.ready=lambda name: True
+        panel._observation_only=True
+        panel._candidate_router=ClearFrameRouter()
+        panel._live_worker.stop_event=threading.Event()
+        panel._live_worker.active_task=None
+        panel._dispatch_assessment_candidate=CBVMSDashboard._dispatch_assessment_candidate.__get__(panel)
+        local=make_result(90,two=True)
+        panel._monitor_offer_time=local.task.context.captured_at-.1
+        with patch('ui.dashboard.CLEAR_FRAME_SELECTION',True), \
+             patch('core.live_pipeline.time.monotonic',return_value=local.task.context.captured_at+.02):
+            CBVMSDashboard._on_localized(panel,local)
+        task=panel._live_worker.offer.call_args.args[0]
+        self.assertTrue(task.observation_only)
+        self.assertIs(task.frame,local.task.frame)
+        self.assertEqual(len(task.observations),2)
+        self.assertEqual(task.context.frame_id,local.task.context.frame_id)
 
 
 if __name__=='__main__':unittest.main()

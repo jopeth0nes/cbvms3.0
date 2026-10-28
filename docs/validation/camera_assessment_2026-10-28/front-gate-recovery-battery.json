@@ -1,0 +1,1892 @@
+{
+  "configuration": {
+    "mode": "full",
+    "source": "front-gate",
+    "render_ref": null,
+    "fps": 30,
+    "width": 1280,
+    "height": 720,
+    "seconds": 60.0,
+    "warmup": 10.0,
+    "busy": true,
+    "output": "/private/tmp/cbvms-assessment-final-front-gate.json"
+  },
+  "settings": {
+    "backend": "FFMPEG",
+    "width": 1920.0,
+    "height": 1080.0,
+    "fps": 20.0,
+    "codec": "hevc",
+    "first_frame_ms": 1664.31,
+    "delivered_fps": 0
+  },
+  "measured_seconds": 60.0,
+  "accuracy_evaluated": false,
+  "empty_gallery": true,
+  "sensor_latency_measured": false,
+  "business_writes": 0,
+  "frames_saved": 0,
+  "contention": "real incremental SyncWorker, disposable SQLite, simulated transport",
+  "sync_counts": {
+    "accepted": 615,
+    "batches": 123
+  },
+  "errors": [
+    "camera_open_failed"
+  ],
+  "rates": {
+    "preview": {
+      "count": 574,
+      "hz": 9.567,
+      "ten_second_hz": {
+        "p1": 0.0,
+        "p50": 8.85,
+        "p95": 19.875,
+        "p99": 19.895
+      },
+      "first_30s_hz": 0.0,
+      "last_30s_hz": 19.133333333333333,
+      "gap_ms": {
+        "p1": 29.16,
+        "p50": 50.886,
+        "p95": 66.985,
+        "p99": 83.07
+      }
+    },
+    "tracking": {
+      "count": 213,
+      "hz": 3.55,
+      "ten_second_hz": {
+        "p1": 0.0,
+        "p50": 3.3,
+        "p95": 7.375,
+        "p99": 7.395
+      },
+      "first_30s_hz": 0.0,
+      "last_30s_hz": 7.1,
+      "gap_ms": {
+        "p1": 88.51,
+        "p50": 132.006,
+        "p95": 165.018,
+        "p99": 180.855
+      }
+    },
+    "assessment": {
+      "count": 0,
+      "hz": 0.0,
+      "ten_second_hz": {
+        "p1": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "first_30s_hz": 0.0,
+      "last_30s_hz": 0.0,
+      "gap_ms": {}
+    },
+    "capture": {
+      "count": 583,
+      "hz": 9.717,
+      "ten_second_hz": {
+        "p1": 0.0,
+        "p50": 9.2,
+        "p95": 19.975,
+        "p99": 19.995
+      },
+      "first_30s_hz": 0.0,
+      "last_30s_hz": 19.433333333333334,
+      "gap_ms": {
+        "p1": 16.755,
+        "p50": 50.134,
+        "p95": 51.651,
+        "p99": 53.009
+      }
+    },
+    "redraw": {
+      "count": 644,
+      "hz": 10.733,
+      "ten_second_hz": {
+        "p1": 0.0,
+        "p50": 9.85,
+        "p95": 22.375,
+        "p99": 22.395
+      },
+      "first_30s_hz": 0.0,
+      "last_30s_hz": 21.466666666666665,
+      "gap_ms": {
+        "p1": 27.27,
+        "p50": 34.015,
+        "p95": 66.587,
+        "p99": 82.276
+      }
+    }
+  },
+  "costs_ms": {
+    "feed_callback_ms": {
+      "p1": 0.272,
+      "p50": 0.422,
+      "p95": 3.459,
+      "p99": 3.895
+    },
+    "isolated_writer_wait_ms": {
+      "p1": 0.252,
+      "p50": 0.358,
+      "p95": 0.589,
+      "p99": 0.669
+    },
+    "sample_copy_ms": {
+      "p1": 0.189,
+      "p50": 0.272,
+      "p95": 0.414,
+      "p99": 0.551
+    },
+    "projection_ms": {
+      "p1": 0.004,
+      "p50": 0.007,
+      "p95": 0.01,
+      "p99": 0.011
+    },
+    "render_ms": {
+      "p1": 1.774,
+      "p50": 1.968,
+      "p95": 2.55,
+      "p99": 2.821
+    },
+    "preview_age_ms": {
+      "p1": 7.508,
+      "p50": 26.216,
+      "p95": 52.048,
+      "p99": 56.891
+    },
+    "face_inference_ms": {
+      "p1": 71.911,
+      "p50": 72.913,
+      "p95": 78.522,
+      "p99": 104.856
+    },
+    "capture_to_tracking_ms": {
+      "p1": 77.99,
+      "p50": 104.984,
+      "p95": 129.895,
+      "p99": 194.16
+    }
+  },
+  "resources": [
+    {
+      "t": 0.018,
+      "rss_mb": 641.48,
+      "cpu_percent": 69.0,
+      "queued": [
+        0,
+        0
+      ],
+      "candidates": {
+        "active_tracks": 0,
+        "candidate_count": 0,
+        "queued": 0,
+        "in_flight": 0,
+        "retained_bytes": 0,
+        "max_tracks": 48,
+        "per_passage": 2,
+        "max_candidates": 24,
+        "max_bytes": 25165824,
+        "observation_only": true
+      },
+      "canvas_size": [
+        702,
+        322
+      ]
+    },
+    {
+      "t": 1.019,
+      "rss_mb": 641.33,
+      "cpu_percent": 72.1,
+      "queued": [
+        0,
+        0
+      ],
+      "candidates": {
+        "active_tracks": 0,
+        "candidate_count": 0,
+        "queued": 0,
+        "in_flight": 0,
+        "retained_bytes": 0,
+        "max_tracks": 48,
+        "per_passage": 2,
+        "max_candidates": 24,
+        "max_bytes": 25165824,
+        "observation_only": true
+      },
+      "canvas_size": [
+        702,
+        322
+      ]
+    },
+    {
+      "t": 2.019,
+      "rss_mb": 641.34,
+      "cpu_percent": 66.4,
+      "queued": [
+        0,
+        0
+      ],
+      "candidates": {
+        "active_tracks": 0,
+        "candidate_count": 0,
+        "queued": 0,
+        "in_flight": 0,
+        "retained_bytes": 0,
+        "max_tracks": 48,
+        "per_passage": 2,
+        "max_candidates": 24,
+        "max_bytes": 25165824,
+        "observation_only": true
+      },
+      "canvas_size": [
+        702,
+        322
+      ]
+    },
+    {
+      "t": 3.032,
+      "rss_mb": 641.41,
+      "cpu_percent": 71.5,
+      "queued": [
+        0,
+        0
+      ],
+      "candidates": {
+        "active_tracks": 0,
+        "candidate_count": 0,
+        "queued": 0,
+        "in_flight": 0,
+        "retained_bytes": 0,
+        "max_tracks": 48,
+        "per_passage": 2,
+        "max_candidates": 24,
+        "max_bytes": 25165824,
+        "observation_only": true
+      },
+      "canvas_size": [
+        702,
+        322
+      ]
+    },
+    {
+      "t": 4.033,
+      "rss_mb": 641.45,
+      "cpu_percent": 68.0,
+      "queued": [
+        0,
+        0
+      ],
+      "candidates": {
+        "active_tracks": 0,
+        "candidate_count": 0,
+        "queued": 0,
+        "in_flight": 0,
+        "retained_bytes": 0,
+        "max_tracks": 48,
+        "per_passage": 2,
+        "max_candidates": 24,
+        "max_bytes": 25165824,
+        "observation_only": true
+      },
+      "canvas_size": [
+        702,
+        322
+      ]
+    },
+    {
+      "t": 5.047,
+      "rss_mb": 641.38,
+      "cpu_percent": 69.5,
+      "queued": [
+        0,
+        0
+      ],
+      "candidates": {
+        "active_tracks": 0,
+        "candidate_count": 0,
+        "queued": 0,
+        "in_flight": 0,
+        "retained_bytes": 0,
+        "max_tracks": 48,
+        "per_passage": 2,
+        "max_candidates": 24,
+        "max_bytes": 25165824,
+        "observation_only": true
+      },
+      "canvas_size": [
+        702,
+        322
+      ]
+    },
+    {
+      "t": 6.067,
+      "rss_mb": 641.39,
+      "cpu_percent": 69.2,
+      "queued": [
+        0,
+        0
+      ],
+      "candidates": {
+        "active_tracks": 0,
+        "candidate_count": 0,
+        "queued": 0,
+        "in_flight": 0,
+        "retained_bytes": 0,
+        "max_tracks": 48,
+        "per_passage": 2,
+        "max_candidates": 24,
+        "max_bytes": 25165824,
+        "observation_only": true
+      },
+      "canvas_size": [
+        702,
+        322
+      ]
+    },
+    {
+      "t": 7.075,
+      "rss_mb": 641.42,
+      "cpu_percent": 62.4,
+      "queued": [
+        0,
+        0
+      ],
+      "candidates": {
+        "active_tracks": 0,
+        "candidate_count": 0,
+        "queued": 0,
+        "in_flight": 0,
+        "retained_bytes": 0,
+        "max_tracks": 48,
+        "per_passage": 2,
+        "max_candidates": 24,
+        "max_bytes": 25165824,
+        "observation_only": true
+      },
+      "canvas_size": [
+        702,
+        322
+      ]
+    },
+    {
+      "t": 8.077,
+      "rss_mb": 641.44,
+      "cpu_percent": 63.8,
+      "queued": [
+        0,
+        0
+      ],
+      "candidates": {
+        "active_tracks": 0,
+        "candidate_count": 0,
+        "queued": 0,
+        "in_flight": 0,
+        "retained_bytes": 0,
+        "max_tracks": 48,
+        "per_passage": 2,
+        "max_candidates": 24,
+        "max_bytes": 25165824,
+        "observation_only": true
+      },
+      "canvas_size": [
+        702,
+        322
+      ]
+    },
+    {
+      "t": 9.092,
+      "rss_mb": 641.47,
+      "cpu_percent": 68.9,
+      "queued": [
+        0,
+        0
+      ],
+      "candidates": {
+        "active_tracks": 0,
+        "candidate_count": 0,
+        "queued": 0,
+        "in_flight": 0,
+        "retained_bytes": 0,
+        "max_tracks": 48,
+        "per_passage": 2,
+        "max_candidates": 24,
+        "max_bytes": 25165824,
+        "observation_only": true
+      },
+      "canvas_size": [
+        702,
+        322
+      ]
+    },
+    {
+      "t": 10.092,
+      "rss_mb": 641.5,
+      "cpu_percent": 73.3,
+      "queued": [
+        0,
+        0
+      ],
+      "candidates": {
+        "active_tracks": 0,
+        "candidate_count": 0,
+        "queued": 0,
+        "in_flight": 0,
+        "retained_bytes": 0,
+        "max_tracks": 48,
+        "per_passage": 2,
+        "max_candidates": 24,
+        "max_bytes": 25165824,
+        "observation_only": true
+      },
+      "canvas_size": [
+        702,
+        322
+      ]
+    },
+    {
+      "t": 11.104,
+      "rss_mb": 641.5,
+      "cpu_percent": 71.8,
+      "queued": [
+        0,
+        0
+      ],
+      "candidates": {
+        "active_tracks": 0,
+        "candidate_count": 0,
+        "queued": 0,
+        "in_flight": 0,
+        "retained_bytes": 0,
+        "max_tracks": 48,
+        "per_passage": 2,
+        "max_candidates": 24,
+        "max_bytes": 25165824,
+        "observation_only": true
+      },
+      "canvas_size": [
+        702,
+        322
+      ]
+    },
+    {
+      "t": 12.105,
+      "rss_mb": 641.5,
+      "cpu_percent": 66.1,
+      "queued": [
+        0,
+        0
+      ],
+      "candidates": {
+        "active_tracks": 0,
+        "candidate_count": 0,
+        "queued": 0,
+        "in_flight": 0,
+        "retained_bytes": 0,
+        "max_tracks": 48,
+        "per_passage": 2,
+        "max_candidates": 24,
+        "max_bytes": 25165824,
+        "observation_only": true
+      },
+      "canvas_size": [
+        702,
+        322
+      ]
+    },
+    {
+      "t": 13.112,
+      "rss_mb": 641.5,
+      "cpu_percent": 66.8,
+      "queued": [
+        0,
+        0
+      ],
+      "candidates": {
+        "active_tracks": 0,
+        "candidate_count": 0,
+        "queued": 0,
+        "in_flight": 0,
+        "retained_bytes": 0,
+        "max_tracks": 48,
+        "per_passage": 2,
+        "max_candidates": 24,
+        "max_bytes": 25165824,
+        "observation_only": true
+      },
+      "canvas_size": [
+        702,
+        322
+      ]
+    },
+    {
+      "t": 14.117,
+      "rss_mb": 641.5,
+      "cpu_percent": 63.1,
+      "queued": [
+        0,
+        0
+      ],
+      "candidates": {
+        "active_tracks": 0,
+        "candidate_count": 0,
+        "queued": 0,
+        "in_flight": 0,
+        "retained_bytes": 0,
+        "max_tracks": 48,
+        "per_passage": 2,
+        "max_candidates": 24,
+        "max_bytes": 25165824,
+        "observation_only": true
+      },
+      "canvas_size": [
+        702,
+        322
+      ]
+    },
+    {
+      "t": 15.127,
+      "rss_mb": 641.52,
+      "cpu_percent": 71.2,
+      "queued": [
+        0,
+        0
+      ],
+      "candidates": {
+        "active_tracks": 0,
+        "candidate_count": 0,
+        "queued": 0,
+        "in_flight": 0,
+        "retained_bytes": 0,
+        "max_tracks": 48,
+        "per_passage": 2,
+        "max_candidates": 24,
+        "max_bytes": 25165824,
+        "observation_only": true
+      },
+      "canvas_size": [
+        702,
+        322
+      ]
+    },
+    {
+      "t": 16.129,
+      "rss_mb": 641.52,
+      "cpu_percent": 70.7,
+      "queued": [
+        0,
+        0
+      ],
+      "candidates": {
+        "active_tracks": 0,
+        "candidate_count": 0,
+        "queued": 0,
+        "in_flight": 0,
+        "retained_bytes": 0,
+        "max_tracks": 48,
+        "per_passage": 2,
+        "max_candidates": 24,
+        "max_bytes": 25165824,
+        "observation_only": true
+      },
+      "canvas_size": [
+        702,
+        322
+      ]
+    },
+    {
+      "t": 17.143,
+      "rss_mb": 641.52,
+      "cpu_percent": 65.4,
+      "queued": [
+        0,
+        0
+      ],
+      "candidates": {
+        "active_tracks": 0,
+        "candidate_count": 0,
+        "queued": 0,
+        "in_flight": 0,
+        "retained_bytes": 0,
+        "max_tracks": 48,
+        "per_passage": 2,
+        "max_candidates": 24,
+        "max_bytes": 25165824,
+        "observation_only": true
+      },
+      "canvas_size": [
+        702,
+        322
+      ]
+    },
+    {
+      "t": 18.144,
+      "rss_mb": 641.52,
+      "cpu_percent": 66.4,
+      "queued": [
+        0,
+        0
+      ],
+      "candidates": {
+        "active_tracks": 0,
+        "candidate_count": 0,
+        "queued": 0,
+        "in_flight": 0,
+        "retained_bytes": 0,
+        "max_tracks": 48,
+        "per_passage": 2,
+        "max_candidates": 24,
+        "max_bytes": 25165824,
+        "observation_only": true
+      },
+      "canvas_size": [
+        702,
+        322
+      ]
+    },
+    {
+      "t": 19.158,
+      "rss_mb": 641.53,
+      "cpu_percent": 69.8,
+      "queued": [
+        0,
+        0
+      ],
+      "candidates": {
+        "active_tracks": 0,
+        "candidate_count": 0,
+        "queued": 0,
+        "in_flight": 0,
+        "retained_bytes": 0,
+        "max_tracks": 48,
+        "per_passage": 2,
+        "max_candidates": 24,
+        "max_bytes": 25165824,
+        "observation_only": true
+      },
+      "canvas_size": [
+        702,
+        322
+      ]
+    },
+    {
+      "t": 20.174,
+      "rss_mb": 641.44,
+      "cpu_percent": 71.5,
+      "queued": [
+        0,
+        0
+      ],
+      "candidates": {
+        "active_tracks": 0,
+        "candidate_count": 0,
+        "queued": 0,
+        "in_flight": 0,
+        "retained_bytes": 0,
+        "max_tracks": 48,
+        "per_passage": 2,
+        "max_candidates": 24,
+        "max_bytes": 25165824,
+        "observation_only": true
+      },
+      "canvas_size": [
+        702,
+        322
+      ]
+    },
+    {
+      "t": 21.189,
+      "rss_mb": 641.44,
+      "cpu_percent": 66.4,
+      "queued": [
+        0,
+        0
+      ],
+      "candidates": {
+        "active_tracks": 0,
+        "candidate_count": 0,
+        "queued": 0,
+        "in_flight": 0,
+        "retained_bytes": 0,
+        "max_tracks": 48,
+        "per_passage": 2,
+        "max_candidates": 24,
+        "max_bytes": 25165824,
+        "observation_only": true
+      },
+      "canvas_size": [
+        702,
+        322
+      ]
+    },
+    {
+      "t": 22.198,
+      "rss_mb": 641.45,
+      "cpu_percent": 69.4,
+      "queued": [
+        0,
+        0
+      ],
+      "candidates": {
+        "active_tracks": 0,
+        "candidate_count": 0,
+        "queued": 0,
+        "in_flight": 0,
+        "retained_bytes": 0,
+        "max_tracks": 48,
+        "per_passage": 2,
+        "max_candidates": 24,
+        "max_bytes": 25165824,
+        "observation_only": true
+      },
+      "canvas_size": [
+        702,
+        322
+      ]
+    },
+    {
+      "t": 23.204,
+      "rss_mb": 641.56,
+      "cpu_percent": 69.5,
+      "queued": [
+        0,
+        0
+      ],
+      "candidates": {
+        "active_tracks": 0,
+        "candidate_count": 0,
+        "queued": 0,
+        "in_flight": 0,
+        "retained_bytes": 0,
+        "max_tracks": 48,
+        "per_passage": 2,
+        "max_candidates": 24,
+        "max_bytes": 25165824,
+        "observation_only": true
+      },
+      "canvas_size": [
+        702,
+        322
+      ]
+    },
+    {
+      "t": 24.205,
+      "rss_mb": 641.56,
+      "cpu_percent": 72.9,
+      "queued": [
+        0,
+        0
+      ],
+      "candidates": {
+        "active_tracks": 0,
+        "candidate_count": 0,
+        "queued": 0,
+        "in_flight": 0,
+        "retained_bytes": 0,
+        "max_tracks": 48,
+        "per_passage": 2,
+        "max_candidates": 24,
+        "max_bytes": 25165824,
+        "observation_only": true
+      },
+      "canvas_size": [
+        702,
+        322
+      ]
+    },
+    {
+      "t": 25.216,
+      "rss_mb": 641.56,
+      "cpu_percent": 75.4,
+      "queued": [
+        0,
+        0
+      ],
+      "candidates": {
+        "active_tracks": 0,
+        "candidate_count": 0,
+        "queued": 0,
+        "in_flight": 0,
+        "retained_bytes": 0,
+        "max_tracks": 48,
+        "per_passage": 2,
+        "max_candidates": 24,
+        "max_bytes": 25165824,
+        "observation_only": true
+      },
+      "canvas_size": [
+        702,
+        322
+      ]
+    },
+    {
+      "t": 26.218,
+      "rss_mb": 641.59,
+      "cpu_percent": 77.1,
+      "queued": [
+        0,
+        0
+      ],
+      "candidates": {
+        "active_tracks": 0,
+        "candidate_count": 0,
+        "queued": 0,
+        "in_flight": 0,
+        "retained_bytes": 0,
+        "max_tracks": 48,
+        "per_passage": 2,
+        "max_candidates": 24,
+        "max_bytes": 25165824,
+        "observation_only": true
+      },
+      "canvas_size": [
+        702,
+        322
+      ]
+    },
+    {
+      "t": 27.229,
+      "rss_mb": 641.59,
+      "cpu_percent": 75.3,
+      "queued": [
+        0,
+        0
+      ],
+      "candidates": {
+        "active_tracks": 0,
+        "candidate_count": 0,
+        "queued": 0,
+        "in_flight": 0,
+        "retained_bytes": 0,
+        "max_tracks": 48,
+        "per_passage": 2,
+        "max_candidates": 24,
+        "max_bytes": 25165824,
+        "observation_only": true
+      },
+      "canvas_size": [
+        702,
+        322
+      ]
+    },
+    {
+      "t": 28.231,
+      "rss_mb": 641.64,
+      "cpu_percent": 79.9,
+      "queued": [
+        0,
+        0
+      ],
+      "candidates": {
+        "active_tracks": 0,
+        "candidate_count": 0,
+        "queued": 0,
+        "in_flight": 0,
+        "retained_bytes": 0,
+        "max_tracks": 48,
+        "per_passage": 2,
+        "max_candidates": 24,
+        "max_bytes": 25165824,
+        "observation_only": true
+      },
+      "canvas_size": [
+        702,
+        322
+      ]
+    },
+    {
+      "t": 29.241,
+      "rss_mb": 641.66,
+      "cpu_percent": 72.9,
+      "queued": [
+        0,
+        0
+      ],
+      "candidates": {
+        "active_tracks": 0,
+        "candidate_count": 0,
+        "queued": 0,
+        "in_flight": 0,
+        "retained_bytes": 0,
+        "max_tracks": 48,
+        "per_passage": 2,
+        "max_candidates": 24,
+        "max_bytes": 25165824,
+        "observation_only": true
+      },
+      "canvas_size": [
+        702,
+        322
+      ]
+    },
+    {
+      "t": 30.241,
+      "rss_mb": 641.78,
+      "cpu_percent": 80.8,
+      "queued": [
+        0,
+        0
+      ],
+      "candidates": {
+        "active_tracks": 0,
+        "candidate_count": 0,
+        "queued": 0,
+        "in_flight": 0,
+        "retained_bytes": 0,
+        "max_tracks": 48,
+        "per_passage": 2,
+        "max_candidates": 24,
+        "max_bytes": 25165824,
+        "observation_only": true
+      },
+      "canvas_size": [
+        702,
+        360
+      ]
+    },
+    {
+      "t": 31.275,
+      "rss_mb": 691.5,
+      "cpu_percent": 101.3,
+      "queued": [
+        0,
+        0
+      ],
+      "candidates": {
+        "active_tracks": 0,
+        "candidate_count": 0,
+        "queued": 0,
+        "in_flight": 0,
+        "retained_bytes": 0,
+        "max_tracks": 48,
+        "per_passage": 2,
+        "max_candidates": 24,
+        "max_bytes": 25165824,
+        "observation_only": true
+      },
+      "canvas_size": [
+        702,
+        358
+      ]
+    },
+    {
+      "t": 32.293,
+      "rss_mb": 699.33,
+      "cpu_percent": 187.0,
+      "queued": [
+        0,
+        0
+      ],
+      "candidates": {
+        "active_tracks": 0,
+        "candidate_count": 0,
+        "queued": 0,
+        "in_flight": 0,
+        "retained_bytes": 0,
+        "max_tracks": 48,
+        "per_passage": 2,
+        "max_candidates": 24,
+        "max_bytes": 25165824,
+        "observation_only": true
+      },
+      "canvas_size": [
+        702,
+        358
+      ]
+    },
+    {
+      "t": 33.306,
+      "rss_mb": 691.88,
+      "cpu_percent": 203.9,
+      "queued": [
+        0,
+        0
+      ],
+      "candidates": {
+        "active_tracks": 0,
+        "candidate_count": 0,
+        "queued": 0,
+        "in_flight": 0,
+        "retained_bytes": 0,
+        "max_tracks": 48,
+        "per_passage": 2,
+        "max_candidates": 24,
+        "max_bytes": 25165824,
+        "observation_only": true
+      },
+      "canvas_size": [
+        702,
+        358
+      ]
+    },
+    {
+      "t": 34.329,
+      "rss_mb": 699.73,
+      "cpu_percent": 182.3,
+      "queued": [
+        0,
+        0
+      ],
+      "candidates": {
+        "active_tracks": 0,
+        "candidate_count": 0,
+        "queued": 0,
+        "in_flight": 0,
+        "retained_bytes": 0,
+        "max_tracks": 48,
+        "per_passage": 2,
+        "max_candidates": 24,
+        "max_bytes": 25165824,
+        "observation_only": true
+      },
+      "canvas_size": [
+        702,
+        358
+      ]
+    },
+    {
+      "t": 35.341,
+      "rss_mb": 698.31,
+      "cpu_percent": 186.2,
+      "queued": [
+        0,
+        0
+      ],
+      "candidates": {
+        "active_tracks": 0,
+        "candidate_count": 0,
+        "queued": 0,
+        "in_flight": 0,
+        "retained_bytes": 0,
+        "max_tracks": 48,
+        "per_passage": 2,
+        "max_candidates": 24,
+        "max_bytes": 25165824,
+        "observation_only": true
+      },
+      "canvas_size": [
+        702,
+        358
+      ]
+    },
+    {
+      "t": 36.353,
+      "rss_mb": 701.16,
+      "cpu_percent": 190.3,
+      "queued": [
+        0,
+        0
+      ],
+      "candidates": {
+        "active_tracks": 0,
+        "candidate_count": 0,
+        "queued": 0,
+        "in_flight": 0,
+        "retained_bytes": 0,
+        "max_tracks": 48,
+        "per_passage": 2,
+        "max_candidates": 24,
+        "max_bytes": 25165824,
+        "observation_only": true
+      },
+      "canvas_size": [
+        702,
+        358
+      ]
+    },
+    {
+      "t": 37.362,
+      "rss_mb": 699.8,
+      "cpu_percent": 186.7,
+      "queued": [
+        0,
+        0
+      ],
+      "candidates": {
+        "active_tracks": 0,
+        "candidate_count": 0,
+        "queued": 0,
+        "in_flight": 0,
+        "retained_bytes": 0,
+        "max_tracks": 48,
+        "per_passage": 2,
+        "max_candidates": 24,
+        "max_bytes": 25165824,
+        "observation_only": true
+      },
+      "canvas_size": [
+        702,
+        358
+      ]
+    },
+    {
+      "t": 38.372,
+      "rss_mb": 700.84,
+      "cpu_percent": 194.3,
+      "queued": [
+        0,
+        0
+      ],
+      "candidates": {
+        "active_tracks": 0,
+        "candidate_count": 0,
+        "queued": 0,
+        "in_flight": 0,
+        "retained_bytes": 0,
+        "max_tracks": 48,
+        "per_passage": 2,
+        "max_candidates": 24,
+        "max_bytes": 25165824,
+        "observation_only": true
+      },
+      "canvas_size": [
+        702,
+        358
+      ]
+    },
+    {
+      "t": 39.379,
+      "rss_mb": 700.97,
+      "cpu_percent": 185.3,
+      "queued": [
+        0,
+        0
+      ],
+      "candidates": {
+        "active_tracks": 0,
+        "candidate_count": 0,
+        "queued": 0,
+        "in_flight": 0,
+        "retained_bytes": 0,
+        "max_tracks": 48,
+        "per_passage": 2,
+        "max_candidates": 24,
+        "max_bytes": 25165824,
+        "observation_only": true
+      },
+      "canvas_size": [
+        702,
+        358
+      ]
+    },
+    {
+      "t": 40.381,
+      "rss_mb": 701.36,
+      "cpu_percent": 194.2,
+      "queued": [
+        0,
+        0
+      ],
+      "candidates": {
+        "active_tracks": 0,
+        "candidate_count": 0,
+        "queued": 0,
+        "in_flight": 0,
+        "retained_bytes": 0,
+        "max_tracks": 48,
+        "per_passage": 2,
+        "max_candidates": 24,
+        "max_bytes": 25165824,
+        "observation_only": true
+      },
+      "canvas_size": [
+        702,
+        358
+      ]
+    },
+    {
+      "t": 41.406,
+      "rss_mb": 701.03,
+      "cpu_percent": 178.9,
+      "queued": [
+        0,
+        0
+      ],
+      "candidates": {
+        "active_tracks": 0,
+        "candidate_count": 0,
+        "queued": 0,
+        "in_flight": 0,
+        "retained_bytes": 0,
+        "max_tracks": 48,
+        "per_passage": 2,
+        "max_candidates": 24,
+        "max_bytes": 25165824,
+        "observation_only": true
+      },
+      "canvas_size": [
+        702,
+        358
+      ]
+    },
+    {
+      "t": 42.428,
+      "rss_mb": 700.42,
+      "cpu_percent": 187.9,
+      "queued": [
+        0,
+        0
+      ],
+      "candidates": {
+        "active_tracks": 0,
+        "candidate_count": 0,
+        "queued": 0,
+        "in_flight": 0,
+        "retained_bytes": 0,
+        "max_tracks": 48,
+        "per_passage": 2,
+        "max_candidates": 24,
+        "max_bytes": 25165824,
+        "observation_only": true
+      },
+      "canvas_size": [
+        702,
+        358
+      ]
+    },
+    {
+      "t": 43.433,
+      "rss_mb": 700.53,
+      "cpu_percent": 183.9,
+      "queued": [
+        0,
+        0
+      ],
+      "candidates": {
+        "active_tracks": 0,
+        "candidate_count": 0,
+        "queued": 0,
+        "in_flight": 0,
+        "retained_bytes": 0,
+        "max_tracks": 48,
+        "per_passage": 2,
+        "max_candidates": 24,
+        "max_bytes": 25165824,
+        "observation_only": true
+      },
+      "canvas_size": [
+        702,
+        358
+      ]
+    },
+    {
+      "t": 44.435,
+      "rss_mb": 700.86,
+      "cpu_percent": 180.2,
+      "queued": [
+        0,
+        0
+      ],
+      "candidates": {
+        "active_tracks": 0,
+        "candidate_count": 0,
+        "queued": 0,
+        "in_flight": 0,
+        "retained_bytes": 0,
+        "max_tracks": 48,
+        "per_passage": 2,
+        "max_candidates": 24,
+        "max_bytes": 25165824,
+        "observation_only": true
+      },
+      "canvas_size": [
+        702,
+        358
+      ]
+    },
+    {
+      "t": 45.446,
+      "rss_mb": 701.48,
+      "cpu_percent": 196.0,
+      "queued": [
+        0,
+        0
+      ],
+      "candidates": {
+        "active_tracks": 0,
+        "candidate_count": 0,
+        "queued": 0,
+        "in_flight": 0,
+        "retained_bytes": 0,
+        "max_tracks": 48,
+        "per_passage": 2,
+        "max_candidates": 24,
+        "max_bytes": 25165824,
+        "observation_only": true
+      },
+      "canvas_size": [
+        702,
+        358
+      ]
+    },
+    {
+      "t": 46.452,
+      "rss_mb": 701.14,
+      "cpu_percent": 187.0,
+      "queued": [
+        0,
+        0
+      ],
+      "candidates": {
+        "active_tracks": 0,
+        "candidate_count": 0,
+        "queued": 0,
+        "in_flight": 0,
+        "retained_bytes": 0,
+        "max_tracks": 48,
+        "per_passage": 2,
+        "max_candidates": 24,
+        "max_bytes": 25165824,
+        "observation_only": true
+      },
+      "canvas_size": [
+        702,
+        358
+      ]
+    },
+    {
+      "t": 47.462,
+      "rss_mb": 701.0,
+      "cpu_percent": 180.2,
+      "queued": [
+        0,
+        0
+      ],
+      "candidates": {
+        "active_tracks": 0,
+        "candidate_count": 0,
+        "queued": 0,
+        "in_flight": 0,
+        "retained_bytes": 0,
+        "max_tracks": 48,
+        "per_passage": 2,
+        "max_candidates": 24,
+        "max_bytes": 25165824,
+        "observation_only": true
+      },
+      "canvas_size": [
+        702,
+        358
+      ]
+    },
+    {
+      "t": 48.465,
+      "rss_mb": 700.92,
+      "cpu_percent": 193.2,
+      "queued": [
+        0,
+        0
+      ],
+      "candidates": {
+        "active_tracks": 0,
+        "candidate_count": 0,
+        "queued": 0,
+        "in_flight": 0,
+        "retained_bytes": 0,
+        "max_tracks": 48,
+        "per_passage": 2,
+        "max_candidates": 24,
+        "max_bytes": 25165824,
+        "observation_only": true
+      },
+      "canvas_size": [
+        702,
+        358
+      ]
+    },
+    {
+      "t": 49.471,
+      "rss_mb": 701.47,
+      "cpu_percent": 184.9,
+      "queued": [
+        0,
+        0
+      ],
+      "candidates": {
+        "active_tracks": 0,
+        "candidate_count": 0,
+        "queued": 0,
+        "in_flight": 0,
+        "retained_bytes": 0,
+        "max_tracks": 48,
+        "per_passage": 2,
+        "max_candidates": 24,
+        "max_bytes": 25165824,
+        "observation_only": true
+      },
+      "canvas_size": [
+        702,
+        358
+      ]
+    },
+    {
+      "t": 50.477,
+      "rss_mb": 701.08,
+      "cpu_percent": 188.9,
+      "queued": [
+        0,
+        0
+      ],
+      "candidates": {
+        "active_tracks": 0,
+        "candidate_count": 0,
+        "queued": 0,
+        "in_flight": 0,
+        "retained_bytes": 0,
+        "max_tracks": 48,
+        "per_passage": 2,
+        "max_candidates": 24,
+        "max_bytes": 25165824,
+        "observation_only": true
+      },
+      "canvas_size": [
+        702,
+        358
+      ]
+    },
+    {
+      "t": 51.485,
+      "rss_mb": 696.03,
+      "cpu_percent": 181.8,
+      "queued": [
+        0,
+        0
+      ],
+      "candidates": {
+        "active_tracks": 0,
+        "candidate_count": 0,
+        "queued": 0,
+        "in_flight": 0,
+        "retained_bytes": 0,
+        "max_tracks": 48,
+        "per_passage": 2,
+        "max_candidates": 24,
+        "max_bytes": 25165824,
+        "observation_only": true
+      },
+      "canvas_size": [
+        702,
+        358
+      ]
+    },
+    {
+      "t": 52.491,
+      "rss_mb": 700.69,
+      "cpu_percent": 179.6,
+      "queued": [
+        0,
+        0
+      ],
+      "candidates": {
+        "active_tracks": 0,
+        "candidate_count": 0,
+        "queued": 0,
+        "in_flight": 0,
+        "retained_bytes": 0,
+        "max_tracks": 48,
+        "per_passage": 2,
+        "max_candidates": 24,
+        "max_bytes": 25165824,
+        "observation_only": true
+      },
+      "canvas_size": [
+        702,
+        358
+      ]
+    },
+    {
+      "t": 53.508,
+      "rss_mb": 700.83,
+      "cpu_percent": 197.6,
+      "queued": [
+        0,
+        0
+      ],
+      "candidates": {
+        "active_tracks": 0,
+        "candidate_count": 0,
+        "queued": 0,
+        "in_flight": 0,
+        "retained_bytes": 0,
+        "max_tracks": 48,
+        "per_passage": 2,
+        "max_candidates": 24,
+        "max_bytes": 25165824,
+        "observation_only": true
+      },
+      "canvas_size": [
+        702,
+        358
+      ]
+    },
+    {
+      "t": 54.537,
+      "rss_mb": 701.89,
+      "cpu_percent": 179.7,
+      "queued": [
+        0,
+        0
+      ],
+      "candidates": {
+        "active_tracks": 0,
+        "candidate_count": 0,
+        "queued": 0,
+        "in_flight": 0,
+        "retained_bytes": 0,
+        "max_tracks": 48,
+        "per_passage": 2,
+        "max_candidates": 24,
+        "max_bytes": 25165824,
+        "observation_only": true
+      },
+      "canvas_size": [
+        702,
+        358
+      ]
+    },
+    {
+      "t": 55.553,
+      "rss_mb": 700.8,
+      "cpu_percent": 195.8,
+      "queued": [
+        0,
+        0
+      ],
+      "candidates": {
+        "active_tracks": 0,
+        "candidate_count": 0,
+        "queued": 0,
+        "in_flight": 0,
+        "retained_bytes": 0,
+        "max_tracks": 48,
+        "per_passage": 2,
+        "max_candidates": 24,
+        "max_bytes": 25165824,
+        "observation_only": true
+      },
+      "canvas_size": [
+        702,
+        358
+      ]
+    },
+    {
+      "t": 56.569,
+      "rss_mb": 702.34,
+      "cpu_percent": 184.0,
+      "queued": [
+        0,
+        0
+      ],
+      "candidates": {
+        "active_tracks": 0,
+        "candidate_count": 0,
+        "queued": 0,
+        "in_flight": 0,
+        "retained_bytes": 0,
+        "max_tracks": 48,
+        "per_passage": 2,
+        "max_candidates": 24,
+        "max_bytes": 25165824,
+        "observation_only": true
+      },
+      "canvas_size": [
+        702,
+        358
+      ]
+    },
+    {
+      "t": 57.569,
+      "rss_mb": 703.28,
+      "cpu_percent": 191.9,
+      "queued": [
+        0,
+        0
+      ],
+      "candidates": {
+        "active_tracks": 0,
+        "candidate_count": 0,
+        "queued": 0,
+        "in_flight": 0,
+        "retained_bytes": 0,
+        "max_tracks": 48,
+        "per_passage": 2,
+        "max_candidates": 24,
+        "max_bytes": 25165824,
+        "observation_only": true
+      },
+      "canvas_size": [
+        702,
+        358
+      ]
+    },
+    {
+      "t": 58.582,
+      "rss_mb": 702.45,
+      "cpu_percent": 187.4,
+      "queued": [
+        0,
+        0
+      ],
+      "candidates": {
+        "active_tracks": 0,
+        "candidate_count": 0,
+        "queued": 0,
+        "in_flight": 0,
+        "retained_bytes": 0,
+        "max_tracks": 48,
+        "per_passage": 2,
+        "max_candidates": 24,
+        "max_bytes": 25165824,
+        "observation_only": true
+      },
+      "canvas_size": [
+        702,
+        358
+      ]
+    },
+    {
+      "t": 59.587,
+      "rss_mb": 699.38,
+      "cpu_percent": 192.8,
+      "queued": [
+        0,
+        0
+      ],
+      "candidates": {
+        "active_tracks": 0,
+        "candidate_count": 0,
+        "queued": 0,
+        "in_flight": 0,
+        "retained_bytes": 0,
+        "max_tracks": 48,
+        "per_passage": 2,
+        "max_candidates": 24,
+        "max_bytes": 25165824,
+        "observation_only": true
+      },
+      "canvas_size": [
+        702,
+        358
+      ]
+    }
+  ],
+  "recent_timings": {
+    "lock_detector": {
+      "count": 429,
+      "retained": 256,
+      "p50_ms": 0.0,
+      "p95_ms": 0.001,
+      "p99_ms": 0.001
+    },
+    "lock_recognition": {
+      "count": 1,
+      "retained": 1,
+      "p50_ms": 0.001,
+      "p95_ms": 0.001,
+      "p99_ms": 0.001
+    },
+    "face_load": {
+      "count": 1,
+      "retained": 1,
+      "p50_ms": 1957.246,
+      "p95_ms": 1957.246,
+      "p99_ms": 1957.246
+    },
+    "recognition_load": {
+      "count": 1,
+      "retained": 1,
+      "p50_ms": 2114.225,
+      "p95_ms": 2114.225,
+      "p99_ms": 2114.225
+    },
+    "face_warm": {
+      "count": 1,
+      "retained": 1,
+      "p50_ms": 157.889,
+      "p95_ms": 157.889,
+      "p99_ms": 157.889
+    },
+    "lock_person": {
+      "count": 3,
+      "retained": 3,
+      "p50_ms": 0.001,
+      "p95_ms": 0.001,
+      "p99_ms": 0.001
+    },
+    "body_load": {
+      "count": 1,
+      "retained": 1,
+      "p50_ms": 105.71,
+      "p95_ms": 105.71,
+      "p99_ms": 105.71
+    },
+    "recognition_warm": {
+      "count": 1,
+      "retained": 1,
+      "p50_ms": 134.28,
+      "p95_ms": 134.28,
+      "p99_ms": 134.28
+    },
+    "lock_trainer": {
+      "count": 3,
+      "retained": 3,
+      "p50_ms": 0.001,
+      "p95_ms": 0.001,
+      "p99_ms": 0.001
+    },
+    "uniform_load": {
+      "count": 1,
+      "retained": 1,
+      "p50_ms": 798.106,
+      "p95_ms": 798.106,
+      "p99_ms": 798.106
+    },
+    "uniform_inference": {
+      "count": 1,
+      "retained": 1,
+      "p50_ms": 22.932,
+      "p95_ms": 22.932,
+      "p99_ms": 22.932
+    },
+    "body_inference": {
+      "count": 1,
+      "retained": 1,
+      "p50_ms": 860.629,
+      "p95_ms": 860.629,
+      "p99_ms": 860.629
+    },
+    "first_camera_frame": {
+      "count": 1,
+      "retained": 1,
+      "p50_ms": 1853.422,
+      "p95_ms": 1853.422,
+      "p99_ms": 1853.422
+    },
+    "queue_tracking": {
+      "count": 214,
+      "retained": 214,
+      "p50_ms": 0.033,
+      "p95_ms": 0.088,
+      "p99_ms": 1.786
+    },
+    "ui_render": {
+      "count": 644,
+      "retained": 256,
+      "p50_ms": 2.28,
+      "p95_ms": 2.854,
+      "p99_ms": 3.04
+    },
+    "preview_age": {
+      "count": 644,
+      "retained": 256,
+      "p50_ms": 26.016,
+      "p95_ms": 51.178,
+      "p99_ms": 55.825
+    },
+    "face_inference": {
+      "count": 214,
+      "retained": 214,
+      "p50_ms": 72.913,
+      "p95_ms": 78.522,
+      "p99_ms": 104.856
+    },
+    "tracking": {
+      "count": 213,
+      "retained": 213,
+      "p50_ms": 72.978,
+      "p95_ms": 78.599,
+      "p99_ms": 105.126
+    },
+    "capture_to_tracking": {
+      "count": 213,
+      "retained": 213,
+      "p50_ms": 104.984,
+      "p95_ms": 129.895,
+      "p99_ms": 194.16
+    },
+    "rejected": {
+      "count": 1,
+      "retained": 1,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "p99_ms": 0.0
+    }
+  },
+  "workers_stopped": {
+    "camera": true,
+    "tracking": true,
+    "assessment": true
+  },
+  "opened_sources": [
+    {
+      "kind": "network",
+      "settings": {
+        "backend": "FFMPEG",
+        "width": 1920.0,
+        "height": 1080.0,
+        "fps": 20.0,
+        "codec": "hevc",
+        "first_frame_ms": 1664.31,
+        "delivered_fps": 0
+      }
+    }
+  ],
+  "reader_stopped": true,
+  "models": {
+    "face": "ready",
+    "recognition": "ready",
+    "body": "ready",
+    "uniform": "ready",
+    "earring": "failed"
+  },
+  "assessment_configuration": {
+    "observation_only": true,
+    "clear_frame_selection": "1",
+    "prioritized_assessment": "1",
+    "body_yolo": {
+      "requested": "cpu",
+      "active": "cpu",
+      "model_parameter_device": "cpu",
+      "warm": true,
+      "fallback_reason": null
+    },
+    "candidate_limits": {
+      "active_tracks": 0,
+      "candidate_count": 0,
+      "queued": 0,
+      "in_flight": 0,
+      "retained_bytes": 0,
+      "max_tracks": 48,
+      "per_passage": 2,
+      "max_candidates": 24,
+      "max_bytes": 25165824,
+      "observation_only": true
+    }
+  },
+  "cost_sample_counts": {
+    "feed_callback_ms": 1809,
+    "isolated_writer_wait_ms": 106,
+    "sample_copy_ms": 876,
+    "projection_ms": 874,
+    "render_ms": 644,
+    "preview_age_ms": 644,
+    "face_inference_ms": 214,
+    "capture_to_tracking_ms": 213
+  },
+  "source_sha256_at_start": {
+    "core/camera.py": "c04baec8892ffcc83fff5b4422eb829ee2183c16afb84baa3db0c5ad1745327d",
+    "core/live_pipeline.py": "ecc4ad964883cf8fdde9e26a1fbd5309131baed24a77a42ca5357d28c987fef1",
+    "core/assessment_candidates.py": "1532be503af5b3e35fdacf74995f946e848aea78b853c0de08b9a2fd29dabff4",
+    "core/person_detector.py": "4ce03422fd959b7c6bc7858484dd70c7c5c6c093e84db20b7dbf018a74ab6540",
+    "core/recognizer.py": "0c5c06544f2de388192c731079e60e3bebfd421d114638024df4a87d65f56a45",
+    "ui/dashboard.py": "d857b23f2dee521b20ee9b7b81960ddfd2120e3f7734b3bf8481ce420b19945f",
+    "ui/camera_feed.py": "0ba6f02cdff4a7d6e6a60b6d3bc6a40852610d03767bd788d5962c65ae963dc7",
+    "scripts/benchmark_camera_runtime.py": "dd93d1cc8f1a02465ae816b2b264f8ebc9b8297ce680336a3c74c3e48d48e580"
+  },
+  "timestamp_semantics": "Capture timestamps follow backend read/decode. Preview measures unique Tk image submissions, not compositor presentation or sensor-to-screen latency. OpenCV exposes no sensor sequence/PTS here; no hashes are used to discard static scenes.",
+  "acquired_not_presented": 9,
+  "source_dropped_before_decode": null
+}

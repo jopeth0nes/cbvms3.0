@@ -26,6 +26,8 @@ from core.monitor_models import MonitorModels
 from core.diagnostics import event
 from core.performance import PERF, measure
 from core.live_pipeline import LiveProcessor, LiveWorker, MonitorTask, MotionProjection, FaceTrackingProcessor
+from core.assessment_candidates import (ClearFrameRouter, OBSERVATION_ONLY,
+    CLEAR_FRAME_SELECTION, PRIORITIZED_ASSESSMENT)
 from ui.live_alerts import LiveAlerts
 from ui.live_overlay import draw_assessments
 from core.uniform_matcher import UniformColorMatcher
@@ -234,6 +236,7 @@ class CBVMSDashboard(WorkspaceWindow):
             self._trainer, self._uniform_matcher, self._notifier,
             latest_sample=self._latest_monitor_sample,
             state=LiveState(LiveConfig(violation_min_confidence=UNIFORM_VIOLATION_CONF)),
+            observation_only=OBSERVATION_ONLY,
         )
         self._processor.audio_task_valid = lambda task: (
             not self._closed.is_set()
@@ -242,7 +245,20 @@ class CBVMSDashboard(WorkspaceWindow):
             and task.uniform_enabled == self._checker.check_uniform
             and task.earring_enabled == self._checker.check_earring)
         self._processor.readiness = self._readiness
-        self._live_worker = LiveWorker(self._processor, persistence_worker=True)
+        self._observation_only = OBSERVATION_ONLY
+        self._candidate_router = ClearFrameRouter() if (CLEAR_FRAME_SELECTION or PRIORITIZED_ASSESSMENT) else None
+        if self._candidate_router is not None:
+            self._gallery_listener = self._on_gallery_revision
+            self._recognizer.add_gallery_listener(self._gallery_listener)
+        event("assessment_mode", observation_only=self._observation_only,
+              clear_frame_selection=CLEAR_FRAME_SELECTION,
+              prioritized_assessment=PRIORITIZED_ASSESSMENT,
+              production_persistence=not self._observation_only)
+        self._live_worker = LiveWorker(self._processor,
+            persistence_worker=not self._observation_only,
+            observation_only=self._observation_only)
+        if self._candidate_router is not None and self._observation_only:
+            self._live_worker.on_idle = self._dispatch_assessment_candidate
         self._tracking_worker = LiveWorker(FaceTrackingProcessor(
             self._recognizer, self._person_detector, self._readiness, self._on_localized))
         self._tracking_worker.start()
@@ -1371,11 +1387,50 @@ class CBVMSDashboard(WorkspaceWindow):
 
     def _on_localized(self, result):
         """Tracking worker submits its original pixels, landmarks and ownership token."""
+        candidate_observation_route = (getattr(self, "_observation_only", False)
+            and getattr(self, "_candidate_router", None) is not None
+            and (CLEAR_FRAME_SELECTION or PRIORITIZED_ASSESSMENT))
         if (not result.task.valid() or not self._readiness.ready('recognition')
-                or result.task.context.captured_at-self._monitor_offer_time < REID_MIN_GAP_SECS):
+                or result.task.context.generation != self._monitor_generation
+                or result.task.camera_generation != self._camera_generation
+                or (result.task.context.captured_at-self._monitor_offer_time < REID_MIN_GAP_SECS
+                    and not candidate_observation_route)):
             return
-        self._live_worker.offer(result.task.with_observations(result.observations))
+        if getattr(self, "_observation_only", False):
+            if getattr(self, "_candidate_router", None) is not None:
+                self._candidate_router.observe(result,
+                    prioritize=PRIORITIZED_ASSESSMENT,
+                    select=CLEAR_FRAME_SELECTION)
+                self._dispatch_assessment_candidate()
+                return
+            else:
+                task = result.task.for_observation_only(result.observations)
+        else:
+            task = result.task.with_observations(result.observations)
+        self._live_worker.offer(task)
         self._monitor_offer_time = result.task.context.captured_at
+
+    def _dispatch_assessment_candidate(self):
+        """Dispatch only to the idle worker; called by tracking/worker threads."""
+        router = getattr(self, "_candidate_router", None)
+        worker = getattr(self, "_live_worker", None)
+        if (router is None or worker is None or not getattr(self, "_observation_only", False)
+                or worker.stop_event.is_set()):
+            return
+        candidate = router.next(prioritize=PRIORITIZED_ASSESSMENT)
+        if candidate is None:
+            return
+        from copy import copy
+        task = copy(candidate.task)
+        object.__setattr__(task, "candidate_on_complete", router.complete)
+        if not worker.offer(task):
+            router.complete(candidate.ticket_id, None, "worker_rejected")
+
+    def _on_gallery_revision(self, _revision):
+        """Cancel only queued/in-flight candidate evidence when enrollment reloads."""
+        router = getattr(self, "_candidate_router", None)
+        if router is not None:
+            router.reset()
 
     def _latest_monitor_sample(self):
         """Worker-safe read; never starts devices or touches Tk."""
@@ -1407,6 +1462,8 @@ class CBVMSDashboard(WorkspaceWindow):
         self._preview_times.clear()
         self._analysis_times.clear()
         self._tracking_times.clear()
+        if getattr(self, "_candidate_router", None) is not None:
+            self._candidate_router.reset()
         _drain(self._live_worker.requests)
         _drain(self._live_worker.results)
         if getattr(self, "_alerts_scroll", None) is not None:
@@ -1610,7 +1667,9 @@ class CBVMSDashboard(WorkspaceWindow):
                             detail = f"Analysis failed: {worker.last_error}"
                         elif worker.active_task is not None and started-worker.active_since > 3:
                             detail += " · Slow analysis; stale results rejected"
-                    status_text = f"Camera: Active · {(self._camera_active_source or {}).get('label', 'Camera')} · {detail}"
+                    mode_label = ("OBSERVATION ONLY · NO ATTENDANCE OR DISCIPLINE SAVED · "
+                                  if self._observation_only else "")
+                    status_text = f"{mode_label}Camera: Active · {(self._camera_active_source or {}).get('label', 'Camera')} · {detail}"
                     if status_text != getattr(self, '_monitor_status_text', None):
                         self._status_camera.configure(text=status_text, text_color=COLOR_SAFE)
                         self._monitor_status_text = status_text
@@ -1689,6 +1748,10 @@ class CBVMSDashboard(WorkspaceWindow):
 
     def _on_close(self) -> None:
         self._closed.set()
+        gallery_listener = getattr(self, "_gallery_listener", None)
+        if gallery_listener is not None:
+            self._recognizer.remove_gallery_listener(gallery_listener)
+            self._gallery_listener = None
         models = getattr(self, "_monitor_models", None)
         if models is not None:
             models.cancel_pending()

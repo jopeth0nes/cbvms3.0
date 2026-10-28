@@ -65,6 +65,15 @@ class MonitorTask:
     observations: tuple[TrackedFace, ...] | None = None
     source_id: str = "unspecified-camera"
     source_label: str = "Unspecified camera"
+    assessment_presence_ids: frozenset[str] | None = None
+    candidate_presence_id: str | None = None
+    candidate_selected_at: float | None = None
+    candidate_ticket_id: str | None = None
+    candidate_cancelled: threading.Event | None = None
+    passage_cancelled: threading.Event | None = None
+    candidate_on_complete: object | None = None
+    assessment_order_ids: tuple[str, ...] = ()
+    observation_only: bool = False
 
     def __post_init__(self):
         frame = self.frame.copy()
@@ -82,12 +91,48 @@ class MonitorTask:
         object.__setattr__(result, "observations", tuple(observations))
         return result
 
+    def for_observation_candidate(self, observations, presence_id, selected_at,
+                                  ticket_id, candidate_cancelled, passage_cancelled=None):
+        """Attach candidate metadata while sharing only this task's frozen frame."""
+        from copy import copy
+        result = copy(self)
+        object.__setattr__(result, "observations", tuple(observations))
+        # The selected ticket prioritizes this passage's frame. All people on that
+        # frame remain in the assessment so no other track loses fresh evidence.
+        object.__setattr__(result, "assessment_presence_ids", None)
+        object.__setattr__(result, "candidate_presence_id", str(presence_id))
+        object.__setattr__(result, "candidate_selected_at", float(selected_at))
+        object.__setattr__(result, "candidate_ticket_id", str(ticket_id))
+        object.__setattr__(result, "candidate_cancelled", candidate_cancelled)
+        object.__setattr__(result, "passage_cancelled", passage_cancelled)
+        order = (str(presence_id),) + tuple(o.presence_id for o in observations
+                                            if o.presence_id != presence_id)
+        object.__setattr__(result, "assessment_order_ids", order)
+        object.__setattr__(result, "observation_only", True)
+        return result
+
+    def for_observation_only(self, observations):
+        from copy import copy
+        result = copy(self)
+        object.__setattr__(result, "observations", tuple(observations))
+        object.__setattr__(result, "observation_only", True)
+        return result
+
     def valid(self, now=None):
         now = time.monotonic() if now is None else now
-        return not self.cancelled.is_set() and 0 <= now-self.context.captured_at <= 3.0
+        candidate_cancelled = self.candidate_cancelled is not None and self.candidate_cancelled.is_set()
+        passage_cancelled = self.passage_cancelled is not None and self.passage_cancelled.is_set()
+        return (not self.cancelled.is_set() and not candidate_cancelled and not passage_cancelled
+                and 0 <= now-self.context.captured_at <= 3.0)
 
     def rejection(self):
-        return "session_cancelled" if self.cancelled.is_set() else "frame_expired"
+        if self.cancelled.is_set():
+            return "session_cancelled"
+        if self.candidate_cancelled is not None and self.candidate_cancelled.is_set():
+            return "passage_invalidated"
+        if self.passage_cancelled is not None and self.passage_cancelled.is_set():
+            return "passage_invalidated"
+        return "frame_expired"
 
 
 @dataclass(frozen=True)
@@ -169,7 +214,7 @@ class MotionProjection:
 
 class LiveProcessor:
     def __init__(self, database, recognizer, person_detector, trainer, uniform_matcher,
-                 notifier, *, latest_sample=lambda:None, state=None):
+                 notifier, *, latest_sample=lambda:None, state=None, observation_only=False):
         self.database=database
         self.recognizer=recognizer
         self.person_detector=person_detector
@@ -193,6 +238,7 @@ class LiveProcessor:
         self.identity_state = LiveState(self.state.config)
         self._assessment_cursor = 0
         self.audio_task_valid = lambda task: True
+        self.observation_only = bool(observation_only)
 
     def analyze(self,task):
         if not task.valid():
@@ -207,15 +253,30 @@ class LiveProcessor:
         started = time.monotonic()
         if task.observations is None:
             rows=[dict(row) for row in self.recognizer.recognize_faces(frame)]
+            observations = None
         else:
+            observations = tuple(task.observations)
+            recognition_order = list(range(len(observations)))
+            if task.assessment_order_ids:
+                rank = {presence_id: index for index, presence_id in enumerate(task.assessment_order_ids)}
+                recognition_order = sorted(range(len(observations)),
+                    key=lambda index: (rank.get(observations[index].presence_id, len(rank)), index))
+                recognition_observations = tuple(observations[index] for index in recognition_order)
+            else:
+                recognition_observations = observations
             rows=[dict(row) for row in self.recognizer.recognize_faces(
-                frame, detections=[o.detection() for o in task.observations])]
-            if len(rows) != len(task.observations):
+                frame, detections=[o.detection() for o in recognition_observations])]
+            if len(rows) != len(observations):
                 raise RuntimeError('Recognition did not preserve the same-frame tracked faces')
-            for row, observation in zip(rows, task.observations):
+            for row, observation in zip(rows, recognition_observations):
                 if tuple(row['box']) != observation.box:
                     raise RuntimeError('Recognition changed the tracked face ownership')
                 row['owner_token'] = observation.presence_id
+            if recognition_order != list(range(len(observations))):
+                restored = [None] * len(rows)
+                for ordered_index, original_index in enumerate(recognition_order):
+                    restored[original_index] = rows[ordered_index]
+                rows = restored
         event("stage_complete", stage="recognition", frame_id=task.context.frame_id,
               elapsed=time.monotonic()-started, faces=len(rows))
         error = getattr(self.recognizer, "last_error", None)
@@ -262,7 +323,7 @@ class LiveProcessor:
                            self.trainer.is_trained('uniform'))
         bodies=[]
         started = time.monotonic()
-        if (task.observations is None and uniform_available
+        if (observations is None and uniform_available
                 and any(r.get('matched') and r['discipline_eligible'] for r in rows)):
             bodies=self.person_detector.detect_persons(frame)
         event("stage_complete", stage="body", elapsed=time.monotonic()-started, bodies=len(bodies))
@@ -271,9 +332,20 @@ class LiveProcessor:
         # budget. Never let a slow first crop starve the same later person forever.
         indices = list(range(len(rows)))
         if indices:
-            start = self._assessment_cursor % len(indices)
-            indices = indices[start:] + indices[:start]
-            self._assessment_cursor += 1
+            if task.assessment_order_ids:
+                priority = task.candidate_presence_id
+                priority_index = next((i for i, o in enumerate(observations or ())
+                                       if o.presence_id == priority), None)
+                remaining = [i for i in indices if i != priority_index]
+                if remaining:
+                    start = self._assessment_cursor % len(remaining)
+                    remaining = remaining[start:] + remaining[:start]
+                indices = ([priority_index] if priority_index is not None else []) + remaining
+                self._assessment_cursor += 1
+            else:
+                start = self._assessment_cursor % len(indices)
+                indices = indices[start:] + indices[:start]
+                self._assessment_cursor += 1
         for index in indices:
             row, association = rows[index], associations[index]
             if not task.valid():
@@ -291,7 +363,7 @@ class LiveProcessor:
                 body_error = getattr(self.person_detector, 'last_error', None)
                 if not bodies and isinstance(body_error, str) and body_error:
                     row['reason']='Body detection failed; uniform not assessed'
-                observation = task.observations[index] if task.observations is not None else None
+                observation = observations[index] if observations is not None else None
                 body = observation.body_box if observation is not None else (
                     bodies[association.index] if association.index is not None else None)
                 if observation is not None:
@@ -304,8 +376,8 @@ class LiveProcessor:
                         valid,reason=validate_torso(
                             row['box'], body, region, frame.shape,
                             other_faces=[r['box'] for i,r in enumerate(rows) if i!=index],
-                            other_bodies=[o.body_box for i,o in enumerate(task.observations)
-                                          if i!=index and o.body_box is not None] if task.observations is not None
+                            other_bodies=[o.body_box for i,o in enumerate(observations)
+                                          if i!=index and o.body_box is not None] if observations is not None
                                          else [b for i,b in enumerate(bodies) if i!=association.index])
                         row['reason']=reason if region is not None else (
                             observation.reason if observation is not None else 'Move back to show more of your shirt')
@@ -364,9 +436,9 @@ class LiveProcessor:
             PERF.first("first_stable_identity")
         if any(r.get("uniform_available") for r in rows):
             PERF.first("first_uniform_assessment")
-        if task.observations is not None:
+        if observations is not None:
             assessments=tuple(replace(a, track_id=o.track_id, presence_id=o.presence_id)
-                              for a,o in zip(assessments,task.observations))
+                              for a,o in zip(assessments,observations))
         for a in assessments:
             event('person_assessed', frame_id=task.context.frame_id, presence_id=a.presence_id,
                   state=a.state, reason=a.reason, reliable_identity=a.reliable_identity,
@@ -376,7 +448,8 @@ class LiveProcessor:
               valid_torsos=sum(bool(r.get('torso_valid')) for r in rows),
               accepted_assessments=sum(bool(a.accepted_categories) for a in assessments),
               assessment_elapsed=time.monotonic()-started)
-        self.submit_detection_audio(MonitorResult(task, assessments, time.monotonic()))
+        if not self.observation_only and not task.observation_only:
+            self.submit_detection_audio(MonitorResult(task, assessments, time.monotonic()))
         return MonitorResult(task,assessments,time.monotonic(),
                              "No faces detected" if not rows else
                              "Face detected · Identity uncertain" if not any(a.reliable_identity for a in assessments) else
@@ -384,6 +457,8 @@ class LiveProcessor:
 
     def submit_detection_audio(self, result):
         """Audio-only consumer of accepted results, independent of persistence cooldowns."""
+        if self.observation_only or result.task.observation_only:
+            return
         audio = getattr(self.notifier, 'audio', None)
         if audio is None or not result.task.valid():
             return
@@ -427,6 +502,9 @@ class LiveProcessor:
         qualified, delayed persistence checks cancellation, not a new frame's identity.
         """
         task=result.task
+        if self.observation_only or task.observation_only:
+            event("database_write_withheld", reason="observation_only_attendance")
+            return
         latest=self.latest_sample()
         if (not task.valid() or latest is None or latest.frame_id[0]!=task.context.frame_id[0]
                 or not 0<=time.monotonic()-latest.captured_at<=1):
@@ -470,6 +548,9 @@ class LiveProcessor:
 
     def submit_unknowns(self, result):
         """Qualify once using existing identity, tracking, freshness and cancellation gates."""
+        if self.observation_only or result.task.observation_only:
+            event("database_write_withheld", reason="observation_only_unknown")
+            return
         from core.security_writer import UnknownEncounter
         task = result.task
         latest = self.latest_sample()
@@ -538,6 +619,9 @@ class LiveProcessor:
         notifications. Failed writes do not consume cooldowns.
         """
         task=result.task
+        if self.observation_only or task.observation_only:
+            event("database_write_withheld", reason="observation_only_session")
+            return
         if self.security_writer is None:
             self.submit_unknowns(result)
         if self.attendance_writer is None:
@@ -718,8 +802,12 @@ class FaceTrackingProcessor:
 
 class LiveWorker:
     """One stoppable worker with single-slot input/output queues."""
-    def __init__(self,processor, *, persistence_worker=False):
+    def __init__(self,processor, *, persistence_worker=False, observation_only=False):
         self.processor=processor
+        self.observation_only = bool(observation_only or getattr(processor, "observation_only", False))
+        if self.observation_only and isinstance(processor, LiveProcessor):
+            processor.observation_only = True
+        persistence_worker = bool(persistence_worker and not self.observation_only)
         self.attendance_writer = None
         if persistence_worker and isinstance(processor,LiveProcessor):
             from core.attendance_writer import AttendanceWriter
@@ -737,6 +825,9 @@ class LiveWorker:
         self.stop_event=threading.Event()
         self.done=threading.Event()
         self.active_task = None
+        self.on_idle = None
+        self._dispatch_lock = threading.Lock()
+        self._request_ready = threading.Event()
         self.last_error = ""
         self.active_since = 0.
         self.writes = queue.Queue(maxsize=1)
@@ -784,20 +875,48 @@ class LiveWorker:
             self.writes_done.set()
 
     def offer(self,task):
-        if not self.stop_event.is_set():
+        candidate = bool(getattr(task, "candidate_ticket_id", None))
+        if self.stop_event.is_set():
+            if candidate:
+                self._ack_candidate(task, None, "worker_stopped")
+            return False
+        if candidate:
+            with self._dispatch_lock:
+                if self.active_task is not None or not self.requests.empty():
+                    self._ack_candidate(task, None, "worker_busy")
+                    return False
+                self.requests.put_nowait(task)
+                self._request_ready.set()
             event("frame_submitted", worker=type(self.processor).__name__, frame_id=task.context.frame_id)
-            if not PERF.enabled:
-                put_latest(self.requests, task)
-                return
-            with self._queue_clock_lock:
-                if not self.requests.empty():
-                    PERF.observe("replaced_"+self._metric_kind, 0.)
-                self._queue_clock.clear()
-                self._queue_clock[id(task)] = time.monotonic()
-                put_latest(self.requests,task)
+            return True
+        if not candidate and not self.stop_event.is_set():
+            event("frame_submitted", worker=type(self.processor).__name__, frame_id=task.context.frame_id)
+            with self._dispatch_lock:
+                if not PERF.enabled:
+                    put_latest(self.requests, task)
+                else:
+                    with self._queue_clock_lock:
+                        if not self.requests.empty():
+                            PERF.observe("replaced_"+self._metric_kind, 0.)
+                        self._queue_clock.clear()
+                        self._queue_clock[id(task)] = time.monotonic()
+                        put_latest(self.requests,task)
+                self._request_ready.set()
+            return True
+        return False
+
+    @staticmethod
+    def _ack_candidate(task, result, reason):
+        callback = getattr(task, "candidate_on_complete", None)
+        if callback is not None:
+            try:
+                callback(task.candidate_ticket_id, result, reason)
+            except Exception as exc:
+                event("candidate_ack_failed", error=str(exc))
 
     def stop(self):
         self.stop_event.set()
+        self._request_ready.set()
         if isinstance(self.processor, LiveProcessor):
             audio = getattr(self.processor.notifier, 'audio', None)
             if audio is not None:
@@ -807,34 +926,61 @@ class LiveWorker:
             self.processor.security_writer.stop()
         if self.active_task is not None:
             self.active_task.cancelled.set()
+            if self.active_task.candidate_cancelled is not None:
+                self.active_task.candidate_cancelled.set()
         if self.active_write is not None:
             self.active_write.cancelled.set()
         try:
             self.writes.get_nowait().task.cancelled.set()
         except queue.Empty:
             pass
+        while True:
+            try:
+                queued = self.requests.get_nowait()
+            except queue.Empty:
+                break
+            if queued is not None:
+                self._ack_candidate(queued, None, "worker_stopped")
         put_latest(self.requests,None)
 
     def _run(self):
         try:
             while not self.stop_event.is_set():
-                try:
-                    task=self.requests.get(timeout=.2)
-                except queue.Empty:
-                    continue
+                self._request_ready.wait(.2)
+                with self._dispatch_lock:
+                    try:
+                        task = self.requests.get_nowait()
+                    except queue.Empty:
+                        self._request_ready.clear()
+                        continue
+                    # Claim while holding the same lock used by offer(): an idle
+                    # callback can never mistake a dequeued task for an idle worker.
+                    self.active_task = task
+                    if self.requests.empty():
+                        self._request_ready.clear()
                 if task is None or not task.valid():
+                    with self._dispatch_lock:
+                        self.active_task = None
                     if task is not None:
                         event("frame_rejected", stage="queue", reason=task.rejection())
+                        self._ack_candidate(task, None, task.rejection())
+                        if self.on_idle is not None:
+                            try:
+                                self.on_idle()
+                            except Exception as exc:
+                                event("candidate_dispatch_failed", error=str(exc))
                     continue
+                result = None
+                outcome = "analysis_failed"
                 try:
                     if PERF.enabled:
                         with self._queue_clock_lock:
                             offered_at = self._queue_clock.pop(id(task), None)
                         if offered_at is not None:
                             PERF.observe("queue_"+self._metric_kind, time.monotonic()-offered_at)
-                    self.active_task = task
                     self.active_since = time.monotonic()
                     result=self.processor.analyze(task)
+                    outcome = "completed" if result is not None and task.valid() and not self.stop_event.is_set() else "worker_stopped" if self.stop_event.is_set() else "no_result"
                     if result is not None and task.valid() and not self.stop_event.is_set():
                         PERF.observe("capture_to_"+self._metric_kind, time.monotonic()-task.context.captured_at)
                         self.last_error = ""
@@ -843,11 +989,12 @@ class LiveWorker:
                                 self.processor.submit_attendance(result)
                                 self.processor.submit_unknowns(result)
                             put_latest(self.writes, result)
-                        else:
+                        elif not self.observation_only:
                             self.processor.persist(result)
                         if task.valid() and not self.stop_event.is_set():
                             put_latest(self.results,result)
                 except Exception as exc:
+                    outcome = "analysis_failed"
                     self.last_error = str(exc)
                     event("analysis_failed", error=str(exc), frame_id=task.context.frame_id)
                     print(f"[LiveMonitor] assessment unavailable: {exc}")
@@ -858,6 +1005,13 @@ class LiveWorker:
                         put_latest(self.results,MonitorResult(task,(),time.monotonic(),
                                                            'Assessment unavailable'))
                 finally:
-                    self.active_task = None
+                    with self._dispatch_lock:
+                        self.active_task = None
+                    self._ack_candidate(task, result if outcome == "completed" else None, outcome)
+                    if self.on_idle is not None:
+                        try:
+                            self.on_idle()
+                        except Exception as exc:
+                            event("candidate_dispatch_failed", error=str(exc))
         finally:
             self.done.set()

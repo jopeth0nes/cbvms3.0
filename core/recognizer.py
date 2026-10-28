@@ -65,6 +65,8 @@ class FaceRecognizer:
         # (student_row, embeddings) where embeddings is a unit-normalized (K, 512) array
         # holding that student's per-angle ArcFace embeddings.
         self._known: list[tuple[dict, np.ndarray]] = []
+        self.gallery_revision = 0
+        self._gallery_listeners = []
         self._models_loaded = False
         self.last_error = None
         self.threshold: float = MATCH_THRESHOLD  # runtime-adjustable match sensitivity
@@ -382,6 +384,26 @@ class FaceRecognizer:
             print(f"[Recognizer] load_known_faces error: {exc}")
         with self._lock:
             self._known = known
+            self.gallery_revision += 1
+            listeners = tuple(self._gallery_listeners)
+        for listener in listeners:
+            try:
+                listener(self.gallery_revision)
+            except Exception as exc:
+                event("gallery_revision_listener_failed", error=str(exc))
+
+    def add_gallery_listener(self, listener) -> None:
+        """Register a lightweight callback for embedding-gallery replacement."""
+        if not callable(listener):
+            raise TypeError("gallery listener must be callable")
+        with self._lock:
+            self._gallery_listeners.append(listener)
+
+    def remove_gallery_listener(self, listener) -> None:
+        """Unregister a listener when an owning monitor window is closed."""
+        with self._lock:
+            self._gallery_listeners = [item for item in self._gallery_listeners
+                                       if item is not listener]
 
     def encode_face(self, frame_bgr: np.ndarray) -> tuple[np.ndarray | None, list | None]:
         """Detect the highest-confidence face and return its embedding + bounding box.

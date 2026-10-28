@@ -1,0 +1,301 @@
+{
+  "date": "2026-10-28",
+  "installed_public_fixture_backend_check": {
+    "cpu": {
+      "actual_parameter_device": "cpu",
+      "counts_per_fixture": [
+        4,
+        2
+      ],
+      "inference_p50_p95_p99_ms": [
+        25.61,
+        30.412,
+        30.917
+      ]
+    },
+    "fixture_set": "Ultralytics public bus.jpg and zidane.jpg",
+    "interpretation": "placement and fixture plumbing verified; 6 samples only, no speedup or sustained-throughput claim",
+    "mps": {
+      "actual_parameter_device": "mps:0",
+      "counts_per_fixture": [
+        4,
+        2
+      ],
+      "inference_p50_p95_p99_ms": [
+        26.032,
+        31.18,
+        32.043
+      ]
+    },
+    "repeats_each": 3
+  },
+  "model_backed_public_video_replay": {
+    "baseline": {
+      "assessment_rows": 10,
+      "compute_p50_p95_p99_ms": [
+        145.68,
+        203.87,
+        215.48
+      ],
+      "database_writes": 0,
+      "elapsed_wall_ms": 6069.94,
+      "frames_decoded": 8,
+      "frames_skipped_for_lag": 0,
+      "live_worker_results": 5,
+      "warmup_ms": 2257.58
+    },
+    "body_backend": "CPU, actual parameter device verified",
+    "candidate": {
+      "assessment_rows": 16,
+      "compute_p50_p95_p99_ms": [
+        146.97,
+        181.96,
+        194.44
+      ],
+      "database_writes": 0,
+      "elapsed_wall_ms": 5539.15,
+      "frames_decoded": 8,
+      "frames_skipped_for_lag": 0,
+      "live_worker_results": 8,
+      "warmup_ms": 1611.51
+    },
+    "database": "fresh temporary empty SQLite roster each run",
+    "face_backend": "ONNX CPUExecutionProvider",
+    "identity_accuracy": null,
+    "interpretation": "real model-backed worker plumbing verified; empty roster/no labels means no accuracy evidence; offer counts differ so timing is not a controlled before/after performance comparison",
+    "passage_labels": 0,
+    "playback": "paced in real time; actual LiveWorker and LiveProcessor; baseline then candidate sequentially",
+    "source": "public Zidane fixture encoded as 8 frames at 2 FPS",
+    "uniform_accuracy": null
+  },
+  "physical_camera_acquisition_only": {
+    "capture_fps": 30.0,
+    "capture_gap_p95_p99_ms": [
+      37.217,
+      39.089
+    ],
+    "database_writes": 0,
+    "device": "MacBook Air Camera / AVFoundation",
+    "duration_s": 30,
+    "errors": 0,
+    "frames": 900,
+    "frames_saved": 0,
+    "power": "AC, battery 88% charging",
+    "requested_and_observed": "1280x720 at 30 FPS"
+  },
+  "physical_cpu_body_yolo": {
+    "body_inference_p50_p95_p99_ms": [
+      23.664,
+      27.65,
+      36.029
+    ],
+    "body_yolo_frames": 1793,
+    "body_yolo_per_s": 29.883,
+    "capture_fps": 30.0,
+    "capture_frames": 1800,
+    "capture_to_output_p50_p95_p99_ms": [
+      24.866,
+      29.537,
+      41.07
+    ],
+    "database_writes": 0,
+    "device": "MacBook Air Camera / AVFoundation",
+    "duration_s": 60,
+    "errors": 0,
+    "frames_saved": 0,
+    "power": "AC, battery 88% charging",
+    "requested_and_observed": "1280x720 at 30 FPS",
+    "warmup_s": 5
+  },
+  "physical_mps_body_yolo": {
+    "reason": "correctness work took priority; no sustained MPS physical result is claimed",
+    "status": "aborted before completion"
+  },
+  "pre_edit_synthetic_cpu_baseline": {
+    "accuracy": null,
+    "body_inference_p50_p95_p99_ms": [
+      21.748,
+      25.976,
+      28.465
+    ],
+    "capture_fps": 30.0,
+    "duration_s": 30,
+    "frame_size": "1280x720",
+    "source": "synthetic/no sensor",
+    "warmup_s": 5,
+    "yolo_per_s": 29.967
+  },
+  "privacy": {
+    "camera_frames_saved": false,
+    "production_database_writes": 0,
+    "raw_student_ids_in_report": false,
+    "student_or_gallery_data": false
+  },
+  "ui_switching": {
+    "native_live_monitor_ui_tests_passed": 4,
+    "native_test": "tests.test_live_monitor_native_ui completed in 1.661s",
+    "simulated_camera_switch_tests_passed": 18,
+    "native_gui_test": "4 native live-monitor tests passed; 18 simulated switching cases passed; actual sources exercised sequentially"
+  },
+  "final_full_monitor_checks": {
+    "usb": {
+      "artifact": "docs/validation/camera_assessment_2026-10-28/usb-final-battery.json",
+      "duration_s": 60,
+      "warmup_s": 15,
+      "power": "Battery, Low Power Mode enabled; no power changes",
+      "exit_code": 0,
+      "rates_hz": {
+        "preview": 18.133,
+        "tracking": 2.65,
+        "assessment": 0.9,
+        "redraw": 18.133,
+        "capture": 29.8
+      },
+      "errors": [],
+      "workers_stopped": {
+        "camera": true,
+        "tracking": true,
+        "assessment": true
+      },
+      "models": {
+        "face": "ready",
+        "recognition": "ready",
+        "body": "ready",
+        "uniform": "ready",
+        "earring": "failed"
+      },
+      "sync_counts": {
+        "accepted": 0,
+        "batches": 0
+      },
+      "configuration": {
+        "observation_only": true,
+        "clear_frame_selection": "1",
+        "prioritized_assessment": "1",
+        "body_yolo": {
+          "requested": "cpu",
+          "active": "cpu",
+          "model_parameter_device": "cpu",
+          "warm": true,
+          "fallback_reason": null
+        },
+        "candidate_limits": {
+          "active_tracks": 0,
+          "candidate_count": 0,
+          "queued": 0,
+          "in_flight": 0,
+          "retained_bytes": 0,
+          "max_tracks": 48,
+          "per_passage": 2,
+          "max_candidates": 24,
+          "max_bytes": 25165824,
+          "observation_only": true
+        }
+      },
+      "rss_range_mib": [
+        679.0,
+        812.91
+      ],
+      "candidate_peak_bytes": 5529600,
+      "worker_queue_max": [
+        1,
+        0
+      ],
+      "session_first_usable_to_first_assessment": {
+        "count": 1,
+        "retained": 1,
+        "p50_ms": 1135.772,
+        "p95_ms": 1135.772,
+        "p99_ms": 1135.772
+      },
+      "capture_to_assessment_ms": {
+        "p1": 1052.486,
+        "p50": 1911.779,
+        "p95": 2696.726,
+        "p99": 2789.215
+      },
+      "accuracy_evaluated": false,
+      "interpretation": "Temporary empty roster. Session first metrics include warmup. No labeled confirmation or matched performance gain established."
+    },
+    "front-gate": {
+      "artifact": "docs/validation/camera_assessment_2026-10-28/front-gate-final-battery.json",
+      "duration_s": 60,
+      "warmup_s": 15,
+      "power": "Battery, Low Power Mode enabled; no power changes",
+      "exit_code": 0,
+      "rates_hz": {
+        "preview": 19.833,
+        "tracking": 7.45,
+        "assessment": 0.0,
+        "redraw": 22.217,
+        "capture": 19.95
+      },
+      "errors": [],
+      "workers_stopped": {
+        "camera": true,
+        "tracking": true,
+        "assessment": true
+      },
+      "models": {
+        "face": "ready",
+        "recognition": "ready",
+        "body": "ready",
+        "uniform": "ready",
+        "earring": "failed"
+      },
+      "sync_counts": {
+        "accepted": 660,
+        "batches": 132
+      },
+      "configuration": {
+        "observation_only": true,
+        "clear_frame_selection": "1",
+        "prioritized_assessment": "1",
+        "body_yolo": {
+          "requested": "cpu",
+          "active": "cpu",
+          "model_parameter_device": "cpu",
+          "warm": true,
+          "fallback_reason": null
+        },
+        "candidate_limits": {
+          "active_tracks": 0,
+          "candidate_count": 0,
+          "queued": 0,
+          "in_flight": 0,
+          "retained_bytes": 0,
+          "max_tracks": 48,
+          "per_passage": 2,
+          "max_candidates": 24,
+          "max_bytes": 25165824,
+          "observation_only": true
+        }
+      },
+      "rss_range_mib": [
+        831.7,
+        873.67
+      ],
+      "candidate_peak_bytes": 0,
+      "worker_queue_max": [
+        0,
+        0
+      ],
+      "session_first_usable_to_first_assessment": null,
+      "capture_to_assessment_ms": null,
+      "accuracy_evaluated": false,
+      "interpretation": "Temporary empty roster. Session first metrics include warmup. No labeled confirmation or matched performance gain established."
+    }
+  },
+  "final_verification": {
+    "focused_tests": 147,
+    "focused_result": "passed",
+    "native_live_monitor_ui_tests": 4,
+    "native_result": "passed earlier, UI behavior preserved",
+    "persistence_tests": 9,
+    "persistence_passed": 8,
+    "persistence_known_fixture_error": "test_guard_is_checked_inside_the_write_transaction: closed database; unchanged from historical baseline",
+    "diff_check": "passed",
+    "syntax_modules": 10
+  },
+  "recognition_cache": "No embedding/identity cache introduced. Passage-scoped refresh and frame dedup only; fresh recognition retains existing eligibility checks."
+}

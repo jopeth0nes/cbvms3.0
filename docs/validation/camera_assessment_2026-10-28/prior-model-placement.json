@@ -1,0 +1,76 @@
+{
+  "mps_fallback_env": "unset",
+  "models": {
+    "body": {
+      "architecture": "DetectionModel",
+      "yaml": null,
+      "parameter_count": 3151904,
+      "actual_tensor_shape": [
+        1,
+        3,
+        384,
+        640
+      ],
+      "input_dtype": "torch.float32",
+      "parameter_dtype": "torch.float32",
+      "parameter_device": "cpu",
+      "half": false
+    },
+    "uniform": {
+      "architecture": "ClassificationModel",
+      "yaml": "yolov8n-cls.yaml",
+      "parameter_count": 1437442,
+      "actual_tensor_shape": [
+        1,
+        3,
+        224,
+        224
+      ],
+      "input_dtype": "torch.float32",
+      "parameter_dtype": "torch.float32",
+      "parameter_device": "cpu",
+      "half": false
+    },
+    "det_10g.onnx": {
+      "inputs": [
+        {
+          "name": "input.1",
+          "shape": [
+            1,
+            3,
+            "?",
+            "?"
+          ],
+          "type": "tensor(float)"
+        }
+      ],
+      "providers": [
+        "CPUExecutionProvider"
+      ]
+    },
+    "w600k_r50.onnx": {
+      "inputs": [
+        {
+          "name": "input.1",
+          "shape": [
+            "None",
+            3,
+            112,
+            112
+          ],
+          "type": "tensor(float)"
+        }
+      ],
+      "providers": [
+        "CPUExecutionProvider"
+      ]
+    }
+  },
+  "opencv_videoio": {
+    "FFMPEG": "YES",
+    "avcodec": "YES (60.3.100)",
+    "avformat": "YES (60.3.100)",
+    "GStreamer": "NO",
+    "AVFoundation": "YES"
+  }
+}

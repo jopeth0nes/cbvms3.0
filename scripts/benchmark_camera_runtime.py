@@ -47,7 +47,8 @@ def main():
     progress = args.output.with_suffix('.progress.json')
     progress.write_text(json.dumps({'phase': 'imports'}))
     source_hashes = {name: hashlib.sha256(Path(name).read_bytes()).hexdigest()
-        for name in ('core/camera.py', 'core/live_pipeline.py', 'ui/dashboard.py',
+        for name in ('core/camera.py', 'core/live_pipeline.py', 'core/assessment_candidates.py',
+                     'core/person_detector.py', 'core/recognizer.py', 'ui/dashboard.py',
                      'ui/camera_feed.py', 'scripts/benchmark_camera_runtime.py')}
     if not 0 < args.seconds <= 3600 or args.warmup < 0:
         p.error('seconds must be in (0, 3600], warmup nonnegative')
@@ -324,6 +325,8 @@ def main():
                            cpu_percent=process.cpu_percent())
                 if args.mode == 'full':
                     row['queued'] = [app._tracking_worker.requests.qsize(), app._live_worker.requests.qsize()]
+                    if app._candidate_router is not None:
+                        row['candidates'] = app._candidate_router.stats()
                     row['canvas_size'] = [app.camera_feed.winfo_width(), app.camera_feed.winfo_height()]
                 rows.append(row); next_stats = now+1
                 if len(rows) % 10 == 0:
@@ -367,6 +370,14 @@ def main():
                       reader_stopped=reader is None or not reader.is_alive())
         report['models'] = ({name: state.state for name, state in models.readiness.snapshot().items()}
                             if models else {})
+        if args.mode == 'full':
+            report['assessment_configuration'] = {
+                'observation_only': app._observation_only,
+                'clear_frame_selection': os.environ.get('CBVMS_CLEAR_FRAME_SELECTION', '0'),
+                'prioritized_assessment': os.environ.get('CBVMS_PRIORITIZED_ASSESSMENT', '0'),
+                'body_yolo': app._person_detector.backend_status(),
+                'candidate_limits': app._candidate_router.stats() if app._candidate_router else None,
+            }
         if models and any(report['models'].get(name) != 'ready'
                           for name in ('face', 'recognition', 'body', 'uniform')):
             errors.append('required_model_unavailable')

@@ -22,6 +22,10 @@ NAMES = frozenset({
     "rejected", "replaced_tracking", "replaced_assessment",
     "first_camera_frame", "first_face", "first_stable_identity", "first_torso",
     "first_uniform_assessment",
+    "candidate_selection_wait", "passage_first_observation",
+    "candidate_to_assessment", "passage_entry_to_assessment",
+    "passage_entry_to_first_assessment", "usable_to_assessment",
+    "usable_to_first_assessment",
 })
 
 
