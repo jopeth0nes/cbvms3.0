@@ -253,7 +253,9 @@ class DashboardSwitchRegressionTests(unittest.TestCase):
 
     def test_new_open_waits_for_previous_worker_without_blocking_ui(self) -> None:
         previous_done = threading.Event()
+        companion_done = threading.Event()
         harness = CameraHarness()
+        harness._monitor_workspace = types.SimpleNamespace(suspend=lambda: companion_done)
         harness._camera_generation = 0
         harness._last_frame_request = 0.0
         harness._face_frame_counter = 99
@@ -287,6 +289,9 @@ class DashboardSwitchRegressionTests(unittest.TestCase):
         previous_done.set()
         second_poll = harness.callbacks.pop(0)
         second_poll()
+        self.assertEqual(harness.started_generations, [])
+        companion_done.set()
+        harness.callbacks.pop(0)()
         self.assertEqual(harness.started_generations, [1])
 
     def test_intentional_halt_invalidates_pending_start_and_retry(self) -> None:

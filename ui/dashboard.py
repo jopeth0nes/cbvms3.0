@@ -38,6 +38,7 @@ from core.trainer import ViolationTrainer
 from core.violation_engine import LiveViolationChecker
 from database.db_manager import CBVMSDatabase
 from ui.camera_feed import CameraFeed, next_preview_tick
+from ui.monitor_workspace import MonitorWorkspace
 from ui.camera_source_selector import CameraSourceSelector
 from ui.welcome import welcome_banner
 from ui.window_lifecycle import WorkspaceWindow
@@ -515,13 +516,14 @@ class CBVMSDashboard(WorkspaceWindow):
         self._stats_row.grid(row=0, column=0, sticky="ew", pady=(0, PADDING))
 
         # Camera feed — no fixed width/height; grid(sticky="nsew") controls size
-        self.camera_feed = CameraFeed(self._live_frame, bg_color=COLOR_BG)
-        self.camera_feed.grid(row=1, column=0, padx=10, pady=10, sticky="nsew")
+        self._monitor_workspace = MonitorWorkspace(self._live_frame, self)
+        self._monitor_workspace.grid(row=1, column=0, padx=10, pady=10, sticky="nsew")
+        self.camera_feed = self._monitor_workspace.primary_feed
 
         # Display-only mirror toggle, overlaid in the feed's top-right corner. Flips only
         # the shown pixels — detection/recognition still run on the un-mirrored frame.
         self._mirror = MirrorController()
-        self._mirror_btn = make_mirror_button(self._live_frame, self._mirror)
+        self._mirror_btn = make_mirror_button(self._monitor_workspace.primary, self._mirror)
         self._mirror_btn.place(in_=self.camera_feed, relx=1.0, x=-14, y=14, anchor="ne")
         self._mirror_btn.lift()
 
@@ -827,6 +829,11 @@ class CBVMSDashboard(WorkspaceWindow):
     def _on_nav_select(self, key: str) -> None:
         if key in {"training", "accounts", "recycle_bin"} and not self._is_superadmin:
             return
+        if key != 'live' and (key in self._views or key in self._panel_factories):
+            workspace = getattr(self, '_monitor_workspace', None)
+            if workspace is not None:
+                workspace.suspend()
+                workspace.close_popup()
         if key in {"enrollment", "recycle_bin"} and key not in self._views:
             # Both sidebar destinations share the existing student workspace.
             if self._enrollment_panel is None:
@@ -1292,6 +1299,8 @@ class CBVMSDashboard(WorkspaceWindow):
         if hasattr(self, '_monitor_cancel'):
             self._invalidate_monitor()
         previous_done = self._stop_camera()
+        workspace = getattr(self, '_monitor_workspace', None)
+        companion_done = workspace.suspend() if workspace else None
         self._camera_active_source = None
         self._camera_open_deadline = None
         label = self._camera_requested_source.get('label', 'camera')
@@ -1303,7 +1312,7 @@ class CBVMSDashboard(WorkspaceWindow):
             self._camera_start_job = None
             if generation != self._camera_generation:
                 return
-            if not previous_done.is_set():
+            if not previous_done.is_set() or (companion_done is not None and not companion_done.is_set()):
                 if time.monotonic() - waiting_since >= 3:
                     self._set_camera_state('ERROR', f'{label} unavailable · Previous camera is still stopping. Retry after it releases.')
                     return
@@ -1902,6 +1911,9 @@ class CBVMSDashboard(WorkspaceWindow):
 
     def _on_close(self) -> None:
         self._closed.set()
+        workspace = getattr(self, '_monitor_workspace', None)
+        if workspace is not None:
+            self._companion_done = workspace.close()
         self._activity_generation += 1
         if self._activity_refresh_job is not None:
             try:
@@ -1981,5 +1993,8 @@ def open_dashboard(
         event('unknown_sightings_shutdown_incomplete',status=writer.status())
         print('[Unknown sightings] Shutdown deadline reached: '+writer.status())
     app._camera_worker_done.wait(max(0,deadline-time.monotonic()))
+    companion_done = getattr(app, "_companion_done", None)
+    if companion_done is not None and not companion_done.wait(max(0, deadline-time.monotonic())):
+        event("companion_preview_shutdown_incomplete")
     app._monitor_models.wait(max(0,deadline-time.monotonic()))
     return getattr(app, "_logout_requested", False)
