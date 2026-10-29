@@ -1,0 +1,13 @@
+{
+  "renders": 617,
+  "render_ms": 758.8010946055874,
+  "max_render_ms": 14.48895805515349,
+  "errors": [],
+  "primary_stopped": true,
+  "analysis_stopped": true,
+  "max_gap_ms": 1813.3140000281855,
+  "p95_gap_ms": 69.85141709446907,
+  "heartbeats": 443,
+  "sessions": 3,
+  "clean_stop": true
+}

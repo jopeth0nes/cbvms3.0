@@ -536,6 +536,7 @@ class DashboardSwitchRegressionTests(unittest.TestCase):
         harness._latest_monitor_sample = types.MethodType(
             CBVMSDashboard._latest_monitor_sample, harness)
 
+        harness._monitor_workspace = types.SimpleNamespace(primary_placeholder=harness.camera_feed.show_placeholder)
         CBVMSDashboard._update_feed(harness)
         self.assertEqual(placeholders, [True])
         self.assertEqual(harness._feed_job, "feed-job")

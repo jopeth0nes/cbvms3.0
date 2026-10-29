@@ -1,0 +1,6 @@
+{
+  "ui/monitor_workspace.py": "40fd854084775cf5c86f415abc8fc226960c58ebed6bb543fbe9b287234c0992",
+  "scripts/verify_monitor_popup.py": "db2cc2b24695124d6df806db9a7090516a53252e58eb0aad3a443b40e3e7e04c",
+  "tests/test_monitor_workspace.py": "c32f71edce66d2e78ef1d76c4bacbf72f0f363c283651035a74d8479dfd253a7",
+  "tests/test_monitor_workspace_native_ui.py": "9cf3824439045d8660204cad5cfd063a562cb4072a79326ac8c313dd68fb8b94"
+}

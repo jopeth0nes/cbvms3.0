@@ -74,6 +74,10 @@ def dashboard():
     for name in ("_invalidate_monitor", "_monitor_rows", "_project_rows", "_update_feed", "_clear_alerts", "_halt_camera", "_cancel_camera_retry", "_set_camera_state", "_schedule_camera_reconnect"):
         setattr(panel, name, getattr(CBVMSDashboard, name).__get__(panel))
     panel._measured_rate = CBVMSDashboard._measured_rate
+    panel._monitor_workspace = types.SimpleNamespace(suspend=MagicMock(), close_popup=MagicMock(), close=MagicMock(),
+        primary_placeholder=panel.camera_feed.show_placeholder,
+        render_primary=panel.camera_feed.render,
+        primary_render_key=lambda: (panel.camera_feed.winfo_width(), panel.camera_feed.winfo_height()))
     return panel
 
 
@@ -86,6 +90,15 @@ def tick(panel, now=10.1):
 
 
 class LiveDashboardTests(unittest.TestCase):
+    def test_hidden_primary_keeps_analysis_but_skips_pixel_rendering(self):
+        panel = dashboard()
+        panel._monitor_workspace.primary_render_key = lambda: ()
+        with patch('ui.dashboard.draw_assessments') as draw:
+            tick(panel)
+        panel._tracking_worker.offer.assert_called_once()
+        panel.camera_feed.render.assert_not_called()
+        draw.assert_not_called()
+
     def test_invalidation_cancels_work_clears_queues_and_retires_cards(self):
         panel = dashboard()
         token = panel._monitor_cancel

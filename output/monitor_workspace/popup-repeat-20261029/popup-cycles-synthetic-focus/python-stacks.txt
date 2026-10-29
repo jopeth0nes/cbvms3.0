@@ -1,0 +1,21 @@
+Thread 0x0000000170287000 (most recent call first):
+  File "/opt/homebrew/Cellar/python@3.12/3.12.13_2/Frameworks/Python.framework/Versions/3.12/lib/python3.12/tkinter/font.py", line 121 in __del__
+  File "/opt/homebrew/Cellar/python@3.12/3.12.13_2/Frameworks/Python.framework/Versions/3.12/lib/python3.12/threading.py", line 299 in __enter__
+  File "/opt/homebrew/Cellar/python@3.12/3.12.13_2/Frameworks/Python.framework/Versions/3.12/lib/python3.12/threading.py", line 623 in set
+  File "/opt/homebrew/Cellar/python@3.12/3.12.13_2/Frameworks/Python.framework/Versions/3.12/lib/python3.12/threading.py", line 1064 in _bootstrap_inner
+  File "/opt/homebrew/Cellar/python@3.12/3.12.13_2/Frameworks/Python.framework/Versions/3.12/lib/python3.12/threading.py", line 1032 in _bootstrap
+
+Current thread 0x00000001ee685e80 (most recent call first):
+  Garbage-collecting
+  File "/opt/homebrew/Cellar/python@3.12/3.12.13_2/Frameworks/Python.framework/Versions/3.12/lib/python3.12/threading.py", line 355 in wait
+  File "/opt/homebrew/Cellar/python@3.12/3.12.13_2/Frameworks/Python.framework/Versions/3.12/lib/python3.12/threading.py", line 655 in wait
+  File "/opt/homebrew/Cellar/python@3.12/3.12.13_2/Frameworks/Python.framework/Versions/3.12/lib/python3.12/threading.py", line 999 in start
+  File "<HOME>/Documents/GitHub/cbvms3.0/core/preview_session.py", line 25 in start
+  File "<HOME>/Documents/GitHub/cbvms3.0/ui/monitor_workspace.py", line 153 in _tick
+  File "/opt/homebrew/Cellar/python@3.12/3.12.13_2/Frameworks/Python.framework/Versions/3.12/lib/python3.12/tkinter/__init__.py", line 862 in callit
+  File "/opt/homebrew/Cellar/python@3.12/3.12.13_2/Frameworks/Python.framework/Versions/3.12/lib/python3.12/tkinter/__init__.py", line 1968 in __call__
+  File "/opt/homebrew/Cellar/python@3.12/3.12.13_2/Frameworks/Python.framework/Versions/3.12/lib/python3.12/tkinter/__init__.py", line 1505 in mainloop
+  File "<HOME>/Documents/GitHub/cbvms3.0/.venv/lib/python3.12/site-packages/customtkinter/windows/ctk_tk.py", line 165 in mainloop
+  File "<HOME>/Documents/GitHub/cbvms3.0/scripts/verify_monitor_popup.py", line 181 in run
+  File "<HOME>/Documents/GitHub/cbvms3.0/scripts/verify_monitor_popup.py", line 204 in main
+  File "<HOME>/Documents/GitHub/cbvms3.0/scripts/verify_monitor_popup.py", line 230 in <module>

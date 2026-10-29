@@ -1,0 +1,29 @@
+{
+  "executable": "<HOME>/Documents/GitHub/cbvms3.0/.venv/bin/python",
+  "prefix": "<HOME>/Documents/GitHub/cbvms3.0/.venv",
+  "modules": {
+    "core.camera": {
+      "path": "<HOME>/Documents/GitHub/cbvms3.0/core/camera.py",
+      "sha256": "c04baec8892ffcc83fff5b4422eb829ee2183c16afb84baa3db0c5ad1745327d"
+    },
+    "core.preview_session": {
+      "path": "<HOME>/Documents/GitHub/cbvms3.0/core/preview_session.py",
+      "sha256": "e0b2b6a2b30d15bf9f36dcfe9227d23fb6e3206e248aa1803f1ed6c16b0221c0"
+    },
+    "ui.dashboard": {
+      "path": "<HOME>/Documents/GitHub/cbvms3.0/ui/dashboard.py",
+      "sha256": "57fa6567cdd83d08c5799de12bb57903f353141b5d9cdfd63c673ff9cc780bb9"
+    },
+    "ui.monitor_workspace": {
+      "path": "<HOME>/Documents/GitHub/cbvms3.0/ui/monitor_workspace.py",
+      "sha256": "1fb43e3965ca52f92194fa32503e2db89c12d838d2261b95bb2cb6d16fcd9ff5"
+    },
+    "ui.camera_feed": {
+      "path": "<HOME>/Documents/GitHub/cbvms3.0/ui/camera_feed.py",
+      "sha256": "0ba6f02cdff4a7d6e6a60b6d3bc6a40852610d03767bd788d5962c65ae963dc7"
+    }
+  },
+  "revision": "66b43974c0908eb9062b9e886c0249bb5cb8696a\n",
+  "branch": "integration/monitor-workspace-20261029\n",
+  "status": " M tests/test_monitor_workspace.py\n M tests/test_monitor_workspace_native_ui.py\n M ui/monitor_workspace.py\n?? docs/MONITOR_POPUP_FREEZE_CHECKPOINT_2026-10-29.md\n?? output/monitor_workspace/\n?? scripts/monitor_handoff_diagnostics.py\n?? scripts/verify_monitor_popup.py\n"
+}

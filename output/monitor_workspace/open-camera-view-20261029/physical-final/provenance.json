@@ -1,0 +1,33 @@
+{
+  "executable": "/Users/jopethones/Documents/GitHub/cbvms3.0/.venv/bin/python",
+  "prefix": "/Users/jopethones/Documents/GitHub/cbvms3.0/.venv",
+  "modules": {
+    "core.camera": {
+      "path": "/Users/jopethones/Documents/GitHub/cbvms3.0/core/camera.py",
+      "sha256": "c04baec8892ffcc83fff5b4422eb829ee2183c16afb84baa3db0c5ad1745327d"
+    },
+    "core.preview_session": {
+      "path": "/Users/jopethones/Documents/GitHub/cbvms3.0/core/preview_session.py",
+      "sha256": "e0b2b6a2b30d15bf9f36dcfe9227d23fb6e3206e248aa1803f1ed6c16b0221c0"
+    },
+    "ui.dashboard": {
+      "path": "/Users/jopethones/Documents/GitHub/cbvms3.0/ui/dashboard.py",
+      "sha256": "2ceed58c1d045b6de5be38da463dc0bfb3eaee061d180082377a7406a66ccd44"
+    },
+    "ui.monitor_workspace": {
+      "path": "/Users/jopethones/Documents/GitHub/cbvms3.0/ui/monitor_workspace.py",
+      "sha256": "46f7c009ae8c6248afa70f221ce70b83f0f1f5b10343857791d85c29e9c737c7"
+    },
+    "ui.camera_feed": {
+      "path": "/Users/jopethones/Documents/GitHub/cbvms3.0/ui/camera_feed.py",
+      "sha256": "0ba6f02cdff4a7d6e6a60b6d3bc6a40852610d03767bd788d5962c65ae963dc7"
+    },
+    "ui.camera_source_selector": {
+      "path": "/Users/jopethones/Documents/GitHub/cbvms3.0/ui/camera_source_selector.py",
+      "sha256": "dae58282247998b872a90c9c4e533d27e67900c1017454bd95f0b21214ecf3a7"
+    }
+  },
+  "revision": "66b43974c0908eb9062b9e886c0249bb5cb8696a\n",
+  "branch": "integration/monitor-workspace-20261029\n",
+  "status": " M api/camera_store.py\n M tests/test_camera_switching.py\n M tests/test_live_dashboard.py\n M tests/test_monitor_workspace.py\n M tests/test_monitor_workspace_native_ui.py\n M ui/dashboard.py\n M ui/monitor_workspace.py\n?? docs/MONITOR_POPUP_FREEZE_CHECKPOINT_2026-10-29.md\n?? docs/OPEN_CAMERA_VIEW_CHECKPOINT.md\n?? output/monitor_workspace/\n?? scripts/monitor_handoff_diagnostics.py\n?? scripts/monitor_normal_diagnostics.py\n?? scripts/monitor_view_diagnostics.py\n?? scripts/verify_monitor_popup.py\n?? tests/test_camera_view.py\n?? tests/test_camera_view_native_ui.py\n?? ui/camera_view_dialog.py\n"
+}

@@ -98,3 +98,18 @@ def resolve_camera_source(preference: dict[str, Any], *, cancel_event=None) -> d
     if not source.get('url'):
         raise ValueError('Saved camera unavailable. Open Camera Settings.')
     return source
+
+
+_VIEW_PREFERENCE_PATH = _DATA_DIR / 'camera_view_preference.json'
+
+
+def get_camera_view_preference():
+    return _read_json(_VIEW_PREFERENCE_PATH, {})
+
+
+def save_camera_view_preference(keys, destination):
+    # Presentation has a separate preference: never alter the analysis source.
+    safe = [[kind, value] for kind, value in keys
+            if (kind == 'usb' and isinstance(value, int)) or
+               (kind == 'ip' and isinstance(value, str) and '://' not in value)]
+    _write_json(_VIEW_PREFERENCE_PATH, {'sources': safe, 'destination': destination})

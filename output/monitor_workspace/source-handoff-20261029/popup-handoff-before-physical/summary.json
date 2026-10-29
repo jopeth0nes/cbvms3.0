@@ -1,0 +1,23 @@
+{
+  "cycles_completed": 0,
+  "renders": 6387,
+  "render_ms": 11126.023139921017,
+  "max_render_ms": 26.15979197435081,
+  "errors": [],
+  "phases": {
+    "startup": {
+      "renders": 6387,
+      "render_ms": 11126.023139921017,
+      "configure_events": 165
+    }
+  },
+  "handoffs_completed": 20,
+  "primary_stopped": true,
+  "analysis_stopped": true,
+  "tracking_stopped": true,
+  "max_gap_ms": 404.5456669991836,
+  "p95_gap_ms": 88.23925000615418,
+  "heartbeats": 4828,
+  "sessions": 160,
+  "clean_stop": true
+}

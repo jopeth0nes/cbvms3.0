@@ -1,0 +1,478 @@
+{"event": "lifecycle", "at": 546894.794965333, "stage": "before_open", "cycle": 0, "windows": 0, "timers": 4, "images": 15, "sessions": 0, "active_sessions": 0, "workers": 0, "rss_mb": 217.2, "camera_state": "STREAMING"}
+{"event": "open_begin", "at": 546894.795145875, "cycle": 0}
+{"event": "open_end", "at": 546894.798342666, "cycle": 0}
+{"event": "render_begin", "at": 546894.887041125, "phase": "cycle-0", "widget": ".!monitorworkspace.!ctktoplevel.!camerafeed"}
+{"event": "render_end", "at": 546894.893864166, "phase": "cycle-0", "widget": ".!monitorworkspace.!ctktoplevel.!camerafeed", "ok": true}
+{"event": "render_begin", "at": 546894.945163041, "phase": "cycle-0", "widget": ".!monitorworkspace.!ctktoplevel.!camerafeed"}
+{"event": "render_end", "at": 546894.947494791, "phase": "cycle-0", "widget": ".!monitorworkspace.!ctktoplevel.!camerafeed", "ok": true}
+{"event": "lifecycle", "at": 546894.99542675, "stage": "rendered", "cycle": 0, "windows": 1, "timers": 4, "images": 16, "sessions": 1, "active_sessions": 1, "workers": 1, "rss_mb": 268.37, "camera_state": "STREAMING"}
+{"event": "close_begin", "at": 546894.995455958, "cycle": 0}
+{"event": "close_end", "at": 546894.99827975, "cycle": 0}
+{"event": "lifecycle", "at": 546895.000380375, "stage": "immediate_reopen", "cycle": 0, "windows": 1, "timers": 4, "images": 15, "sessions": 1, "active_sessions": 1, "workers": 1, "rss_mb": 257.92, "camera_state": "STREAMING"}
+{"event": "render_begin", "at": 546895.103786583, "phase": "cycle-0", "widget": ".!monitorworkspace.!ctktoplevel3.!camerafeed"}
+{"event": "render_end", "at": 546895.106701625, "phase": "cycle-0", "widget": ".!monitorworkspace.!ctktoplevel3.!camerafeed", "ok": true}
+{"event": "lifecycle", "at": 546895.107120541, "stage": "reopened_rendered", "cycle": 0, "windows": 1, "timers": 4, "images": 16, "sessions": 1, "active_sessions": 1, "workers": 1, "rss_mb": 289.08, "camera_state": "STREAMING"}
+{"event": "lifecycle", "at": 546895.173924583, "stage": "before_open", "cycle": 1, "windows": 0, "timers": 4, "images": 15, "sessions": 1, "active_sessions": 0, "workers": 0, "rss_mb": 278.81, "camera_state": "STREAMING"}
+{"event": "open_begin", "at": 546895.173949291, "cycle": 1}
+{"event": "open_end", "at": 546895.174625583, "cycle": 1}
+{"event": "render_begin", "at": 546895.264877375, "phase": "cycle-1", "widget": ".!monitorworkspace.!ctktoplevel4.!camerafeed"}
+{"event": "render_end", "at": 546895.267579791, "phase": "cycle-1", "widget": ".!monitorworkspace.!ctktoplevel4.!camerafeed", "ok": true}
+{"event": "render_begin", "at": 546895.31797975, "phase": "cycle-1", "widget": ".!monitorworkspace.!ctktoplevel4.!camerafeed"}
+{"event": "render_end", "at": 546895.320150375, "phase": "cycle-1", "widget": ".!monitorworkspace.!ctktoplevel4.!camerafeed", "ok": true}
+{"event": "render_begin", "at": 546895.37105475, "phase": "cycle-1", "widget": ".!monitorworkspace.!ctktoplevel4.!camerafeed"}
+{"event": "render_end", "at": 546895.373360708, "phase": "cycle-1", "widget": ".!monitorworkspace.!ctktoplevel4.!camerafeed", "ok": true}
+{"event": "lifecycle", "at": 546895.390178916, "stage": "rendered", "cycle": 1, "windows": 1, "timers": 4, "images": 16, "sessions": 2, "active_sessions": 1, "workers": 1, "rss_mb": 280.44, "camera_state": "STREAMING"}
+{"event": "close_begin", "at": 546895.390207125, "cycle": 1}
+{"event": "close_end", "at": 546895.397709791, "cycle": 1}
+{"event": "lifecycle", "at": 546895.399414166, "stage": "immediate_reopen", "cycle": 1, "windows": 1, "timers": 4, "images": 15, "sessions": 2, "active_sessions": 1, "workers": 1, "rss_mb": 269.98, "camera_state": "STREAMING"}
+{"event": "render_begin", "at": 546895.503844041, "phase": "cycle-1", "widget": ".!monitorworkspace.!ctktoplevel6.!camerafeed"}
+{"event": "render_end", "at": 546895.506602875, "phase": "cycle-1", "widget": ".!monitorworkspace.!ctktoplevel6.!camerafeed", "ok": true}
+{"event": "lifecycle", "at": 546895.506929041, "stage": "reopened_rendered", "cycle": 1, "windows": 1, "timers": 4, "images": 16, "sessions": 2, "active_sessions": 1, "workers": 1, "rss_mb": 296.6, "camera_state": "STREAMING"}
+{"event": "lifecycle", "at": 546895.570283958, "stage": "before_open", "cycle": 2, "windows": 0, "timers": 4, "images": 15, "sessions": 2, "active_sessions": 0, "workers": 0, "rss_mb": 286.16, "camera_state": "STREAMING"}
+{"event": "open_begin", "at": 546895.57031025, "cycle": 2}
+{"event": "open_end", "at": 546895.571015166, "cycle": 2}
+{"event": "render_begin", "at": 546895.65847725, "phase": "cycle-2", "widget": ".!monitorworkspace.!ctktoplevel7.!camerafeed"}
+{"event": "render_end", "at": 546895.661373708, "phase": "cycle-2", "widget": ".!monitorworkspace.!ctktoplevel7.!camerafeed", "ok": true}
+{"event": "render_begin", "at": 546895.711905541, "phase": "cycle-2", "widget": ".!monitorworkspace.!ctktoplevel7.!camerafeed"}
+{"event": "render_end", "at": 546895.71403225, "phase": "cycle-2", "widget": ".!monitorworkspace.!ctktoplevel7.!camerafeed", "ok": true}
+{"event": "render_begin", "at": 546895.765265125, "phase": "cycle-2", "widget": ".!monitorworkspace.!ctktoplevel7.!camerafeed"}
+{"event": "render_end", "at": 546895.76755475, "phase": "cycle-2", "widget": ".!monitorworkspace.!ctktoplevel7.!camerafeed", "ok": true}
+{"event": "lifecycle", "at": 546895.784553583, "stage": "rendered", "cycle": 2, "windows": 1, "timers": 4, "images": 16, "sessions": 3, "active_sessions": 1, "workers": 1, "rss_mb": 282.46, "camera_state": "STREAMING"}
+{"event": "close_begin", "at": 546895.784580458, "cycle": 2}
+{"event": "close_end", "at": 546895.787710833, "cycle": 2}
+{"event": "lifecycle", "at": 546895.78940675, "stage": "immediate_reopen", "cycle": 2, "windows": 1, "timers": 4, "images": 15, "sessions": 3, "active_sessions": 1, "workers": 1, "rss_mb": 271.99, "camera_state": "STREAMING"}
+{"event": "render_begin", "at": 546895.874745083, "phase": "cycle-2", "widget": ".!monitorworkspace.!ctktoplevel9.!camerafeed"}
+{"event": "render_end", "at": 546895.877469375, "phase": "cycle-2", "widget": ".!monitorworkspace.!ctktoplevel9.!camerafeed", "ok": true}
+{"event": "lifecycle", "at": 546895.877865375, "stage": "reopened_rendered", "cycle": 2, "windows": 1, "timers": 4, "images": 16, "sessions": 3, "active_sessions": 1, "workers": 1, "rss_mb": 298.22, "camera_state": "STREAMING"}
+{"event": "lifecycle", "at": 546895.940915875, "stage": "before_open", "cycle": 3, "windows": 0, "timers": 4, "images": 15, "sessions": 3, "active_sessions": 0, "workers": 0, "rss_mb": 287.72, "camera_state": "STREAMING"}
+{"event": "open_begin", "at": 546895.940940958, "cycle": 3}
+{"event": "open_end", "at": 546895.941587208, "cycle": 3}
+{"event": "render_begin", "at": 546896.029507875, "phase": "cycle-3", "widget": ".!monitorworkspace.!ctktoplevel10.!camerafeed"}
+{"event": "render_end", "at": 546896.032340125, "phase": "cycle-3", "widget": ".!monitorworkspace.!ctktoplevel10.!camerafeed", "ok": true}
+{"event": "render_begin", "at": 546896.082873666, "phase": "cycle-3", "widget": ".!monitorworkspace.!ctktoplevel10.!camerafeed"}
+{"event": "render_end", "at": 546896.08520825, "phase": "cycle-3", "widget": ".!monitorworkspace.!ctktoplevel10.!camerafeed", "ok": true}
+{"event": "render_begin", "at": 546896.136432708, "phase": "cycle-3", "widget": ".!monitorworkspace.!ctktoplevel10.!camerafeed"}
+{"event": "render_end", "at": 546896.138821166, "phase": "cycle-3", "widget": ".!monitorworkspace.!ctktoplevel10.!camerafeed", "ok": true}
+{"event": "lifecycle", "at": 546896.156572208, "stage": "rendered", "cycle": 3, "windows": 1, "timers": 4, "images": 16, "sessions": 4, "active_sessions": 1, "workers": 1, "rss_mb": 282.51, "camera_state": "STREAMING"}
+{"event": "close_begin", "at": 546896.156593, "cycle": 3}
+{"event": "close_end", "at": 546896.163682666, "cycle": 3}
+{"event": "lifecycle", "at": 546896.165387041, "stage": "immediate_reopen", "cycle": 3, "windows": 1, "timers": 4, "images": 15, "sessions": 4, "active_sessions": 1, "workers": 1, "rss_mb": 272.02, "camera_state": "STREAMING"}
+{"event": "render_begin", "at": 546896.25836425, "phase": "cycle-3", "widget": ".!monitorworkspace.!ctktoplevel12.!camerafeed"}
+{"event": "render_end", "at": 546896.261011791, "phase": "cycle-3", "widget": ".!monitorworkspace.!ctktoplevel12.!camerafeed", "ok": true}
+{"event": "lifecycle", "at": 546896.261401708, "stage": "reopened_rendered", "cycle": 3, "windows": 1, "timers": 4, "images": 16, "sessions": 4, "active_sessions": 1, "workers": 1, "rss_mb": 298.71, "camera_state": "STREAMING"}
+{"event": "lifecycle", "at": 546896.324813416, "stage": "before_open", "cycle": 4, "windows": 0, "timers": 4, "images": 15, "sessions": 4, "active_sessions": 0, "workers": 0, "rss_mb": 288.19, "camera_state": "STREAMING"}
+{"event": "open_begin", "at": 546896.324842458, "cycle": 4}
+{"event": "open_end", "at": 546896.32554475, "cycle": 4}
+{"event": "render_begin", "at": 546896.416039541, "phase": "cycle-4", "widget": ".!monitorworkspace.!ctktoplevel13.!camerafeed"}
+{"event": "render_end", "at": 546896.419065708, "phase": "cycle-4", "widget": ".!monitorworkspace.!ctktoplevel13.!camerafeed", "ok": true}
+{"event": "render_begin", "at": 546896.469536916, "phase": "cycle-4", "widget": ".!monitorworkspace.!ctktoplevel13.!camerafeed"}
+{"event": "render_end", "at": 546896.471728125, "phase": "cycle-4", "widget": ".!monitorworkspace.!ctktoplevel13.!camerafeed", "ok": true}
+{"event": "render_begin", "at": 546896.522948958, "phase": "cycle-4", "widget": ".!monitorworkspace.!ctktoplevel13.!camerafeed"}
+{"event": "render_end", "at": 546896.525212541, "phase": "cycle-4", "widget": ".!monitorworkspace.!ctktoplevel13.!camerafeed", "ok": true}
+{"event": "lifecycle", "at": 546896.541495458, "stage": "rendered", "cycle": 4, "windows": 1, "timers": 4, "images": 16, "sessions": 5, "active_sessions": 1, "workers": 1, "rss_mb": 282.51, "camera_state": "STREAMING"}
+{"event": "close_begin", "at": 546896.541528708, "cycle": 4}
+{"event": "close_end", "at": 546896.548069875, "cycle": 4}
+{"event": "lifecycle", "at": 546896.549685458, "stage": "immediate_reopen", "cycle": 4, "windows": 1, "timers": 4, "images": 15, "sessions": 5, "active_sessions": 1, "workers": 1, "rss_mb": 272.02, "camera_state": "STREAMING"}
+{"event": "render_begin", "at": 546896.640687791, "phase": "cycle-4", "widget": ".!monitorworkspace.!ctktoplevel15.!camerafeed"}
+{"event": "render_end", "at": 546896.643310458, "phase": "cycle-4", "widget": ".!monitorworkspace.!ctktoplevel15.!camerafeed", "ok": true}
+{"event": "lifecycle", "at": 546896.643676333, "stage": "reopened_rendered", "cycle": 4, "windows": 1, "timers": 4, "images": 16, "sessions": 5, "active_sessions": 1, "workers": 1, "rss_mb": 298.35, "camera_state": "STREAMING"}
+{"event": "lifecycle", "at": 546896.708536333, "stage": "before_open", "cycle": 5, "windows": 0, "timers": 4, "images": 15, "sessions": 5, "active_sessions": 0, "workers": 0, "rss_mb": 287.83, "camera_state": "STREAMING"}
+{"event": "open_begin", "at": 546896.708560541, "cycle": 5}
+{"event": "open_end", "at": 546896.709267, "cycle": 5}
+{"event": "render_begin", "at": 546896.798049958, "phase": "cycle-5", "widget": ".!monitorworkspace.!ctktoplevel16.!camerafeed"}
+{"event": "render_end", "at": 546896.8009245, "phase": "cycle-5", "widget": ".!monitorworkspace.!ctktoplevel16.!camerafeed", "ok": true}
+{"event": "render_begin", "at": 546896.851300041, "phase": "cycle-5", "widget": ".!monitorworkspace.!ctktoplevel16.!camerafeed"}
+{"event": "render_end", "at": 546896.853449583, "phase": "cycle-5", "widget": ".!monitorworkspace.!ctktoplevel16.!camerafeed", "ok": true}
+{"event": "render_begin", "at": 546896.904305833, "phase": "cycle-5", "widget": ".!monitorworkspace.!ctktoplevel16.!camerafeed"}
+{"event": "render_end", "at": 546896.906701166, "phase": "cycle-5", "widget": ".!monitorworkspace.!ctktoplevel16.!camerafeed", "ok": true}
+{"event": "lifecycle", "at": 546896.924151666, "stage": "rendered", "cycle": 5, "windows": 1, "timers": 4, "images": 16, "sessions": 6, "active_sessions": 1, "workers": 1, "rss_mb": 283.02, "camera_state": "STREAMING"}
+{"event": "close_begin", "at": 546896.924176708, "cycle": 5}
+{"event": "close_end", "at": 546896.931678083, "cycle": 5}
+{"event": "lifecycle", "at": 546896.93336375, "stage": "immediate_reopen", "cycle": 5, "windows": 1, "timers": 4, "images": 15, "sessions": 6, "active_sessions": 1, "workers": 1, "rss_mb": 272.56, "camera_state": "STREAMING"}
+{"event": "render_begin", "at": 546897.021486291, "phase": "cycle-5", "widget": ".!monitorworkspace.!ctktoplevel18.!camerafeed"}
+{"event": "render_end", "at": 546897.024103375, "phase": "cycle-5", "widget": ".!monitorworkspace.!ctktoplevel18.!camerafeed", "ok": true}
+{"event": "lifecycle", "at": 546897.024424, "stage": "reopened_rendered", "cycle": 5, "windows": 1, "timers": 4, "images": 16, "sessions": 6, "active_sessions": 1, "workers": 1, "rss_mb": 298.66, "camera_state": "STREAMING"}
+{"event": "lifecycle", "at": 546897.0914255, "stage": "before_open", "cycle": 6, "windows": 0, "timers": 4, "images": 15, "sessions": 6, "active_sessions": 0, "workers": 0, "rss_mb": 288.15, "camera_state": "STREAMING"}
+{"event": "open_begin", "at": 546897.0914585, "cycle": 6}
+{"event": "open_end", "at": 546897.092208291, "cycle": 6}
+{"event": "render_begin", "at": 546897.177861541, "phase": "cycle-6", "widget": ".!monitorworkspace.!ctktoplevel19.!camerafeed"}
+{"event": "render_end", "at": 546897.180847958, "phase": "cycle-6", "widget": ".!monitorworkspace.!ctktoplevel19.!camerafeed", "ok": true}
+{"event": "render_begin", "at": 546897.232092041, "phase": "cycle-6", "widget": ".!monitorworkspace.!ctktoplevel19.!camerafeed"}
+{"event": "render_end", "at": 546897.234410833, "phase": "cycle-6", "widget": ".!monitorworkspace.!ctktoplevel19.!camerafeed", "ok": true}
+{"event": "render_begin", "at": 546897.285625583, "phase": "cycle-6", "widget": ".!monitorworkspace.!ctktoplevel19.!camerafeed"}
+{"event": "render_end", "at": 546897.287889416, "phase": "cycle-6", "widget": ".!monitorworkspace.!ctktoplevel19.!camerafeed", "ok": true}
+{"event": "lifecycle", "at": 546897.304612041, "stage": "rendered", "cycle": 6, "windows": 1, "timers": 4, "images": 16, "sessions": 7, "active_sessions": 1, "workers": 1, "rss_mb": 281.36, "camera_state": "STREAMING"}
+{"event": "close_begin", "at": 546897.304637291, "cycle": 6}
+{"event": "close_end", "at": 546897.307827708, "cycle": 6}
+{"event": "lifecycle", "at": 546897.313656041, "stage": "immediate_reopen", "cycle": 6, "windows": 1, "timers": 4, "images": 15, "sessions": 7, "active_sessions": 1, "workers": 1, "rss_mb": 270.88, "camera_state": "STREAMING"}
+{"event": "render_begin", "at": 546897.397008416, "phase": "cycle-6", "widget": ".!monitorworkspace.!ctktoplevel21.!camerafeed"}
+{"event": "render_end", "at": 546897.399574958, "phase": "cycle-6", "widget": ".!monitorworkspace.!ctktoplevel21.!camerafeed", "ok": true}
+{"event": "lifecycle", "at": 546897.399930458, "stage": "reopened_rendered", "cycle": 6, "windows": 1, "timers": 4, "images": 16, "sessions": 7, "active_sessions": 1, "workers": 1, "rss_mb": 299.07, "camera_state": "STREAMING"}
+{"event": "lifecycle", "at": 546897.462073625, "stage": "before_open", "cycle": 7, "windows": 0, "timers": 4, "images": 15, "sessions": 7, "active_sessions": 0, "workers": 0, "rss_mb": 288.56, "camera_state": "STREAMING"}
+{"event": "open_begin", "at": 546897.462109333, "cycle": 7}
+{"event": "open_end", "at": 546897.462925541, "cycle": 7}
+{"event": "render_begin", "at": 546897.554745416, "phase": "cycle-7", "widget": ".!monitorworkspace.!ctktoplevel22.!camerafeed"}
+{"event": "render_end", "at": 546897.558123791, "phase": "cycle-7", "widget": ".!monitorworkspace.!ctktoplevel22.!camerafeed", "ok": true}
+{"event": "render_begin", "at": 546897.608456958, "phase": "cycle-7", "widget": ".!monitorworkspace.!ctktoplevel22.!camerafeed"}
+{"event": "render_end", "at": 546897.610827958, "phase": "cycle-7", "widget": ".!monitorworkspace.!ctktoplevel22.!camerafeed", "ok": true}
+{"event": "render_begin", "at": 546897.665420291, "phase": "cycle-7", "widget": ".!monitorworkspace.!ctktoplevel22.!camerafeed"}
+{"event": "render_end", "at": 546897.667762208, "phase": "cycle-7", "widget": ".!monitorworkspace.!ctktoplevel22.!camerafeed", "ok": true}
+{"event": "lifecycle", "at": 546897.678754833, "stage": "rendered", "cycle": 7, "windows": 1, "timers": 4, "images": 16, "sessions": 8, "active_sessions": 1, "workers": 1, "rss_mb": 283.25, "camera_state": "STREAMING"}
+{"event": "close_begin", "at": 546897.678777291, "cycle": 7}
+{"event": "close_end", "at": 546897.681127, "cycle": 7}
+{"event": "lifecycle", "at": 546897.682895833, "stage": "immediate_reopen", "cycle": 7, "windows": 1, "timers": 4, "images": 15, "sessions": 8, "active_sessions": 1, "workers": 1, "rss_mb": 272.76, "camera_state": "STREAMING"}
+{"event": "render_begin", "at": 546897.723890041, "phase": "cycle-7", "widget": ".!monitorworkspace.!ctktoplevel24.!camerafeed"}
+{"event": "render_end", "at": 546897.726421583, "phase": "cycle-7", "widget": ".!monitorworkspace.!ctktoplevel24.!camerafeed", "ok": true}
+{"event": "lifecycle", "at": 546897.749820166, "stage": "reopened_rendered", "cycle": 7, "windows": 1, "timers": 4, "images": 16, "sessions": 8, "active_sessions": 1, "workers": 1, "rss_mb": 300.68, "camera_state": "STREAMING"}
+{"event": "lifecycle", "at": 546897.812044375, "stage": "before_open", "cycle": 8, "windows": 0, "timers": 4, "images": 15, "sessions": 8, "active_sessions": 0, "workers": 0, "rss_mb": 290.18, "camera_state": "STREAMING"}
+{"event": "open_begin", "at": 546897.812083875, "cycle": 8}
+{"event": "open_end", "at": 546897.812762708, "cycle": 8}
+{"event": "render_begin", "at": 546897.880054, "phase": "cycle-8", "widget": ".!monitorworkspace.!ctktoplevel25.!camerafeed"}
+{"event": "render_end", "at": 546897.882817708, "phase": "cycle-8", "widget": ".!monitorworkspace.!ctktoplevel25.!camerafeed", "ok": true}
+{"event": "render_begin", "at": 546897.933277125, "phase": "cycle-8", "widget": ".!monitorworkspace.!ctktoplevel25.!camerafeed"}
+{"event": "render_end", "at": 546897.935455291, "phase": "cycle-8", "widget": ".!monitorworkspace.!ctktoplevel25.!camerafeed", "ok": true}
+{"event": "render_begin", "at": 546897.985940291, "phase": "cycle-8", "widget": ".!monitorworkspace.!ctktoplevel25.!camerafeed"}
+{"event": "render_end", "at": 546897.988001958, "phase": "cycle-8", "widget": ".!monitorworkspace.!ctktoplevel25.!camerafeed", "ok": true}
+{"event": "lifecycle", "at": 546897.998406666, "stage": "rendered", "cycle": 8, "windows": 1, "timers": 4, "images": 16, "sessions": 9, "active_sessions": 1, "workers": 1, "rss_mb": 300.48, "camera_state": "STREAMING"}
+{"event": "close_begin", "at": 546897.998427333, "cycle": 8}
+{"event": "close_end", "at": 546898.000712541, "cycle": 8}
+{"event": "lifecycle", "at": 546898.002634083, "stage": "immediate_reopen", "cycle": 8, "windows": 1, "timers": 4, "images": 15, "sessions": 9, "active_sessions": 1, "workers": 1, "rss_mb": 290.0, "camera_state": "STREAMING"}
+{"event": "render_begin", "at": 546898.124023416, "phase": "cycle-8", "widget": ".!monitorworkspace.!ctktoplevel27.!camerafeed"}
+{"event": "render_end", "at": 546898.126685875, "phase": "cycle-8", "widget": ".!monitorworkspace.!ctktoplevel27.!camerafeed", "ok": true}
+{"event": "lifecycle", "at": 546898.12706275, "stage": "reopened_rendered", "cycle": 8, "windows": 1, "timers": 4, "images": 16, "sessions": 9, "active_sessions": 1, "workers": 1, "rss_mb": 300.07, "camera_state": "STREAMING"}
+{"event": "lifecycle", "at": 546898.191196833, "stage": "before_open", "cycle": 9, "windows": 0, "timers": 4, "images": 15, "sessions": 9, "active_sessions": 0, "workers": 0, "rss_mb": 289.55, "camera_state": "STREAMING"}
+{"event": "open_begin", "at": 546898.191225666, "cycle": 9}
+{"event": "open_end", "at": 546898.191959, "cycle": 9}
+{"event": "render_begin", "at": 546898.281720625, "phase": "cycle-9", "widget": ".!monitorworkspace.!ctktoplevel28.!camerafeed"}
+{"event": "render_end", "at": 546898.284537083, "phase": "cycle-9", "widget": ".!monitorworkspace.!ctktoplevel28.!camerafeed", "ok": true}
+{"event": "render_begin", "at": 546898.334965208, "phase": "cycle-9", "widget": ".!monitorworkspace.!ctktoplevel28.!camerafeed"}
+{"event": "render_end", "at": 546898.337297666, "phase": "cycle-9", "widget": ".!monitorworkspace.!ctktoplevel28.!camerafeed", "ok": true}
+{"event": "render_begin", "at": 546898.388521791, "phase": "cycle-9", "widget": ".!monitorworkspace.!ctktoplevel28.!camerafeed"}
+{"event": "render_end", "at": 546898.390917083, "phase": "cycle-9", "widget": ".!monitorworkspace.!ctktoplevel28.!camerafeed", "ok": true}
+{"event": "lifecycle", "at": 546898.408913625, "stage": "rendered", "cycle": 9, "windows": 1, "timers": 4, "images": 16, "sessions": 10, "active_sessions": 1, "workers": 1, "rss_mb": 283.93, "camera_state": "STREAMING"}
+{"event": "close_begin", "at": 546898.408936875, "cycle": 9}
+{"event": "close_end", "at": 546898.416995833, "cycle": 9}
+{"event": "lifecycle", "at": 546898.418641125, "stage": "immediate_reopen", "cycle": 9, "windows": 1, "timers": 4, "images": 15, "sessions": 10, "active_sessions": 1, "workers": 1, "rss_mb": 273.51, "camera_state": "STREAMING"}
+{"event": "render_begin", "at": 546898.505688125, "phase": "cycle-9", "widget": ".!monitorworkspace.!ctktoplevel30.!camerafeed"}
+{"event": "render_end", "at": 546898.508524291, "phase": "cycle-9", "widget": ".!monitorworkspace.!ctktoplevel30.!camerafeed", "ok": true}
+{"event": "lifecycle", "at": 546898.508888916, "stage": "reopened_rendered", "cycle": 9, "windows": 1, "timers": 4, "images": 16, "sessions": 10, "active_sessions": 1, "workers": 1, "rss_mb": 299.57, "camera_state": "STREAMING"}
+{"event": "lifecycle", "at": 546898.574576125, "stage": "before_open", "cycle": 10, "windows": 0, "timers": 4, "images": 15, "sessions": 10, "active_sessions": 0, "workers": 0, "rss_mb": 289.06, "camera_state": "STREAMING"}
+{"event": "open_begin", "at": 546898.574609416, "cycle": 10}
+{"event": "open_end", "at": 546898.57533425, "cycle": 10}
+{"event": "render_begin", "at": 546898.663629, "phase": "cycle-10", "widget": ".!monitorworkspace.!ctktoplevel31.!camerafeed"}
+{"event": "render_end", "at": 546898.666681041, "phase": "cycle-10", "widget": ".!monitorworkspace.!ctktoplevel31.!camerafeed", "ok": true}
+{"event": "render_begin", "at": 546898.716947375, "phase": "cycle-10", "widget": ".!monitorworkspace.!ctktoplevel31.!camerafeed"}
+{"event": "render_end", "at": 546898.719055833, "phase": "cycle-10", "widget": ".!monitorworkspace.!ctktoplevel31.!camerafeed", "ok": true}
+{"event": "render_begin", "at": 546898.770285166, "phase": "cycle-10", "widget": ".!monitorworkspace.!ctktoplevel31.!camerafeed"}
+{"event": "render_end", "at": 546898.772506666, "phase": "cycle-10", "widget": ".!monitorworkspace.!ctktoplevel31.!camerafeed", "ok": true}
+{"event": "lifecycle", "at": 546898.789062416, "stage": "rendered", "cycle": 10, "windows": 1, "timers": 4, "images": 16, "sessions": 11, "active_sessions": 1, "workers": 1, "rss_mb": 281.64, "camera_state": "STREAMING"}
+{"event": "close_begin", "at": 546898.789086583, "cycle": 10}
+{"event": "close_end", "at": 546898.792220125, "cycle": 10}
+{"event": "lifecycle", "at": 546898.797436416, "stage": "immediate_reopen", "cycle": 10, "windows": 1, "timers": 4, "images": 15, "sessions": 11, "active_sessions": 1, "workers": 1, "rss_mb": 271.16, "camera_state": "STREAMING"}
+{"event": "render_begin", "at": 546898.89083575, "phase": "cycle-10", "widget": ".!monitorworkspace.!ctktoplevel33.!camerafeed"}
+{"event": "render_end", "at": 546898.893452333, "phase": "cycle-10", "widget": ".!monitorworkspace.!ctktoplevel33.!camerafeed", "ok": true}
+{"event": "lifecycle", "at": 546898.893788916, "stage": "reopened_rendered", "cycle": 10, "windows": 1, "timers": 4, "images": 16, "sessions": 11, "active_sessions": 1, "workers": 1, "rss_mb": 299.6, "camera_state": "STREAMING"}
+{"event": "lifecycle", "at": 546898.958442833, "stage": "before_open", "cycle": 11, "windows": 0, "timers": 4, "images": 15, "sessions": 11, "active_sessions": 0, "workers": 0, "rss_mb": 289.08, "camera_state": "STREAMING"}
+{"event": "open_begin", "at": 546898.958466083, "cycle": 11}
+{"event": "open_end", "at": 546898.959186125, "cycle": 11}
+{"event": "render_begin", "at": 546899.048134166, "phase": "cycle-11", "widget": ".!monitorworkspace.!ctktoplevel34.!camerafeed"}
+{"event": "render_end", "at": 546899.050689458, "phase": "cycle-11", "widget": ".!monitorworkspace.!ctktoplevel34.!camerafeed", "ok": true}
+{"event": "render_begin", "at": 546899.101036166, "phase": "cycle-11", "widget": ".!monitorworkspace.!ctktoplevel34.!camerafeed"}
+{"event": "render_end", "at": 546899.103057541, "phase": "cycle-11", "widget": ".!monitorworkspace.!ctktoplevel34.!camerafeed", "ok": true}
+{"event": "render_begin", "at": 546899.154244625, "phase": "cycle-11", "widget": ".!monitorworkspace.!ctktoplevel34.!camerafeed"}
+{"event": "render_end", "at": 546899.156187625, "phase": "cycle-11", "widget": ".!monitorworkspace.!ctktoplevel34.!camerafeed", "ok": true}
+{"event": "lifecycle", "at": 546899.171995208, "stage": "rendered", "cycle": 11, "windows": 1, "timers": 4, "images": 16, "sessions": 12, "active_sessions": 1, "workers": 1, "rss_mb": 282.76, "camera_state": "STREAMING"}
+{"event": "close_begin", "at": 546899.172025416, "cycle": 11}
+{"event": "close_end", "at": 546899.174835458, "cycle": 11}
+{"event": "lifecycle", "at": 546899.180255958, "stage": "immediate_reopen", "cycle": 11, "windows": 1, "timers": 4, "images": 15, "sessions": 12, "active_sessions": 1, "workers": 1, "rss_mb": 272.27, "camera_state": "STREAMING"}
+{"event": "render_begin", "at": 546899.2730945, "phase": "cycle-11", "widget": ".!monitorworkspace.!ctktoplevel36.!camerafeed"}
+{"event": "render_end", "at": 546899.27612125, "phase": "cycle-11", "widget": ".!monitorworkspace.!ctktoplevel36.!camerafeed", "ok": true}
+{"event": "lifecycle", "at": 546899.276616833, "stage": "reopened_rendered", "cycle": 11, "windows": 1, "timers": 4, "images": 16, "sessions": 12, "active_sessions": 1, "workers": 1, "rss_mb": 298.61, "camera_state": "STREAMING"}
+{"event": "lifecycle", "at": 546899.342939083, "stage": "before_open", "cycle": 12, "windows": 0, "timers": 4, "images": 15, "sessions": 12, "active_sessions": 0, "workers": 0, "rss_mb": 288.1, "camera_state": "STREAMING"}
+{"event": "open_begin", "at": 546899.342978541, "cycle": 12}
+{"event": "open_end", "at": 546899.343636958, "cycle": 12}
+{"event": "render_begin", "at": 546899.434262666, "phase": "cycle-12", "widget": ".!monitorworkspace.!ctktoplevel37.!camerafeed"}
+{"event": "render_end", "at": 546899.437070333, "phase": "cycle-12", "widget": ".!monitorworkspace.!ctktoplevel37.!camerafeed", "ok": true}
+{"event": "render_begin", "at": 546899.487405375, "phase": "cycle-12", "widget": ".!monitorworkspace.!ctktoplevel37.!camerafeed"}
+{"event": "render_end", "at": 546899.489503666, "phase": "cycle-12", "widget": ".!monitorworkspace.!ctktoplevel37.!camerafeed", "ok": true}
+{"event": "render_begin", "at": 546899.5408145, "phase": "cycle-12", "widget": ".!monitorworkspace.!ctktoplevel37.!camerafeed"}
+{"event": "render_end", "at": 546899.542681041, "phase": "cycle-12", "widget": ".!monitorworkspace.!ctktoplevel37.!camerafeed", "ok": true}
+{"event": "lifecycle", "at": 546899.559164333, "stage": "rendered", "cycle": 12, "windows": 1, "timers": 4, "images": 16, "sessions": 13, "active_sessions": 1, "workers": 1, "rss_mb": 281.99, "camera_state": "STREAMING"}
+{"event": "close_begin", "at": 546899.559190208, "cycle": 12}
+{"event": "close_end", "at": 546899.564721541, "cycle": 12}
+{"event": "lifecycle", "at": 546899.566220916, "stage": "immediate_reopen", "cycle": 12, "windows": 1, "timers": 4, "images": 15, "sessions": 13, "active_sessions": 1, "workers": 1, "rss_mb": 271.5, "camera_state": "STREAMING"}
+{"event": "render_begin", "at": 546899.65677725, "phase": "cycle-12", "widget": ".!monitorworkspace.!ctktoplevel39.!camerafeed"}
+{"event": "render_end", "at": 546899.659398375, "phase": "cycle-12", "widget": ".!monitorworkspace.!ctktoplevel39.!camerafeed", "ok": true}
+{"event": "lifecycle", "at": 546899.659792083, "stage": "reopened_rendered", "cycle": 12, "windows": 1, "timers": 4, "images": 16, "sessions": 13, "active_sessions": 1, "workers": 1, "rss_mb": 299.68, "camera_state": "STREAMING"}
+{"event": "lifecycle", "at": 546899.725599208, "stage": "before_open", "cycle": 13, "windows": 0, "timers": 4, "images": 15, "sessions": 13, "active_sessions": 0, "workers": 0, "rss_mb": 289.16, "camera_state": "STREAMING"}
+{"event": "open_begin", "at": 546899.7256275, "cycle": 13}
+{"event": "open_end", "at": 546899.726345, "cycle": 13}
+{"event": "render_begin", "at": 546899.815697, "phase": "cycle-13", "widget": ".!monitorworkspace.!ctktoplevel40.!camerafeed"}
+{"event": "render_end", "at": 546899.818713291, "phase": "cycle-13", "widget": ".!monitorworkspace.!ctktoplevel40.!camerafeed", "ok": true}
+{"event": "render_begin", "at": 546899.869239833, "phase": "cycle-13", "widget": ".!monitorworkspace.!ctktoplevel40.!camerafeed"}
+{"event": "render_end", "at": 546899.87146725, "phase": "cycle-13", "widget": ".!monitorworkspace.!ctktoplevel40.!camerafeed", "ok": true}
+{"event": "render_begin", "at": 546899.92271275, "phase": "cycle-13", "widget": ".!monitorworkspace.!ctktoplevel40.!camerafeed"}
+{"event": "render_end", "at": 546899.925022625, "phase": "cycle-13", "widget": ".!monitorworkspace.!ctktoplevel40.!camerafeed", "ok": true}
+{"event": "lifecycle", "at": 546899.942431458, "stage": "rendered", "cycle": 13, "windows": 1, "timers": 4, "images": 16, "sessions": 14, "active_sessions": 1, "workers": 1, "rss_mb": 283.46, "camera_state": "STREAMING"}
+{"event": "close_begin", "at": 546899.942456166, "cycle": 13}
+{"event": "close_end", "at": 546899.948624625, "cycle": 13}
+{"event": "lifecycle", "at": 546899.950277416, "stage": "immediate_reopen", "cycle": 13, "windows": 1, "timers": 4, "images": 15, "sessions": 14, "active_sessions": 1, "workers": 1, "rss_mb": 272.97, "camera_state": "STREAMING"}
+{"event": "render_begin", "at": 546900.032142458, "phase": "cycle-13", "widget": ".!monitorworkspace.!ctktoplevel42.!camerafeed"}
+{"event": "render_end", "at": 546900.03484575, "phase": "cycle-13", "widget": ".!monitorworkspace.!ctktoplevel42.!camerafeed", "ok": true}
+{"event": "lifecycle", "at": 546900.035207708, "stage": "reopened_rendered", "cycle": 13, "windows": 1, "timers": 4, "images": 16, "sessions": 14, "active_sessions": 1, "workers": 1, "rss_mb": 299.3, "camera_state": "STREAMING"}
+{"event": "lifecycle", "at": 546900.098344666, "stage": "before_open", "cycle": 14, "windows": 0, "timers": 4, "images": 15, "sessions": 14, "active_sessions": 0, "workers": 0, "rss_mb": 288.8, "camera_state": "STREAMING"}
+{"event": "open_begin", "at": 546900.098381375, "cycle": 14}
+{"event": "open_end", "at": 546900.099129333, "cycle": 14}
+{"event": "render_begin", "at": 546900.190856833, "phase": "cycle-14", "widget": ".!monitorworkspace.!ctktoplevel43.!camerafeed"}
+{"event": "render_end", "at": 546900.19380175, "phase": "cycle-14", "widget": ".!monitorworkspace.!ctktoplevel43.!camerafeed", "ok": true}
+{"event": "render_begin", "at": 546900.244248208, "phase": "cycle-14", "widget": ".!monitorworkspace.!ctktoplevel43.!camerafeed"}
+{"event": "render_end", "at": 546900.246594541, "phase": "cycle-14", "widget": ".!monitorworkspace.!ctktoplevel43.!camerafeed", "ok": true}
+{"event": "render_begin", "at": 546900.298519916, "phase": "cycle-14", "widget": ".!monitorworkspace.!ctktoplevel43.!camerafeed"}
+{"event": "render_end", "at": 546900.300769375, "phase": "cycle-14", "widget": ".!monitorworkspace.!ctktoplevel43.!camerafeed", "ok": true}
+{"event": "lifecycle", "at": 546900.311634125, "stage": "rendered", "cycle": 14, "windows": 1, "timers": 4, "images": 16, "sessions": 15, "active_sessions": 1, "workers": 1, "rss_mb": 282.15, "camera_state": "STREAMING"}
+{"event": "close_begin", "at": 546900.311653791, "cycle": 14}
+{"event": "close_end", "at": 546900.3139255, "cycle": 14}
+{"event": "lifecycle", "at": 546900.315695125, "stage": "immediate_reopen", "cycle": 14, "windows": 1, "timers": 4, "images": 15, "sessions": 15, "active_sessions": 1, "workers": 1, "rss_mb": 271.66, "camera_state": "STREAMING"}
+{"event": "render_begin", "at": 546900.35572375, "phase": "cycle-14", "widget": ".!monitorworkspace.!ctktoplevel45.!camerafeed"}
+{"event": "render_end", "at": 546900.358153166, "phase": "cycle-14", "widget": ".!monitorworkspace.!ctktoplevel45.!camerafeed", "ok": true}
+{"event": "lifecycle", "at": 546900.381619958, "stage": "reopened_rendered", "cycle": 14, "windows": 1, "timers": 4, "images": 16, "sessions": 15, "active_sessions": 1, "workers": 1, "rss_mb": 301.56, "camera_state": "STREAMING"}
+{"event": "lifecycle", "at": 546900.444779375, "stage": "before_open", "cycle": 15, "windows": 0, "timers": 4, "images": 15, "sessions": 15, "active_sessions": 0, "workers": 0, "rss_mb": 291.06, "camera_state": "STREAMING"}
+{"event": "open_begin", "at": 546900.444821291, "cycle": 15}
+{"event": "open_end", "at": 546900.445536625, "cycle": 15}
+{"event": "render_begin", "at": 546900.513986208, "phase": "cycle-15", "widget": ".!monitorworkspace.!ctktoplevel46.!camerafeed"}
+{"event": "render_end", "at": 546900.516919375, "phase": "cycle-15", "widget": ".!monitorworkspace.!ctktoplevel46.!camerafeed", "ok": true}
+{"event": "render_begin", "at": 546900.568157916, "phase": "cycle-15", "widget": ".!monitorworkspace.!ctktoplevel46.!camerafeed"}
+{"event": "render_end", "at": 546900.570446791, "phase": "cycle-15", "widget": ".!monitorworkspace.!ctktoplevel46.!camerafeed", "ok": true}
+{"event": "render_begin", "at": 546900.620861875, "phase": "cycle-15", "widget": ".!monitorworkspace.!ctktoplevel46.!camerafeed"}
+{"event": "render_end", "at": 546900.623084083, "phase": "cycle-15", "widget": ".!monitorworkspace.!ctktoplevel46.!camerafeed", "ok": true}
+{"event": "lifecycle", "at": 546900.633455875, "stage": "rendered", "cycle": 15, "windows": 1, "timers": 4, "images": 16, "sessions": 16, "active_sessions": 1, "workers": 1, "rss_mb": 301.33, "camera_state": "STREAMING"}
+{"event": "close_begin", "at": 546900.63347475, "cycle": 15}
+{"event": "close_end", "at": 546900.635830166, "cycle": 15}
+{"event": "lifecycle", "at": 546900.63744025, "stage": "immediate_reopen", "cycle": 15, "windows": 1, "timers": 4, "images": 15, "sessions": 16, "active_sessions": 1, "workers": 1, "rss_mb": 290.85, "camera_state": "STREAMING"}
+{"event": "render_begin", "at": 546900.738758416, "phase": "cycle-15", "widget": ".!monitorworkspace.!ctktoplevel48.!camerafeed"}
+{"event": "render_end", "at": 546900.741435541, "phase": "cycle-15", "widget": ".!monitorworkspace.!ctktoplevel48.!camerafeed", "ok": true}
+{"event": "lifecycle", "at": 546900.741764625, "stage": "reopened_rendered", "cycle": 15, "windows": 1, "timers": 4, "images": 16, "sessions": 16, "active_sessions": 1, "workers": 1, "rss_mb": 300.94, "camera_state": "STREAMING"}
+{"event": "lifecycle", "at": 546900.80493675, "stage": "before_open", "cycle": 16, "windows": 0, "timers": 4, "images": 15, "sessions": 16, "active_sessions": 0, "workers": 0, "rss_mb": 290.42, "camera_state": "STREAMING"}
+{"event": "open_begin", "at": 546900.804961625, "cycle": 16}
+{"event": "open_end", "at": 546900.805649416, "cycle": 16}
+{"event": "render_begin", "at": 546900.897945791, "phase": "cycle-16", "widget": ".!monitorworkspace.!ctktoplevel49.!camerafeed"}
+{"event": "render_end", "at": 546900.900752625, "phase": "cycle-16", "widget": ".!monitorworkspace.!ctktoplevel49.!camerafeed", "ok": true}
+{"event": "render_begin", "at": 546900.951532916, "phase": "cycle-16", "widget": ".!monitorworkspace.!ctktoplevel49.!camerafeed"}
+{"event": "render_end", "at": 546900.953745416, "phase": "cycle-16", "widget": ".!monitorworkspace.!ctktoplevel49.!camerafeed", "ok": true}
+{"event": "render_begin", "at": 546901.004034458, "phase": "cycle-16", "widget": ".!monitorworkspace.!ctktoplevel49.!camerafeed"}
+{"event": "render_end", "at": 546901.006277958, "phase": "cycle-16", "widget": ".!monitorworkspace.!ctktoplevel49.!camerafeed", "ok": true}
+{"event": "lifecycle", "at": 546901.02305925, "stage": "rendered", "cycle": 16, "windows": 1, "timers": 4, "images": 16, "sessions": 17, "active_sessions": 1, "workers": 1, "rss_mb": 282.69, "camera_state": "STREAMING"}
+{"event": "close_begin", "at": 546901.023094291, "cycle": 16}
+{"event": "close_end", "at": 546901.03011325, "cycle": 16}
+{"event": "lifecycle", "at": 546901.031733708, "stage": "immediate_reopen", "cycle": 16, "windows": 1, "timers": 4, "images": 15, "sessions": 17, "active_sessions": 1, "workers": 1, "rss_mb": 272.2, "camera_state": "STREAMING"}
+{"event": "render_begin", "at": 546901.122686791, "phase": "cycle-16", "widget": ".!monitorworkspace.!ctktoplevel51.!camerafeed"}
+{"event": "render_end", "at": 546901.125422583, "phase": "cycle-16", "widget": ".!monitorworkspace.!ctktoplevel51.!camerafeed", "ok": true}
+{"event": "lifecycle", "at": 546901.125761833, "stage": "reopened_rendered", "cycle": 16, "windows": 1, "timers": 4, "images": 16, "sessions": 17, "active_sessions": 1, "workers": 1, "rss_mb": 299.83, "camera_state": "STREAMING"}
+{"event": "lifecycle", "at": 546901.191574666, "stage": "before_open", "cycle": 17, "windows": 0, "timers": 4, "images": 15, "sessions": 17, "active_sessions": 0, "workers": 0, "rss_mb": 289.33, "camera_state": "STREAMING"}
+{"event": "open_begin", "at": 546901.191604208, "cycle": 17}
+{"event": "open_end", "at": 546901.192327708, "cycle": 17}
+{"event": "render_begin", "at": 546901.283304166, "phase": "cycle-17", "widget": ".!monitorworkspace.!ctktoplevel52.!camerafeed"}
+{"event": "render_end", "at": 546901.286081791, "phase": "cycle-17", "widget": ".!monitorworkspace.!ctktoplevel52.!camerafeed", "ok": true}
+{"event": "render_begin", "at": 546901.336713166, "phase": "cycle-17", "widget": ".!monitorworkspace.!ctktoplevel52.!camerafeed"}
+{"event": "render_end", "at": 546901.338772, "phase": "cycle-17", "widget": ".!monitorworkspace.!ctktoplevel52.!camerafeed", "ok": true}
+{"event": "render_begin", "at": 546901.39005975, "phase": "cycle-17", "widget": ".!monitorworkspace.!ctktoplevel52.!camerafeed"}
+{"event": "render_end", "at": 546901.392200291, "phase": "cycle-17", "widget": ".!monitorworkspace.!ctktoplevel52.!camerafeed", "ok": true}
+{"event": "lifecycle", "at": 546901.408372625, "stage": "rendered", "cycle": 17, "windows": 1, "timers": 4, "images": 16, "sessions": 18, "active_sessions": 1, "workers": 1, "rss_mb": 282.21, "camera_state": "STREAMING"}
+{"event": "close_begin", "at": 546901.408397875, "cycle": 17}
+{"event": "close_end", "at": 546901.415302375, "cycle": 17}
+{"event": "lifecycle", "at": 546901.416991833, "stage": "immediate_reopen", "cycle": 17, "windows": 1, "timers": 4, "images": 15, "sessions": 18, "active_sessions": 1, "workers": 1, "rss_mb": 271.73, "camera_state": "STREAMING"}
+{"event": "render_begin", "at": 546901.51922875, "phase": "cycle-17", "widget": ".!monitorworkspace.!ctktoplevel54.!camerafeed"}
+{"event": "render_end", "at": 546901.521998708, "phase": "cycle-17", "widget": ".!monitorworkspace.!ctktoplevel54.!camerafeed", "ok": true}
+{"event": "lifecycle", "at": 546901.522210541, "stage": "reopened_rendered", "cycle": 17, "windows": 1, "timers": 4, "images": 16, "sessions": 18, "active_sessions": 1, "workers": 1, "rss_mb": 299.89, "camera_state": "STREAMING"}
+{"event": "lifecycle", "at": 546901.584897541, "stage": "before_open", "cycle": 18, "windows": 0, "timers": 4, "images": 15, "sessions": 18, "active_sessions": 0, "workers": 0, "rss_mb": 289.37, "camera_state": "STREAMING"}
+{"event": "open_begin", "at": 546901.584924333, "cycle": 18}
+{"event": "open_end", "at": 546901.585694, "cycle": 18}
+{"event": "render_begin", "at": 546901.681799375, "phase": "cycle-18", "widget": ".!monitorworkspace.!ctktoplevel55.!camerafeed"}
+{"event": "render_end", "at": 546901.684641375, "phase": "cycle-18", "widget": ".!monitorworkspace.!ctktoplevel55.!camerafeed", "ok": true}
+{"event": "render_begin", "at": 546901.7351, "phase": "cycle-18", "widget": ".!monitorworkspace.!ctktoplevel55.!camerafeed"}
+{"event": "render_end", "at": 546901.737366583, "phase": "cycle-18", "widget": ".!monitorworkspace.!ctktoplevel55.!camerafeed", "ok": true}
+{"event": "render_begin", "at": 546901.788592083, "phase": "cycle-18", "widget": ".!monitorworkspace.!ctktoplevel55.!camerafeed"}
+{"event": "render_end", "at": 546901.790953958, "phase": "cycle-18", "widget": ".!monitorworkspace.!ctktoplevel55.!camerafeed", "ok": true}
+{"event": "lifecycle", "at": 546901.807603625, "stage": "rendered", "cycle": 18, "windows": 1, "timers": 4, "images": 16, "sessions": 19, "active_sessions": 1, "workers": 1, "rss_mb": 284.07, "camera_state": "STREAMING"}
+{"event": "close_begin", "at": 546901.807635083, "cycle": 18}
+{"event": "close_end", "at": 546901.814649458, "cycle": 18}
+{"event": "lifecycle", "at": 546901.816286916, "stage": "immediate_reopen", "cycle": 18, "windows": 1, "timers": 4, "images": 15, "sessions": 19, "active_sessions": 1, "workers": 1, "rss_mb": 273.58, "camera_state": "STREAMING"}
+{"event": "render_begin", "at": 546901.893303, "phase": "cycle-18", "widget": ".!monitorworkspace.!ctktoplevel57.!camerafeed"}
+{"event": "render_end", "at": 546901.896118625, "phase": "cycle-18", "widget": ".!monitorworkspace.!ctktoplevel57.!camerafeed", "ok": true}
+{"event": "lifecycle", "at": 546901.896532791, "stage": "reopened_rendered", "cycle": 18, "windows": 1, "timers": 4, "images": 16, "sessions": 19, "active_sessions": 1, "workers": 1, "rss_mb": 300.48, "camera_state": "STREAMING"}
+{"event": "lifecycle", "at": 546901.958953416, "stage": "before_open", "cycle": 19, "windows": 0, "timers": 4, "images": 15, "sessions": 19, "active_sessions": 0, "workers": 0, "rss_mb": 289.96, "camera_state": "STREAMING"}
+{"event": "open_begin", "at": 546901.958984, "cycle": 19}
+{"event": "open_end", "at": 546901.95970275, "cycle": 19}
+{"event": "render_begin", "at": 546902.0500325, "phase": "cycle-19", "widget": ".!monitorworkspace.!ctktoplevel58.!camerafeed"}
+{"event": "render_end", "at": 546902.052939291, "phase": "cycle-19", "widget": ".!monitorworkspace.!ctktoplevel58.!camerafeed", "ok": true}
+{"event": "render_begin", "at": 546902.103627333, "phase": "cycle-19", "widget": ".!monitorworkspace.!ctktoplevel58.!camerafeed"}
+{"event": "render_end", "at": 546902.105887666, "phase": "cycle-19", "widget": ".!monitorworkspace.!ctktoplevel58.!camerafeed", "ok": true}
+{"event": "render_begin", "at": 546902.157012458, "phase": "cycle-19", "widget": ".!monitorworkspace.!ctktoplevel58.!camerafeed"}
+{"event": "render_end", "at": 546902.159500125, "phase": "cycle-19", "widget": ".!monitorworkspace.!ctktoplevel58.!camerafeed", "ok": true}
+{"event": "lifecycle", "at": 546902.166294833, "stage": "rendered", "cycle": 19, "windows": 1, "timers": 4, "images": 16, "sessions": 20, "active_sessions": 1, "workers": 1, "rss_mb": 282.51, "camera_state": "STREAMING"}
+{"event": "close_begin", "at": 546902.166314541, "cycle": 19}
+{"event": "close_end", "at": 546902.169539666, "cycle": 19}
+{"event": "lifecycle", "at": 546902.171345458, "stage": "immediate_reopen", "cycle": 19, "windows": 1, "timers": 4, "images": 15, "sessions": 20, "active_sessions": 1, "workers": 1, "rss_mb": 272.02, "camera_state": "STREAMING"}
+{"event": "render_begin", "at": 546902.213608875, "phase": "cycle-19", "widget": ".!monitorworkspace.!ctktoplevel60.!camerafeed"}
+{"event": "render_end", "at": 546902.2161495, "phase": "cycle-19", "widget": ".!monitorworkspace.!ctktoplevel60.!camerafeed", "ok": true}
+{"event": "lifecycle", "at": 546902.231120291, "stage": "reopened_rendered", "cycle": 19, "windows": 1, "timers": 4, "images": 16, "sessions": 20, "active_sessions": 1, "workers": 1, "rss_mb": 301.42, "camera_state": "STREAMING"}
+{"event": "lifecycle", "at": 546902.294243958, "stage": "before_open", "cycle": 20, "windows": 0, "timers": 4, "images": 15, "sessions": 20, "active_sessions": 0, "workers": 0, "rss_mb": 290.9, "camera_state": "STREAMING"}
+{"event": "open_begin", "at": 546902.294265208, "cycle": 20}
+{"event": "open_end", "at": 546902.294901083, "cycle": 20}
+{"event": "render_begin", "at": 546902.369882791, "phase": "cycle-20", "widget": ".!monitorworkspace.!ctktoplevel61.!camerafeed"}
+{"event": "render_end", "at": 546902.372789666, "phase": "cycle-20", "widget": ".!monitorworkspace.!ctktoplevel61.!camerafeed", "ok": true}
+{"event": "render_begin", "at": 546902.423541041, "phase": "cycle-20", "widget": ".!monitorworkspace.!ctktoplevel61.!camerafeed"}
+{"event": "render_end", "at": 546902.425844208, "phase": "cycle-20", "widget": ".!monitorworkspace.!ctktoplevel61.!camerafeed", "ok": true}
+{"event": "lifecycle", "at": 546902.474362416, "stage": "rendered", "cycle": 20, "windows": 1, "timers": 4, "images": 16, "sessions": 21, "active_sessions": 1, "workers": 1, "rss_mb": 302.04, "camera_state": "STREAMING"}
+{"event": "close_begin", "at": 546902.474387791, "cycle": 20}
+{"event": "close_end", "at": 546902.476948041, "cycle": 20}
+{"event": "lifecycle", "at": 546902.478745833, "stage": "immediate_reopen", "cycle": 20, "windows": 1, "timers": 4, "images": 15, "sessions": 21, "active_sessions": 1, "workers": 1, "rss_mb": 291.55, "camera_state": "STREAMING"}
+{"event": "render_begin", "at": 546902.588257083, "phase": "cycle-20", "widget": ".!monitorworkspace.!ctktoplevel63.!camerafeed"}
+{"event": "render_end", "at": 546902.590670458, "phase": "cycle-20", "widget": ".!monitorworkspace.!ctktoplevel63.!camerafeed", "ok": true}
+{"event": "lifecycle", "at": 546902.591021375, "stage": "reopened_rendered", "cycle": 20, "windows": 1, "timers": 4, "images": 16, "sessions": 21, "active_sessions": 1, "workers": 1, "rss_mb": 300.14, "camera_state": "STREAMING"}
+{"event": "lifecycle", "at": 546902.656873458, "stage": "before_open", "cycle": 21, "windows": 0, "timers": 4, "images": 15, "sessions": 21, "active_sessions": 0, "workers": 0, "rss_mb": 289.62, "camera_state": "STREAMING"}
+{"event": "open_begin", "at": 546902.656897333, "cycle": 21}
+{"event": "open_end", "at": 546902.657552708, "cycle": 21}
+{"event": "render_begin", "at": 546902.748341458, "phase": "cycle-21", "widget": ".!monitorworkspace.!ctktoplevel64.!camerafeed"}
+{"event": "render_end", "at": 546902.750983833, "phase": "cycle-21", "widget": ".!monitorworkspace.!ctktoplevel64.!camerafeed", "ok": true}
+{"event": "render_begin", "at": 546902.80173025, "phase": "cycle-21", "widget": ".!monitorworkspace.!ctktoplevel64.!camerafeed"}
+{"event": "render_end", "at": 546902.803881666, "phase": "cycle-21", "widget": ".!monitorworkspace.!ctktoplevel64.!camerafeed", "ok": true}
+{"event": "render_begin", "at": 546902.855110541, "phase": "cycle-21", "widget": ".!monitorworkspace.!ctktoplevel64.!camerafeed"}
+{"event": "render_end", "at": 546902.857456666, "phase": "cycle-21", "widget": ".!monitorworkspace.!ctktoplevel64.!camerafeed", "ok": true}
+{"event": "lifecycle", "at": 546902.874525083, "stage": "rendered", "cycle": 21, "windows": 1, "timers": 4, "images": 16, "sessions": 22, "active_sessions": 1, "workers": 1, "rss_mb": 284.23, "camera_state": "STREAMING"}
+{"event": "close_begin", "at": 546902.874548041, "cycle": 21}
+{"event": "close_end", "at": 546902.881788, "cycle": 21}
+{"event": "lifecycle", "at": 546902.883452916, "stage": "immediate_reopen", "cycle": 21, "windows": 1, "timers": 4, "images": 15, "sessions": 22, "active_sessions": 1, "workers": 1, "rss_mb": 273.79, "camera_state": "STREAMING"}
+{"event": "render_begin", "at": 546902.972027416, "phase": "cycle-21", "widget": ".!monitorworkspace.!ctktoplevel66.!camerafeed"}
+{"event": "render_end", "at": 546902.97465975, "phase": "cycle-21", "widget": ".!monitorworkspace.!ctktoplevel66.!camerafeed", "ok": true}
+{"event": "lifecycle", "at": 546902.975240041, "stage": "reopened_rendered", "cycle": 21, "windows": 1, "timers": 4, "images": 16, "sessions": 22, "active_sessions": 1, "workers": 1, "rss_mb": 300.32, "camera_state": "STREAMING"}
+{"event": "lifecycle", "at": 546903.038614791, "stage": "before_open", "cycle": 22, "windows": 0, "timers": 4, "images": 15, "sessions": 22, "active_sessions": 0, "workers": 0, "rss_mb": 289.8, "camera_state": "STREAMING"}
+{"event": "open_begin", "at": 546903.038648041, "cycle": 22}
+{"event": "open_end", "at": 546903.039449041, "cycle": 22}
+{"event": "render_begin", "at": 546903.132275166, "phase": "cycle-22", "widget": ".!monitorworkspace.!ctktoplevel67.!camerafeed"}
+{"event": "render_end", "at": 546903.135210208, "phase": "cycle-22", "widget": ".!monitorworkspace.!ctktoplevel67.!camerafeed", "ok": true}
+{"event": "render_begin", "at": 546903.18584, "phase": "cycle-22", "widget": ".!monitorworkspace.!ctktoplevel67.!camerafeed"}
+{"event": "render_end", "at": 546903.187997083, "phase": "cycle-22", "widget": ".!monitorworkspace.!ctktoplevel67.!camerafeed", "ok": true}
+{"event": "render_begin", "at": 546903.239225, "phase": "cycle-22", "widget": ".!monitorworkspace.!ctktoplevel67.!camerafeed"}
+{"event": "render_end", "at": 546903.241657791, "phase": "cycle-22", "widget": ".!monitorworkspace.!ctktoplevel67.!camerafeed", "ok": true}
+{"event": "lifecycle", "at": 546903.259096666, "stage": "rendered", "cycle": 22, "windows": 1, "timers": 4, "images": 16, "sessions": 23, "active_sessions": 1, "workers": 1, "rss_mb": 282.43, "camera_state": "STREAMING"}
+{"event": "close_begin", "at": 546903.25912375, "cycle": 22}
+{"event": "close_end", "at": 546903.2657225, "cycle": 22}
+{"event": "lifecycle", "at": 546903.267327375, "stage": "immediate_reopen", "cycle": 22, "windows": 1, "timers": 4, "images": 15, "sessions": 23, "active_sessions": 1, "workers": 1, "rss_mb": 271.94, "camera_state": "STREAMING"}
+{"event": "render_begin", "at": 546903.353320666, "phase": "cycle-22", "widget": ".!monitorworkspace.!ctktoplevel69.!camerafeed"}
+{"event": "render_end", "at": 546903.356031916, "phase": "cycle-22", "widget": ".!monitorworkspace.!ctktoplevel69.!camerafeed", "ok": true}
+{"event": "lifecycle", "at": 546903.356390583, "stage": "reopened_rendered", "cycle": 22, "windows": 1, "timers": 4, "images": 16, "sessions": 23, "active_sessions": 1, "workers": 1, "rss_mb": 300.35, "camera_state": "STREAMING"}
+{"event": "lifecycle", "at": 546903.419931291, "stage": "before_open", "cycle": 23, "windows": 0, "timers": 4, "images": 15, "sessions": 23, "active_sessions": 0, "workers": 0, "rss_mb": 289.83, "camera_state": "STREAMING"}
+{"event": "open_begin", "at": 546903.419954791, "cycle": 23}
+{"event": "open_end", "at": 546903.420651208, "cycle": 23}
+{"event": "render_begin", "at": 546903.510510333, "phase": "cycle-23", "widget": ".!monitorworkspace.!ctktoplevel70.!camerafeed"}
+{"event": "render_end", "at": 546903.513381875, "phase": "cycle-23", "widget": ".!monitorworkspace.!ctktoplevel70.!camerafeed", "ok": true}
+{"event": "render_begin", "at": 546903.563790875, "phase": "cycle-23", "widget": ".!monitorworkspace.!ctktoplevel70.!camerafeed"}
+{"event": "render_end", "at": 546903.566062666, "phase": "cycle-23", "widget": ".!monitorworkspace.!ctktoplevel70.!camerafeed", "ok": true}
+{"event": "render_begin", "at": 546903.616653958, "phase": "cycle-23", "widget": ".!monitorworkspace.!ctktoplevel70.!camerafeed"}
+{"event": "render_end", "at": 546903.618966791, "phase": "cycle-23", "widget": ".!monitorworkspace.!ctktoplevel70.!camerafeed", "ok": true}
+{"event": "lifecycle", "at": 546903.635231375, "stage": "rendered", "cycle": 23, "windows": 1, "timers": 4, "images": 16, "sessions": 24, "active_sessions": 1, "workers": 1, "rss_mb": 282.67, "camera_state": "STREAMING"}
+{"event": "close_begin", "at": 546903.635259, "cycle": 23}
+{"event": "close_end", "at": 546903.638360958, "cycle": 23}
+{"event": "lifecycle", "at": 546903.640091833, "stage": "immediate_reopen", "cycle": 23, "windows": 1, "timers": 4, "images": 15, "sessions": 24, "active_sessions": 1, "workers": 1, "rss_mb": 272.19, "camera_state": "STREAMING"}
+{"event": "render_begin", "at": 546903.673398708, "phase": "cycle-23", "widget": ".!monitorworkspace.!ctktoplevel72.!camerafeed"}
+{"event": "render_end", "at": 546903.675804791, "phase": "cycle-23", "widget": ".!monitorworkspace.!ctktoplevel72.!camerafeed", "ok": true}
+{"event": "lifecycle", "at": 546903.698983083, "stage": "reopened_rendered", "cycle": 23, "windows": 1, "timers": 4, "images": 16, "sessions": 24, "active_sessions": 1, "workers": 1, "rss_mb": 301.58, "camera_state": "STREAMING"}
+{"event": "lifecycle", "at": 546903.761318166, "stage": "before_open", "cycle": 24, "windows": 0, "timers": 4, "images": 15, "sessions": 24, "active_sessions": 0, "workers": 0, "rss_mb": 291.06, "camera_state": "STREAMING"}
+{"event": "open_begin", "at": 546903.76135025, "cycle": 24}
+{"event": "open_end", "at": 546903.762023, "cycle": 24}
+{"event": "render_begin", "at": 546903.829477291, "phase": "cycle-24", "widget": ".!monitorworkspace.!ctktoplevel73.!camerafeed"}
+{"event": "render_end", "at": 546903.832215333, "phase": "cycle-24", "widget": ".!monitorworkspace.!ctktoplevel73.!camerafeed", "ok": true}
+{"event": "render_begin", "at": 546903.883357708, "phase": "cycle-24", "widget": ".!monitorworkspace.!ctktoplevel73.!camerafeed"}
+{"event": "render_end", "at": 546903.885435916, "phase": "cycle-24", "widget": ".!monitorworkspace.!ctktoplevel73.!camerafeed", "ok": true}
+{"event": "render_begin", "at": 546903.936661208, "phase": "cycle-24", "widget": ".!monitorworkspace.!ctktoplevel73.!camerafeed"}
+{"event": "render_end", "at": 546903.938809083, "phase": "cycle-24", "widget": ".!monitorworkspace.!ctktoplevel73.!camerafeed", "ok": true}
+{"event": "lifecycle", "at": 546903.949030666, "stage": "rendered", "cycle": 24, "windows": 1, "timers": 4, "images": 16, "sessions": 25, "active_sessions": 1, "workers": 1, "rss_mb": 301.43, "camera_state": "STREAMING"}
+{"event": "close_begin", "at": 546903.949045666, "cycle": 24}
+{"event": "close_end", "at": 546903.951399916, "cycle": 24}
+{"event": "lifecycle", "at": 546903.953111666, "stage": "immediate_reopen", "cycle": 24, "windows": 1, "timers": 4, "images": 15, "sessions": 25, "active_sessions": 1, "workers": 1, "rss_mb": 290.95, "camera_state": "STREAMING"}
+{"event": "render_begin", "at": 546904.054975166, "phase": "cycle-24", "widget": ".!monitorworkspace.!ctktoplevel75.!camerafeed"}
+{"event": "render_end", "at": 546904.057706083, "phase": "cycle-24", "widget": ".!monitorworkspace.!ctktoplevel75.!camerafeed", "ok": true}
+{"event": "lifecycle", "at": 546904.057859041, "stage": "reopened_rendered", "cycle": 24, "windows": 1, "timers": 4, "images": 16, "sessions": 25, "active_sessions": 1, "workers": 1, "rss_mb": 300.71, "camera_state": "STREAMING"}
+{"event": "lifecycle", "at": 546904.120964166, "stage": "before_open", "cycle": 25, "windows": 0, "timers": 4, "images": 15, "sessions": 25, "active_sessions": 0, "workers": 0, "rss_mb": 290.19, "camera_state": "STREAMING"}
+{"event": "open_begin", "at": 546904.120988708, "cycle": 25}
+{"event": "open_end", "at": 546904.121783375, "cycle": 25}
+{"event": "render_begin", "at": 546904.214363, "phase": "cycle-25", "widget": ".!monitorworkspace.!ctktoplevel76.!camerafeed"}
+{"event": "render_end", "at": 546904.217334666, "phase": "cycle-25", "widget": ".!monitorworkspace.!ctktoplevel76.!camerafeed", "ok": true}
+{"event": "render_begin", "at": 546904.267628208, "phase": "cycle-25", "widget": ".!monitorworkspace.!ctktoplevel76.!camerafeed"}
+{"event": "render_end", "at": 546904.269829875, "phase": "cycle-25", "widget": ".!monitorworkspace.!ctktoplevel76.!camerafeed", "ok": true}
+{"event": "render_begin", "at": 546904.320583166, "phase": "cycle-25", "widget": ".!monitorworkspace.!ctktoplevel76.!camerafeed"}
+{"event": "render_end", "at": 546904.323039916, "phase": "cycle-25", "widget": ".!monitorworkspace.!ctktoplevel76.!camerafeed", "ok": true}
+{"event": "lifecycle", "at": 546904.340013125, "stage": "rendered", "cycle": 25, "windows": 1, "timers": 4, "images": 16, "sessions": 26, "active_sessions": 1, "workers": 1, "rss_mb": 282.49, "camera_state": "STREAMING"}
+{"event": "close_begin", "at": 546904.340036375, "cycle": 25}
+{"event": "close_end", "at": 546904.347451916, "cycle": 25}
+{"event": "lifecycle", "at": 546904.3490785, "stage": "immediate_reopen", "cycle": 25, "windows": 1, "timers": 4, "images": 15, "sessions": 26, "active_sessions": 1, "workers": 1, "rss_mb": 272.02, "camera_state": "STREAMING"}
+{"event": "render_begin", "at": 546904.439709583, "phase": "cycle-25", "widget": ".!monitorworkspace.!ctktoplevel78.!camerafeed"}
+{"event": "render_end", "at": 546904.442388291, "phase": "cycle-25", "widget": ".!monitorworkspace.!ctktoplevel78.!camerafeed", "ok": true}
+{"event": "lifecycle", "at": 546904.451714875, "stage": "reopened_rendered", "cycle": 25, "windows": 1, "timers": 4, "images": 16, "sessions": 26, "active_sessions": 1, "workers": 1, "rss_mb": 299.94, "camera_state": "STREAMING"}
+{"event": "lifecycle", "at": 546904.514728875, "stage": "before_open", "cycle": 26, "windows": 0, "timers": 4, "images": 15, "sessions": 26, "active_sessions": 0, "workers": 0, "rss_mb": 289.47, "camera_state": "STREAMING"}
+{"event": "open_begin", "at": 546904.51475475, "cycle": 26}
+{"event": "open_end", "at": 546904.51545175, "cycle": 26}
+{"event": "render_begin", "at": 546904.599581583, "phase": "cycle-26", "widget": ".!monitorworkspace.!ctktoplevel79.!camerafeed"}
+{"event": "render_end", "at": 546904.602337916, "phase": "cycle-26", "widget": ".!monitorworkspace.!ctktoplevel79.!camerafeed", "ok": true}
+{"event": "render_begin", "at": 546904.652938958, "phase": "cycle-26", "widget": ".!monitorworkspace.!ctktoplevel79.!camerafeed"}
+{"event": "render_end", "at": 546904.654899958, "phase": "cycle-26", "widget": ".!monitorworkspace.!ctktoplevel79.!camerafeed", "ok": true}
+{"event": "render_begin", "at": 546904.706151208, "phase": "cycle-26", "widget": ".!monitorworkspace.!ctktoplevel79.!camerafeed"}
+{"event": "render_end", "at": 546904.708499458, "phase": "cycle-26", "widget": ".!monitorworkspace.!ctktoplevel79.!camerafeed", "ok": true}
+{"event": "lifecycle", "at": 546904.725700583, "stage": "rendered", "cycle": 26, "windows": 1, "timers": 4, "images": 16, "sessions": 27, "active_sessions": 1, "workers": 1, "rss_mb": 284.43, "camera_state": "STREAMING"}
+{"event": "close_begin", "at": 546904.725731833, "cycle": 26}
+{"event": "close_end", "at": 546904.731903583, "cycle": 26}
+{"event": "lifecycle", "at": 546904.733525291, "stage": "immediate_reopen", "cycle": 26, "windows": 1, "timers": 4, "images": 15, "sessions": 27, "active_sessions": 1, "workers": 1, "rss_mb": 273.94, "camera_state": "STREAMING"}
+{"event": "render_begin", "at": 546904.822379125, "phase": "cycle-26", "widget": ".!monitorworkspace.!ctktoplevel81.!camerafeed"}
+{"event": "render_end", "at": 546904.824952375, "phase": "cycle-26", "widget": ".!monitorworkspace.!ctktoplevel81.!camerafeed", "ok": true}
+{"event": "lifecycle", "at": 546904.825314666, "stage": "reopened_rendered", "cycle": 26, "windows": 1, "timers": 4, "images": 16, "sessions": 27, "active_sessions": 1, "workers": 1, "rss_mb": 301.88, "camera_state": "STREAMING"}
+{"event": "lifecycle", "at": 546904.891848083, "stage": "before_open", "cycle": 27, "windows": 0, "timers": 4, "images": 15, "sessions": 27, "active_sessions": 0, "workers": 0, "rss_mb": 291.36, "camera_state": "STREAMING"}
+{"event": "open_begin", "at": 546904.891877916, "cycle": 27}
+{"event": "open_end", "at": 546904.892598416, "cycle": 27}
+{"event": "render_begin", "at": 546904.977016958, "phase": "cycle-27", "widget": ".!monitorworkspace.!ctktoplevel82.!camerafeed"}
+{"event": "render_end", "at": 546904.979846041, "phase": "cycle-27", "widget": ".!monitorworkspace.!ctktoplevel82.!camerafeed", "ok": true}
+{"event": "render_begin", "at": 546905.031104208, "phase": "cycle-27", "widget": ".!monitorworkspace.!ctktoplevel82.!camerafeed"}
+{"event": "render_end", "at": 546905.033417791, "phase": "cycle-27", "widget": ".!monitorworkspace.!ctktoplevel82.!camerafeed", "ok": true}
+{"event": "render_begin", "at": 546905.084616083, "phase": "cycle-27", "widget": ".!monitorworkspace.!ctktoplevel82.!camerafeed"}
+{"event": "render_end", "at": 546905.086910458, "phase": "cycle-27", "widget": ".!monitorworkspace.!ctktoplevel82.!camerafeed", "ok": true}
+{"event": "lifecycle", "at": 546905.103673666, "stage": "rendered", "cycle": 27, "windows": 1, "timers": 4, "images": 16, "sessions": 28, "active_sessions": 1, "workers": 1, "rss_mb": 284.15, "camera_state": "STREAMING"}
+{"event": "close_begin", "at": 546905.10369425, "cycle": 27}
+{"event": "close_end", "at": 546905.106959583, "cycle": 27}
+{"event": "lifecycle", "at": 546905.108596166, "stage": "immediate_reopen", "cycle": 27, "windows": 1, "timers": 4, "images": 15, "sessions": 28, "active_sessions": 1, "workers": 1, "rss_mb": 273.68, "camera_state": "STREAMING"}
+{"event": "render_begin", "at": 546905.189959458, "phase": "cycle-27", "widget": ".!monitorworkspace.!ctktoplevel84.!camerafeed"}
+{"event": "render_end", "at": 546905.192547458, "phase": "cycle-27", "widget": ".!monitorworkspace.!ctktoplevel84.!camerafeed", "ok": true}
+{"event": "lifecycle", "at": 546905.192914041, "stage": "reopened_rendered", "cycle": 27, "windows": 1, "timers": 4, "images": 16, "sessions": 28, "active_sessions": 1, "workers": 1, "rss_mb": 300.07, "camera_state": "STREAMING"}
+{"event": "lifecycle", "at": 546905.255728708, "stage": "before_open", "cycle": 28, "windows": 0, "timers": 4, "images": 15, "sessions": 28, "active_sessions": 0, "workers": 0, "rss_mb": 289.57, "camera_state": "STREAMING"}
+{"event": "open_begin", "at": 546905.255755375, "cycle": 28}
+{"event": "open_end", "at": 546905.256399625, "cycle": 28}
+{"event": "render_begin", "at": 546905.348749833, "phase": "cycle-28", "widget": ".!monitorworkspace.!ctktoplevel85.!camerafeed"}
+{"event": "render_end", "at": 546905.351741541, "phase": "cycle-28", "widget": ".!monitorworkspace.!ctktoplevel85.!camerafeed", "ok": true}
+{"event": "render_begin", "at": 546905.402218916, "phase": "cycle-28", "widget": ".!monitorworkspace.!ctktoplevel85.!camerafeed"}
+{"event": "render_end", "at": 546905.404235416, "phase": "cycle-28", "widget": ".!monitorworkspace.!ctktoplevel85.!camerafeed", "ok": true}
+{"event": "render_begin", "at": 546905.455454375, "phase": "cycle-28", "widget": ".!monitorworkspace.!ctktoplevel85.!camerafeed"}
+{"event": "render_end", "at": 546905.457759125, "phase": "cycle-28", "widget": ".!monitorworkspace.!ctktoplevel85.!camerafeed", "ok": true}
+{"event": "lifecycle", "at": 546905.474446458, "stage": "rendered", "cycle": 28, "windows": 1, "timers": 4, "images": 16, "sessions": 29, "active_sessions": 1, "workers": 1, "rss_mb": 284.25, "camera_state": "STREAMING"}
+{"event": "close_begin", "at": 546905.474468458, "cycle": 28}
+{"event": "close_end", "at": 546905.480833333, "cycle": 28}
+{"event": "lifecycle", "at": 546905.482428, "stage": "immediate_reopen", "cycle": 28, "windows": 1, "timers": 4, "images": 15, "sessions": 29, "active_sessions": 1, "workers": 1, "rss_mb": 273.76, "camera_state": "STREAMING"}
+{"event": "render_begin", "at": 546905.573635333, "phase": "cycle-28", "widget": ".!monitorworkspace.!ctktoplevel87.!camerafeed"}
+{"event": "render_end", "at": 546905.576242166, "phase": "cycle-28", "widget": ".!monitorworkspace.!ctktoplevel87.!camerafeed", "ok": true}
+{"event": "lifecycle", "at": 546905.576597333, "stage": "reopened_rendered", "cycle": 28, "windows": 1, "timers": 4, "images": 16, "sessions": 29, "active_sessions": 1, "workers": 1, "rss_mb": 300.35, "camera_state": "STREAMING"}
+{"event": "lifecycle", "at": 546905.642238, "stage": "before_open", "cycle": 29, "windows": 0, "timers": 4, "images": 15, "sessions": 29, "active_sessions": 0, "workers": 0, "rss_mb": 289.85, "camera_state": "STREAMING"}
+{"event": "open_begin", "at": 546905.642263375, "cycle": 29}
+{"event": "open_end", "at": 546905.642995291, "cycle": 29}
+{"event": "render_begin", "at": 546905.728353583, "phase": "cycle-29", "widget": ".!monitorworkspace.!ctktoplevel88.!camerafeed"}
+{"event": "render_end", "at": 546905.731396958, "phase": "cycle-29", "widget": ".!monitorworkspace.!ctktoplevel88.!camerafeed", "ok": true}
+{"event": "render_begin", "at": 546905.781729541, "phase": "cycle-29", "widget": ".!monitorworkspace.!ctktoplevel88.!camerafeed"}
+{"event": "render_end", "at": 546905.783912875, "phase": "cycle-29", "widget": ".!monitorworkspace.!ctktoplevel88.!camerafeed", "ok": true}
+{"event": "render_begin", "at": 546905.835135958, "phase": "cycle-29", "widget": ".!monitorworkspace.!ctktoplevel88.!camerafeed"}
+{"event": "render_end", "at": 546905.837368958, "phase": "cycle-29", "widget": ".!monitorworkspace.!ctktoplevel88.!camerafeed", "ok": true}
+{"event": "lifecycle", "at": 546905.853929541, "stage": "rendered", "cycle": 29, "windows": 1, "timers": 4, "images": 16, "sessions": 30, "active_sessions": 1, "workers": 1, "rss_mb": 284.28, "camera_state": "STREAMING"}
+{"event": "close_begin", "at": 546905.853948833, "cycle": 29}
+{"event": "close_end", "at": 546905.857032, "cycle": 29}
+{"event": "lifecycle", "at": 546905.858756833, "stage": "immediate_reopen", "cycle": 29, "windows": 1, "timers": 4, "images": 15, "sessions": 30, "active_sessions": 1, "workers": 1, "rss_mb": 273.81, "camera_state": "STREAMING"}
+{"event": "render_begin", "at": 546905.944819583, "phase": "cycle-29", "widget": ".!monitorworkspace.!ctktoplevel90.!camerafeed"}
+{"event": "render_end", "at": 546905.947472583, "phase": "cycle-29", "widget": ".!monitorworkspace.!ctktoplevel90.!camerafeed", "ok": true}
+{"event": "lifecycle", "at": 546905.971026708, "stage": "reopened_rendered", "cycle": 29, "windows": 1, "timers": 4, "images": 16, "sessions": 30, "active_sessions": 1, "workers": 1, "rss_mb": 301.91, "camera_state": "STREAMING"}
+{"event": "lifecycle", "at": 546906.034517, "stage": "completed", "cycle": 30, "windows": 0, "timers": 4, "images": 15, "sessions": 30, "active_sessions": 0, "workers": 0, "rss_mb": 291.39, "camera_state": "STREAMING"}
+{"event": "finishing", "at": 546906.034557833}

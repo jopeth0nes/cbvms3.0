@@ -1,0 +1,234 @@
+{
+  "popup-cycles-synthetic-focus": {
+    "outcome": "persistent stall on zero-based cycle 18; stopped after 8-second heartbeat loss and native/Python stack capture",
+    "rendered_counts": {
+      "windows": [
+        1,
+        1
+      ],
+      "timers": [
+        4,
+        4
+      ],
+      "images": [
+        16,
+        16
+      ],
+      "active_sessions": [
+        1,
+        1
+      ],
+      "workers": [
+        1,
+        1
+      ],
+      "rss_mb": [
+        251.46,
+        281.61
+      ]
+    }
+  },
+  "popup-cycles-fixed-synthetic-focus": {
+    "cycles_completed": 30,
+    "renders": 118,
+    "render_ms": 303.1449186382815,
+    "max_render_ms": 6.856541964225471,
+    "errors": [],
+    "max_gap_ms": 88.86545803397894,
+    "p95_gap_ms": 65.17433398403227,
+    "heartbeats": 225,
+    "sessions": 30,
+    "clean_stop": true,
+    "rendered_counts": {
+      "windows": [
+        1,
+        1
+      ],
+      "timers": [
+        4,
+        4
+      ],
+      "images": [
+        16,
+        16
+      ],
+      "active_sessions": [
+        1,
+        1
+      ],
+      "workers": [
+        1,
+        1
+      ],
+      "rss_mb": [
+        268.37,
+        302.04
+      ]
+    }
+  },
+  "popup-cycles-fixed-ip-focus": {
+    "cycles_completed": 30,
+    "renders": 1072,
+    "render_ms": 1291.6870948392898,
+    "max_render_ms": 5.653792060911655,
+    "errors": [],
+    "primary_stopped": true,
+    "analysis_stopped": true,
+    "max_gap_ms": 231.4560409868136,
+    "p95_gap_ms": 69.52612497843802,
+    "heartbeats": 828,
+    "sessions": 30,
+    "clean_stop": true,
+    "rendered_counts": {
+      "windows": [
+        1,
+        1
+      ],
+      "timers": [
+        9,
+        9
+      ],
+      "images": [
+        18,
+        18
+      ],
+      "active_sessions": [
+        1,
+        1
+      ],
+      "workers": [
+        1,
+        1
+      ],
+      "rss_mb": [
+        585.24,
+        1152.22
+      ]
+    }
+  },
+  "popup-cycles-fixed-usb-focus": {
+    "cycles_completed": 30,
+    "renders": 2139,
+    "render_ms": 2535.7482050312683,
+    "max_render_ms": 9.04079107567668,
+    "errors": [],
+    "primary_stopped": true,
+    "analysis_stopped": true,
+    "tracking_stopped": true,
+    "max_gap_ms": 244.2289579194039,
+    "p95_gap_ms": 72.9750000173226,
+    "heartbeats": 1284,
+    "sessions": 30,
+    "clean_stop": true,
+    "rendered_counts": {
+      "windows": [
+        1,
+        1
+      ],
+      "timers": [
+        9,
+        9
+      ],
+      "images": [
+        18,
+        18
+      ],
+      "active_sessions": [
+        1,
+        1
+      ],
+      "workers": [
+        1,
+        1
+      ],
+      "rss_mb": [
+        1074.1,
+        1090.6
+      ]
+    }
+  },
+  "popup-cycles-fixed-ip-split": {
+    "cycles_completed": 30,
+    "renders": 894,
+    "render_ms": 764.8142111720517,
+    "max_render_ms": 3.4861250314861536,
+    "errors": [],
+    "navigation_frames_resumed": true,
+    "primary_stopped": true,
+    "analysis_stopped": true,
+    "tracking_stopped": true,
+    "max_gap_ms": 1740.5725830467418,
+    "p95_gap_ms": 76.20795897673815,
+    "heartbeats": 434,
+    "sessions": 2,
+    "clean_stop": true,
+    "rendered_counts": {
+      "windows": [
+        1,
+        1
+      ],
+      "timers": [
+        9,
+        9
+      ],
+      "images": [
+        19,
+        19
+      ],
+      "active_sessions": [
+        1,
+        1
+      ],
+      "workers": [
+        1,
+        1
+      ],
+      "rss_mb": [
+        791.36,
+        835.01
+      ]
+    }
+  },
+  "popup-cycles-fixed-usb-split": {
+    "cycles_completed": 30,
+    "renders": 1045,
+    "render_ms": 1301.1238808976486,
+    "max_render_ms": 12.19220890197903,
+    "errors": [],
+    "navigation_frames_resumed": true,
+    "primary_stopped": true,
+    "analysis_stopped": true,
+    "tracking_stopped": true,
+    "max_gap_ms": 1763.818125007674,
+    "p95_gap_ms": 109.21845899429172,
+    "heartbeats": 448,
+    "sessions": 2,
+    "clean_stop": true,
+    "rendered_counts": {
+      "windows": [
+        1,
+        1
+      ],
+      "timers": [
+        9,
+        9
+      ],
+      "images": [
+        19,
+        19
+      ],
+      "active_sessions": [
+        1,
+        1
+      ],
+      "workers": [
+        1,
+        1
+      ],
+      "rss_mb": [
+        1036.57,
+        1109.0
+      ]
+    }
+  }
+}

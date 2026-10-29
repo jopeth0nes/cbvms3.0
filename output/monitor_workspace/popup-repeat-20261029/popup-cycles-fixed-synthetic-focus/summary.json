@@ -1,0 +1,169 @@
+{
+  "cycles_completed": 30,
+  "renders": 118,
+  "render_ms": 303.1449186382815,
+  "max_render_ms": 6.856541964225471,
+  "errors": [],
+  "phases": {
+    "startup": {
+      "renders": 0,
+      "render_ms": 0.0,
+      "configure_events": 1
+    },
+    "cycle-0": {
+      "renders": 3,
+      "render_ms": 12.166041880846024,
+      "configure_events": 0
+    },
+    "cycle-1": {
+      "renders": 4,
+      "render_ms": 10.037124040536582,
+      "configure_events": 0
+    },
+    "cycle-2": {
+      "renders": 4,
+      "render_ms": 10.13933401554823,
+      "configure_events": 0
+    },
+    "cycle-3": {
+      "renders": 4,
+      "render_ms": 10.312543017789721,
+      "configure_events": 0
+    },
+    "cycle-4": {
+      "renders": 4,
+      "render_ms": 10.201039956882596,
+      "configure_events": 0
+    },
+    "cycle-5": {
+      "renders": 4,
+      "render_ms": 10.148208122700453,
+      "configure_events": 0
+    },
+    "cycle-6": {
+      "renders": 4,
+      "render_ms": 10.248416918329895,
+      "configure_events": 0
+    },
+    "cycle-7": {
+      "renders": 4,
+      "render_ms": 10.731750866398215,
+      "configure_events": 0
+    },
+    "cycle-8": {
+      "renders": 4,
+      "render_ms": 9.763458161614835,
+      "configure_events": 0
+    },
+    "cycle-9": {
+      "renders": 4,
+      "render_ms": 10.489457985386252,
+      "configure_events": 0
+    },
+    "cycle-10": {
+      "renders": 4,
+      "render_ms": 10.111791081726551,
+      "configure_events": 0
+    },
+    "cycle-11": {
+      "renders": 4,
+      "render_ms": 9.683418087661266,
+      "configure_events": 0
+    },
+    "cycle-12": {
+      "renders": 4,
+      "render_ms": 9.522417094558477,
+      "configure_events": 0
+    },
+    "cycle-13": {
+      "renders": 4,
+      "render_ms": 10.369541123509407,
+      "configure_events": 0
+    },
+    "cycle-14": {
+      "renders": 4,
+      "render_ms": 10.077459155581892,
+      "configure_events": 0
+    },
+    "cycle-15": {
+      "renders": 4,
+      "render_ms": 10.218541021458805,
+      "configure_events": 0
+    },
+    "cycle-16": {
+      "renders": 4,
+      "render_ms": 10.10470895562321,
+      "configure_events": 0
+    },
+    "cycle-17": {
+      "renders": 4,
+      "render_ms": 9.870543144643307,
+      "configure_events": 0
+    },
+    "cycle-18": {
+      "renders": 4,
+      "render_ms": 10.389376082457602,
+      "configure_events": 0
+    },
+    "cycle-19": {
+      "renders": 4,
+      "render_ms": 10.304331895895302,
+      "configure_events": 0
+    },
+    "cycle-20": {
+      "renders": 3,
+      "render_ms": 7.715167012065649,
+      "configure_events": 0
+    },
+    "cycle-21": {
+      "renders": 4,
+      "render_ms": 9.880415047518909,
+      "configure_events": 0
+    },
+    "cycle-22": {
+      "renders": 4,
+      "render_ms": 10.360333020798862,
+      "configure_events": 0
+    },
+    "cycle-23": {
+      "renders": 4,
+      "render_ms": 9.960000053979456,
+      "configure_events": 0
+    },
+    "cycle-24": {
+      "renders": 4,
+      "render_ms": 9.79425001423806,
+      "configure_events": 0
+    },
+    "cycle-25": {
+      "renders": 4,
+      "render_ms": 10.422584018670022,
+      "configure_events": 0
+    },
+    "cycle-26": {
+      "renders": 4,
+      "render_ms": 9.735540952533484,
+      "configure_events": 0
+    },
+    "cycle-27": {
+      "renders": 4,
+      "render_ms": 10.133708012290299,
+      "configure_events": 0
+    },
+    "cycle-28": {
+      "renders": 4,
+      "render_ms": 10.014083003625274,
+      "configure_events": 0
+    },
+    "cycle-29": {
+      "renders": 4,
+      "render_ms": 10.239334893412888,
+      "configure_events": 0
+    }
+  },
+  "max_gap_ms": 88.86545803397894,
+  "p95_gap_ms": 65.17433398403227,
+  "heartbeats": 225,
+  "sessions": 30,
+  "clean_stop": true
+}

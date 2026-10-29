@@ -1,0 +1,178 @@
+{
+  "cycles_completed": 30,
+  "renders": 1045,
+  "render_ms": 1301.1238808976486,
+  "max_render_ms": 12.19220890197903,
+  "errors": [],
+  "phases": {
+    "startup": {
+      "renders": 337,
+      "render_ms": 303.26845590025187,
+      "configure_events": 5
+    },
+    "cycle-0": {
+      "renders": 22,
+      "render_ms": 33.997083897702396,
+      "configure_events": 0
+    },
+    "cycle-1": {
+      "renders": 20,
+      "render_ms": 28.084709076210856,
+      "configure_events": 0
+    },
+    "cycle-2": {
+      "renders": 22,
+      "render_ms": 29.772251145914197,
+      "configure_events": 0
+    },
+    "cycle-3": {
+      "renders": 22,
+      "render_ms": 29.964374843984842,
+      "configure_events": 0
+    },
+    "cycle-4": {
+      "renders": 22,
+      "render_ms": 31.418458907864988,
+      "configure_events": 0
+    },
+    "cycle-5": {
+      "renders": 22,
+      "render_ms": 33.818709081970155,
+      "configure_events": 0
+    },
+    "cycle-6": {
+      "renders": 22,
+      "render_ms": 32.078332151286304,
+      "configure_events": 0
+    },
+    "cycle-7": {
+      "renders": 17,
+      "render_ms": 27.719332138076425,
+      "configure_events": 0
+    },
+    "cycle-8": {
+      "renders": 23,
+      "render_ms": 30.61687876470387,
+      "configure_events": 0
+    },
+    "cycle-9": {
+      "renders": 22,
+      "render_ms": 31.186455744318664,
+      "configure_events": 0
+    },
+    "cycle-10": {
+      "renders": 21,
+      "render_ms": 30.372459325008094,
+      "configure_events": 0
+    },
+    "cycle-11": {
+      "renders": 21,
+      "render_ms": 29.585956945084035,
+      "configure_events": 0
+    },
+    "cycle-12": {
+      "renders": 21,
+      "render_ms": 31.06770885642618,
+      "configure_events": 0
+    },
+    "cycle-13": {
+      "renders": 19,
+      "render_ms": 27.720040176063776,
+      "configure_events": 0
+    },
+    "cycle-14": {
+      "renders": 21,
+      "render_ms": 30.82295972853899,
+      "configure_events": 0
+    },
+    "cycle-15": {
+      "renders": 23,
+      "render_ms": 32.77874877676368,
+      "configure_events": 0
+    },
+    "cycle-16": {
+      "renders": 19,
+      "render_ms": 28.89625239185989,
+      "configure_events": 0
+    },
+    "cycle-17": {
+      "renders": 20,
+      "render_ms": 30.607332126237452,
+      "configure_events": 0
+    },
+    "cycle-18": {
+      "renders": 22,
+      "render_ms": 30.700706876814365,
+      "configure_events": 0
+    },
+    "cycle-19": {
+      "renders": 22,
+      "render_ms": 35.407253191806376,
+      "configure_events": 0
+    },
+    "cycle-20": {
+      "renders": 22,
+      "render_ms": 32.68283500801772,
+      "configure_events": 0
+    },
+    "cycle-21": {
+      "renders": 21,
+      "render_ms": 30.941667966544628,
+      "configure_events": 0
+    },
+    "cycle-22": {
+      "renders": 22,
+      "render_ms": 30.785832786932588,
+      "configure_events": 0
+    },
+    "cycle-23": {
+      "renders": 22,
+      "render_ms": 33.04412658326328,
+      "configure_events": 0
+    },
+    "cycle-24": {
+      "renders": 19,
+      "render_ms": 30.23437096271664,
+      "configure_events": 0
+    },
+    "cycle-25": {
+      "renders": 20,
+      "render_ms": 30.71425121743232,
+      "configure_events": 0
+    },
+    "cycle-26": {
+      "renders": 22,
+      "render_ms": 31.226501101627946,
+      "configure_events": 0
+    },
+    "cycle-27": {
+      "renders": 27,
+      "render_ms": 39.76112604141235,
+      "configure_events": 0
+    },
+    "cycle-28": {
+      "renders": 21,
+      "render_ms": 30.71337705478072,
+      "configure_events": 0
+    },
+    "cycle-29": {
+      "renders": 19,
+      "render_ms": 28.879959019832313,
+      "configure_events": 0
+    },
+    "post_cycles": {
+      "renders": 70,
+      "render_ms": 62.25537310820073,
+      "configure_events": 11
+    }
+  },
+  "navigation_frames_resumed": true,
+  "primary_stopped": true,
+  "analysis_stopped": true,
+  "tracking_stopped": true,
+  "max_gap_ms": 1763.818125007674,
+  "p95_gap_ms": 109.21845899429172,
+  "heartbeats": 448,
+  "sessions": 2,
+  "clean_stop": true
+}

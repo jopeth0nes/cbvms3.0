@@ -1,0 +1,281 @@
+diff --git a/tests/test_monitor_workspace.py b/tests/test_monitor_workspace.py
+index c27804f..c604a43 100644
+--- a/tests/test_monitor_workspace.py
++++ b/tests/test_monitor_workspace.py
+@@ -12,7 +12,7 @@ def workspace():
+         _popup_feed=None, _last={}, _failed_key=None, _choice_sources={},
+         selector=MagicMock(), tabs=MagicMock(), primary_label=MagicMock(),
+         secondary_label=MagicMock(), secondary_feed=MagicMock(), after=MagicMock(),
+-        close_popup=MagicMock(), _tick=MagicMock())
++        close_popup=MagicMock(), after_cancel=MagicMock(), _tick=MagicMock())
+     p.selector.get.return_value = 'Front Gate'
+     p.tabs.get.return_value = 'Split'
+     p.dashboard = SimpleNamespace(_active_nav='live', _closed=threading.Event(),
+@@ -22,6 +22,74 @@ def workspace():
+ 
+ 
+ class WorkspaceTests(unittest.TestCase):
++    def test_stale_popup_callbacks_cannot_affect_replacement(self):
++        p = workspace()
++        old = MagicMock()
++        current = p._popup = MagicMock()
++        MonitorWorkspace._close_popup_instance(p, old)
++        MonitorWorkspace._fullscreen_popup_instance(p, old, True)
++        MonitorWorkspace._popup_destroyed(p, SimpleNamespace(widget=old))
++        p.close_popup.assert_not_called()
++        current.attributes.assert_not_called()
++        self.assertIs(p._popup, current)
++
++    def test_minimized_focus_popup_does_not_copy_or_render_frames(self):
++        p = workspace()
++        p.tabs.get.return_value = 'Focus'
++        p._popup = MagicMock()
++        p._popup.state.return_value = 'iconic'
++        p._popup_feed = MagicMock()
++        p.session = MagicMock(key=('ip', 'gate'))
++        p.session.done.is_set.return_value = False
++        MonitorWorkspace._tick(p)
++        p.session.sample.assert_not_called()
++        p.session.stop.assert_not_called()
++        p._popup_feed.render.assert_not_called()
++
++    def test_unmapped_tile_does_not_render(self):
++        p = workspace()
++        p.secondary_feed.winfo_ismapped.return_value = False
++        p.session = MagicMock(key=('ip', 'gate'))
++        p.session.done.is_set.return_value = False
++        MonitorWorkspace._tick(p)
++        p.session.sample.assert_not_called()
++        p.secondary_feed.render.assert_not_called()
++
++    def test_minimized_popup_preserves_visible_tile_and_restores_latest(self):
++        p = workspace()
++        p._popup = MagicMock()
++        p._popup.state.return_value = 'iconic'
++        p._popup_feed = MagicMock()
++        p.session = MagicMock(key=('ip', 'gate'))
++        p.session.done.is_set.return_value = False
++        p.session.sample.return_value = SimpleNamespace(frame_id=1, frame=object())
++        MonitorWorkspace._tick(p)
++        p.secondary_feed.render.assert_called_once()
++        p._popup_feed.render.assert_not_called()
++        p.session.stop.assert_not_called()
++        p._popup.state.return_value = 'normal'
++        p.session.sample.return_value = SimpleNamespace(frame_id=2, frame=object())
++        MonitorWorkspace._tick(p)
++        p._popup_feed.render.assert_called_once_with(p.session.sample.return_value.frame)
++
++    def test_direct_popup_destroy_clears_references(self):
++        p = workspace()
++        popup = p._popup = MagicMock()
++        p._popup_feed = MagicMock()
++        p._last = {'window': 1, 'tile': 2}
++        MonitorWorkspace._popup_destroyed(p, SimpleNamespace(widget=popup))
++        self.assertIsNone(p._popup)
++        self.assertIsNone(p._popup_feed)
++        self.assertEqual(p._last, {'tile': 2})
++
++    def test_closed_tick_does_not_reschedule(self):
++        p = workspace()
++        p._closed = True
++        p._job = 'pending'
++        MonitorWorkspace._tick(p)
++        p.after_cancel.assert_called_once_with('pending')
++        p.after.assert_not_called()
++
+     @patch('ui.monitor_workspace.PreviewSession')
+     def test_split_starts_only_other_camera(self, factory):
+         p = workspace()
+diff --git a/tests/test_monitor_workspace_native_ui.py b/tests/test_monitor_workspace_native_ui.py
+index c75b6f5..986f7cd 100644
+--- a/tests/test_monitor_workspace_native_ui.py
++++ b/tests/test_monitor_workspace_native_ui.py
+@@ -9,6 +9,43 @@ from ui.components import MirrorController, make_mirror_button
+ 
+ 
+ class WorkspaceNativeTests(unittest.TestCase):
++    def test_closed_popup_leaves_no_tk_font_finalizer_for_capture_thread(self):
++        import gc
++        from tkinter.font import Font
++        root = ctk.CTk()
++        dashboard = SimpleNamespace()
++        workspace = MonitorWorkspace(root, dashboard)
++        workspace.after_cancel(workspace._job)
++        workspace._job = None
++        gc.collect()
++        was_enabled = gc.isenabled()
++        gc.disable()
++        deferred = []
++        original = Font.__del__
++        def finalizer(font):
++            if threading.current_thread() is not threading.main_thread():
++                # Record the unsafe call, but avoid actually deadlocking this test
++                # in Tcl while the main thread waits for the collector.
++                deferred.append(font)
++            else:
++                original(font)
++        try:
++            with patch.object(Font, '__del__', finalizer):
++                workspace.pop_out()
++                workspace.close_popup()
++                collector = threading.Thread(target=gc.collect)
++                collector.start()
++                collector.join(2)
++                self.assertFalse(collector.is_alive())
++                self.assertEqual(deferred, [], 'Destroyed pop-out font reached worker GC')
++        finally:
++            for font in deferred:
++                original(font)
++            workspace.close()
++            root.destroy()
++            if was_enabled:
++                gc.enable()
++
+     def test_layout_popup_labels_and_shared_owner(self):
+         root = ctk.CTk()
+         root.geometry('650x600')
+@@ -54,7 +91,23 @@ class WorkspaceNativeTests(unittest.TestCase):
+                 self.assertIn('Front Gate', workspace._popup.title())
+                 self.assertIn('Preview only', workspace.secondary_label.cget('text'))
+                 factory.assert_called_once_with(gate)
++                import numpy as np
++                session.sample.return_value = SimpleNamespace(frame_id=1,
++                    frame=np.zeros((120, 160, 3), dtype=np.uint8))
++                root.after(150, root.quit)
++                root.mainloop()
++                feed = workspace._popup_feed
++                self.assertIsNotNone(feed._photo)
+                 workspace.close_popup()
++                self.assertIsNone(feed._photo)
++                self.assertIsNone(workspace._popup_feed)
++                workspace.pop_out()
++                workspace._popup.destroy()
++                self.assertIsNone(workspace._popup)
++                self.assertIsNone(workspace._popup_feed)
++                root.after(100, root.quit)
++                root.mainloop()
++                self.assertIs(workspace.session, session)
+                 session.stop.assert_called()  # Focus previously stopped the same owner.
+             finally:
+                 workspace.close()
+diff --git a/ui/monitor_workspace.py b/ui/monitor_workspace.py
+index 29d2651..82cdd89 100644
+--- a/ui/monitor_workspace.py
++++ b/ui/monitor_workspace.py
+@@ -82,7 +82,10 @@ class MonitorWorkspace(ctk.CTkFrame):
+         return done
+ 
+     def pop_out(self):
++        if self._closed:
++            return
+         if self._popup is not None and self._popup.winfo_exists():
++            self._popup.deiconify()
+             self._popup.lift()
+             return
+         self._popup = ctk.CTkToplevel(self)
+@@ -90,23 +93,53 @@ class MonitorWorkspace(ctk.CTkFrame):
+         self._popup.geometry('900x600')
+         self._popup.grid_columnconfigure(0, weight=1)
+         self._popup.grid_rowconfigure(1, weight=1)
+-        ctk.CTkLabel(self._popup, text='Preview only — no recognition, attendance, or violations').grid(row=0, column=0)
++        # A default CTkFont remains reachable through destroyed widget cycles.
++        # Worker-triggered GC can run Font.__del__ off Tk and deadlock against
++        # Thread.start on Tk. A scaled tuple has no Python Tk font finalizer.
++        theme_font = ctk.ThemeManager.theme['CTkFont']
++        ctk.CTkLabel(self._popup, text='Preview only — no recognition, attendance, or violations',
++                     font=(theme_font['family'], theme_font['size'])).grid(row=0, column=0)
+         self._popup_feed = CameraFeed(self._popup)
+         self._popup_feed.grid(row=1, column=0, sticky='nsew')
+-        self._popup.protocol('WM_DELETE_WINDOW', self.close_popup)
+-        self._popup.bind('<F11>', lambda _: self._popup.attributes('-fullscreen', not self._popup.attributes('-fullscreen')))
+-        self._popup.bind('<Escape>', lambda _: self._popup.attributes('-fullscreen', False))
++        popup = self._popup
++        self._popup.protocol('WM_DELETE_WINDOW', lambda: self._close_popup_instance(popup))
++        self._popup.bind('<Destroy>', self._popup_destroyed, add='+')
++        self._popup.bind('<F11>', lambda _: self._fullscreen_popup_instance(popup, None))
++        self._popup.bind('<Escape>', lambda _: self._fullscreen_popup_instance(popup, False))
+         self._last.clear()
+ 
++    def _close_popup_instance(self, popup):
++        if popup is self._popup:
++            self.close_popup()
++
++    def _fullscreen_popup_instance(self, popup, fullscreen):
++        if popup is self._popup and popup.winfo_exists():
++            popup.attributes('-fullscreen', not popup.attributes('-fullscreen')
++                             if fullscreen is None else fullscreen)
++
+     def close_popup(self):
+-        if self._popup_feed:
+-            self._popup_feed.cleanup()
+-        if self._popup:
+-            self._popup.destroy()
++        popup, feed = self._popup, self._popup_feed
+         self._popup = self._popup_feed = None
+-        self._last.clear()
++        self._last.pop('window', None)
++        if feed is not None and feed.winfo_exists():
++            feed.cleanup()
++        if popup is not None and popup.winfo_exists():
++            popup.destroy()
++
++    def _popup_destroyed(self, event):
++        # Also handle direct/native destruction, not only WM_DELETE_WINDOW.
++        if event.widget is self._popup_feed:
++            # Destroy events run on Tk even when the native close bypasses our
++            # normal cleanup. Do not leave a PhotoImage for worker-thread GC.
++            self._popup_feed._photo = None
++            self._popup_feed._photo_size = None
++        if event.widget is self._popup:
++            self._popup = self._popup_feed = None
++            self._last.pop('window', None)
+ 
+     def _tick(self):
++        if self._job is not None:
++            self.after_cancel(self._job)
+         self._job = None
+         if self._closed:
+             return
+@@ -139,19 +172,37 @@ class MonitorWorkspace(ctk.CTkFrame):
+             self.session = PreviewSession(source)
+             self.session.start()
+         mode = 'Analysis · observation only' if d._observation_only else 'Analysis enabled'
+-        self.primary_label.configure(text=f"{primary.get('label', 'Camera')} · {mode}")
++        primary_text = f"{primary.get('label', 'Camera')} · {mode}"
++        if self.primary_label.cget('text') != primary_text:
++            self.primary_label.configure(text=primary_text)
+         if not live and self._popup is not None:
+             self.close_popup()
+-        sample = self.session.sample() if self.session and wanted else None
+         status = self.session.status if self.session else ('Unavailable — Retry preview' if self._failed_key == key and key else 'Select another saved camera')
+         label = source.get('label', 'Camera') if source else 'Second camera'
+         preview_status = status if status.startswith('Preview only') else f'Preview only · {status}'
+-        self.secondary_label.configure(text=f'{label} · {preview_status}')
++        secondary_text = f'{label} · {preview_status}'
++        if self.secondary_label.cget('text') != secondary_text:
++            self.secondary_label.configure(text=secondary_text)
+         if self._popup is not None:
+-            self._popup.title(f'CBVMS · {label} · PREVIEW ONLY')
++            title = f'CBVMS · {label} · PREVIEW ONLY'
++            if self._popup.title() != title:
++                self._popup.title(title)
++        # A minimized/hidden consumer still owns the session, but needs no pixel
++        # copy, conversion or PhotoImage upload. One poll owns both visible views;
++        # mapping/resize events do not create additional render timers.
++        visible = []
+         for name, feed in [('tile', self.secondary_feed), ('window', self._popup_feed)]:
+-            if feed is None or (name == 'tile' and self.tabs.get() == 'Focus'):
++            if feed is None or not feed.winfo_exists() or not feed.winfo_ismapped():
++                self._last.pop(name, None)
++                continue
++            if name == 'tile' and (not live or self.tabs.get() == 'Focus'):
++                continue
++            if name == 'window' and self._popup.state() in ('iconic', 'withdrawn'):
++                self._last.pop(name, None)
+                 continue
++            visible.append((name, feed))
++        sample = self.session.sample() if self.session and wanted and visible else None
++        for name, feed in visible:
+             if sample is None:
+                 feed.show_placeholder(status)
+                 self._last.pop(name, None)

@@ -1736,6 +1736,7 @@ class CBVMSDashboard(WorkspaceWindow):
                     self._attendance_writer_status.configure(text=attendance_status)
                     self._attendance_status_text = attendance_status
                 sample = self._latest_monitor_sample()
+                self._primary_video_fresh = sample is not None and started-sample.captured_at <= 1.0
                 if sample is None or started-sample.captured_at > 1.0:
                     if self._monitor_last_rendered is not None:
                         self._invalidate_monitor()
@@ -1743,7 +1744,7 @@ class CBVMSDashboard(WorkspaceWindow):
                                else self._camera_message)
                     self._status_camera.configure(text=message, text_color=COLOR_WARNING)
                     self._monitor_status_text = message
-                    self.camera_feed.show_placeholder(message)
+                    self._monitor_workspace.primary_placeholder(message)
                 else:
                     self._last_frame_request = started
                     PERF.first("first_camera_frame")
@@ -1783,7 +1784,7 @@ class CBVMSDashboard(WorkspaceWindow):
                             a.track_id: MotionProjection(result.task.frame, a.face_box)
                             for a in result.assessments}
                     render_key = (sample.frame_id, self._mirror.display_mirror(),
-                                  self.camera_feed.winfo_width(), self.camera_feed.winfo_height())
+                                  self._monitor_workspace.primary_render_key())
                     expired = self._monitor_result is not None and not self._monitor_result.task.valid()
                     rows = self._monitor_rows(sample)
                     if render_key != self._monitor_render_key or result is not None or tracking is not None or expired:
@@ -1805,9 +1806,11 @@ class CBVMSDashboard(WorkspaceWindow):
                                 activity_rows, monitor_generation=self._monitor_generation)
                             self._monitor_card_key = card_key
                         self._display_rows = tuple(rows)
-                        with measure("ui_render"):
-                            annotated = draw_assessments(sample.frame, rows, mirror=self._mirror.display_mirror())
-                            rendered = self.camera_feed.render(self._mirror.apply_anim(annotated))
+                        rendered = False
+                        if render_key[-1]:  # Analysis continues even with no visible primary consumer.
+                            with measure("ui_render"):
+                                annotated = draw_assessments(sample.frame, rows, mirror=self._mirror.display_mirror())
+                                rendered = self._monitor_workspace.render_primary(self._mirror.apply_anim(annotated))
                         if rendered:
                             PERF.observe("preview_age", time.monotonic()-sample.captured_at)
                             if sample.frame_id != self._monitor_last_rendered:

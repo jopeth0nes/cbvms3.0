@@ -1,0 +1,2000 @@
+"""Main CBVMS dashboard with live camera feed."""
+
+from __future__ import annotations
+
+import os
+import queue
+import sys
+import threading
+import time
+import tkinter as tk
+from collections import deque
+from datetime import date, datetime
+from datetime import timezone
+
+import cv2
+import customtkinter as ctk
+import numpy as np
+from PIL import Image
+from io import BytesIO
+
+from core.camera import CAMERA_DEVICE_LOCK, CameraCapture, usb_camera_label
+from core.discipline import local_calendar_day_utc_bounds
+from core.notifier import Notifier
+from core.person_detector import PersonDetector
+from core.recognizer import FaceRecognizer
+from dataclasses import asdict, replace
+from core.live_state import FrameContext, LiveConfig, LiveState
+from core.monitor_models import MonitorModels
+from core.diagnostics import event
+from core.performance import PERF, TRACES, measure
+from core.live_pipeline import LiveProcessor, LiveWorker, MonitorTask, MotionProjection, FaceTrackingProcessor
+from core.assessment_candidates import (ClearFrameRouter, OBSERVATION_ONLY,
+    CLEAR_FRAME_SELECTION, PRIORITIZED_ASSESSMENT)
+from ui.live_alerts import LiveAlerts
+from ui.live_overlay import draw_assessments
+from core.uniform_matcher import UniformColorMatcher
+from core.trainer import ViolationTrainer
+from core.violation_engine import LiveViolationChecker
+from database.db_manager import CBVMSDatabase
+from ui.camera_feed import CameraFeed, next_preview_tick
+from ui.monitor_workspace import MonitorWorkspace
+from ui.camera_source_selector import CameraSourceSelector
+from ui.welcome import welcome_banner
+from ui.window_lifecycle import WorkspaceWindow
+from ui.enrollment import EnrollmentPanel
+from ui.notifications_panel import NotificationsPanel
+from ui.settings import SettingsPanel
+from ui.training_panel import TrainingPanel
+from ui.records_panel import RecordsPanel
+from ui.attendance_panel import AttendancePanel
+from core.attendance_writer import writer_status
+from ui.appeals_panel import AppealsPanel
+from ui.suspension_overview import SuspensionsWorkspace
+from ui.suspensions_panel import SuspensionsPanel
+from ui.reports_panel import ReportsPanel
+from ui.violation_log import ViolationLogPanel
+from ui.account_manager import AccountManagerPanel
+from ui.components import (
+    COLOR_ACCENT,
+    COLOR_ACCENT_HOVER,
+    COLOR_BG,
+    COLOR_BORDER,
+    COLOR_DANGER,
+    COLOR_SAFE,
+    COLOR_SURFACE,
+    COLOR_TEXT,
+    COLOR_TEXT_MUTED,
+    COLOR_WARNING,
+    CORNER_RADIUS,
+    PADDING,
+    PADDING_LG,
+    SIDEBAR_LEFT_WIDTH,
+    SIDEBAR_RIGHT_WIDTH,
+    apply_cbvms_theme,
+    body_font,
+    body_small_font,
+    heading_font,
+    make_mirror_button,
+    panel_title_font,
+    show_toast,
+    MirrorController,
+)
+
+FEED_FPS = 30
+MAX_ALERTS = 50
+
+UNIFORM_VIOLATION_CONF = 0.65  # higher bar before a WRONG-uniform alert is logged (cuts false alarms)
+CAMERA_IDLE_RELEASE_SECS = 4.0  # release the camera after this long with no consumer (power saver)
+REID_MIN_GAP_SECS = 0.5      # spacing between assessment offers; confirmation requires distinct frames
+
+
+def _put_latest(q: "queue.Queue", item) -> None:
+    """Replace whatever is in a maxsize-1 queue with the freshest item (drop-old)."""
+    try:
+        q.put_nowait(item)
+        return
+    except queue.Full:
+        pass
+    try:
+        q.get_nowait()
+    except queue.Empty:
+        pass
+    try:
+        q.put_nowait(item)
+    except queue.Full:
+        pass
+
+
+def _drain(q: "queue.Queue"):
+    """Return the latest item from a queue, or None if empty (non-blocking)."""
+    try:
+        return q.get_nowait()
+    except queue.Empty:
+        return None
+
+ORANGE_BGR = (0, 165, 255)   # torso box color (distinct from green/red/blue face box)
+
+
+class CBVMSDashboard(WorkspaceWindow):
+    def __init__(
+        self,
+        username: str = "admin",
+        *,
+        database: "CBVMSDatabase | None" = None,
+        recognizer: "FaceRecognizer | None" = None,
+        person_detector: "PersonDetector | None" = None,
+        monitor_models: "MonitorModels | None" = None,
+        staff_session_token: str | None = None,
+    ) -> None:
+        super().__init__()
+        if monitor_models is None and recognizer is not None:
+            existing = getattr(recognizer, "monitor_models", None)
+            if isinstance(existing, MonitorModels):
+                monitor_models = existing
+        if monitor_models is not None:
+            recognizer = monitor_models.recognizer
+            person_detector = monitor_models.person_detector
+        self.withdraw()
+        self.username = username
+        self.staff_session_token = staff_session_token
+        self._logout_requested = False
+        self._active_nav = "live"
+        self._suspension_student_id = None
+        self._feed_job: str | None = None
+        self._clock_job: str | None = None
+        self._stats_job: str | None = None
+        self._feed_interval_ms = max(16, 1000 // FEED_FPS)
+
+        self._camera: CameraCapture | None = None
+        # One worker owns the entire capture lifecycle (open/read/release).  Tk only
+        # consumes the newest frame, so a slow RTSP operation can never block the UI.
+        self._camera_reader: threading.Thread | None = None
+        self._camera_reader_stop: threading.Event | None = None
+        self._camera_worker_done = threading.Event()
+        self._camera_worker_done.set()
+        self._camera_events: queue.Queue = queue.Queue()
+        self._camera_generation = 0
+        self._camera_switch_job: str | None = None
+        self._discovered_usb_sources: list[dict] = []
+        self._camera_index_setting = 0
+        self._camera_source_url: str | None = None
+        self._camera_resolution_setting = (1280, 720)
+        self._fps_cap_setting = 30
+        self._camera_retry_count = 0
+        self._camera_retry_job = None
+        self._camera_start_job = None
+        self._camera_open_deadline = None
+        self._camera_state = 'IDLE'
+        self._camera_message = 'Camera: Starting…'
+        self._camera_established = False
+        self._camera_requested_source = dict(id='usb_0', type='usb', index=0, label=usb_camera_label(0))
+        self._camera_active_source = None
+        # Power saver: the camera is released when no consumer (Live view, enroll
+        # wizard, or training capture modal) has asked for a frame recently.
+        self._last_frame_request = 0.0  # time.monotonic() of the last camera need
+
+        # Reuse pre-built (and already-warming) objects injected from main.py so the
+        # heavy models load during the login screen instead of after the dashboard opens.
+        self._injected = recognizer is not None
+        if database is not None:
+            self._database = database
+        else:
+            self._database = CBVMSDatabase()
+            self._database.initialize()
+
+        self.role = self._database.get_user_role(self.username) or "admin"
+        self._is_superadmin = self.role == "superadmin"
+
+        # Face recognizer (InsightFace buffalo_l: SCRFD + ArcFace) — lazy model load inside
+        self._recognizer = recognizer if recognizer is not None else FaceRecognizer(self._database)
+
+        # Real-time notification broker (sound + toast + bell badge + log panel)
+        self._notifier = Notifier()
+        # YOLOv8 classification trainer (uniform / earring modules)
+        self._trainer = monitor_models.trainer if monitor_models is not None else ViolationTrainer()
+        # Live violation checker (uniform / earring) backed by the trainer models
+        self._checker = LiveViolationChecker(self._trainer, notifier=self._notifier)
+        # Full-body person detector (YOLOv8n) for reliable torso crops
+        if self._injected:
+            self._person_detector = person_detector  # may be None if it failed upstream
+        else:
+            try:
+                self._person_detector = PersonDetector()
+            except Exception as exc:
+                print(f"[CBVMS] PersonDetector init failed: {exc}")
+                self._person_detector = None
+
+        # Preserve the trained classifier and inference-matched colour reference.
+        self._uniform_matcher = (monitor_models.uniform_matcher if monitor_models is not None
+                                 else UniformColorMatcher())
+
+        # One analysis owner; camera capture and Tk preview never wait for inference.
+        self._monitor_generation = 0
+        self._monitor_cancel = threading.Event()
+        self._monitor_result = None
+        self._monitor_projections = {}
+        self._monitor_last_offered = None
+        self._monitor_last_rendered = None
+        self._monitor_render_key = None
+        self._monitor_card_key = None
+        self._monitor_offer_time = 0.0
+        self._preview_times = deque(maxlen=120)
+        self._analysis_times = deque(maxlen=30)
+        self._tracking_times = deque(maxlen=30)
+        self._metrics_time = 0.0
+        self._closed = threading.Event()
+        self._activity_generation = 0
+        self._activity_read_busy = False
+        self._activity_read_result = queue.Queue(maxsize=1)
+        self._activity_refresh_job = None
+        self._pending_unknown_reference = None
+        PERF.start_monitor()
+        self._monitor_models = monitor_models or MonitorModels(
+            self._recognizer, self._person_detector, self._trainer, self._uniform_matcher)
+        self._readiness = self._monitor_models.readiness
+        self._tracking_result = None
+        self._tracking_projections = {}
+        self._tracking_last_offered = None
+        self._tracking_offer_time = 0.
+        self._notification_out = queue.Queue(maxsize=50)
+        self._stats_out = queue.Queue(maxsize=1)
+        self._stats_busy = threading.Event()
+        self._processor = LiveProcessor(
+            self._database, self._recognizer, self._person_detector,
+            self._trainer, self._uniform_matcher, self._notifier,
+            latest_sample=self._latest_monitor_sample,
+            state=LiveState(LiveConfig(violation_min_confidence=UNIFORM_VIOLATION_CONF)),
+            observation_only=OBSERVATION_ONLY,
+        )
+        self._monitor_session_id = self._processor.security_session
+        self._monitor_session_started_at = datetime.now(timezone.utc)
+        self._processor.audio_task_valid = lambda task: (
+            not self._closed.is_set()
+            and task.context.generation == self._monitor_generation
+            and task.camera_generation == self._camera_generation
+            and task.uniform_enabled == self._checker.check_uniform
+            and task.earring_enabled == self._checker.check_earring)
+        self._processor.readiness = self._readiness
+        self._observation_only = OBSERVATION_ONLY
+        self._candidate_router = ClearFrameRouter() if (CLEAR_FRAME_SELECTION or PRIORITIZED_ASSESSMENT) else None
+        if self._candidate_router is not None:
+            self._gallery_listener = self._on_gallery_revision
+            self._recognizer.add_gallery_listener(self._gallery_listener)
+        event("assessment_mode", observation_only=self._observation_only,
+              clear_frame_selection=CLEAR_FRAME_SELECTION,
+              prioritized_assessment=PRIORITIZED_ASSESSMENT,
+              production_persistence=not self._observation_only)
+        self._live_worker = LiveWorker(self._processor,
+            persistence_worker=not self._observation_only,
+            observation_only=self._observation_only)
+        if self._candidate_router is not None and self._observation_only:
+            self._live_worker.on_idle = self._dispatch_assessment_candidate
+        self._tracking_worker = LiveWorker(FaceTrackingProcessor(
+            self._recognizer, self._person_detector, self._readiness, self._on_localized))
+        self._tracking_worker.start()
+        self._live_worker.start()
+        try:
+            cv2.setNumThreads(2)
+        except Exception:
+            pass
+        threading.Thread(target=self._prewarm_models, daemon=True,
+                         name="monitor-model-warmup").start()
+
+        self._enrollment_panel: EnrollmentPanel | None = None
+        self._training_panel: TrainingPanel | None = None
+        self._suspensions_panel: SuspensionsWorkspace | None = None
+        self._violation_history_panel: SuspensionsPanel | None = None
+        self._reports_panel = None
+        self._violation_panel: ViolationLogPanel | None = None
+        self._settings_panel: SettingsPanel | None = None
+        self._notifications_panel: NotificationsPanel | None = None
+        self._records_panel: RecordsPanel | None = None
+        self._account_manager_panel: AccountManagerPanel | None = None
+
+        self._stat_today_value: ctk.CTkLabel | None = None
+        self._stat_unreviewed_value: ctk.CTkLabel | None = None
+        self._stat_students_value: ctk.CTkLabel | None = None
+        self._stat_last_value: ctk.CTkLabel | None = None
+
+        apply_cbvms_theme()
+        self.title("CBVMS — Superadmin Dashboard" if self._is_superadmin else "CBVMS — Dashboard")
+        self.geometry("1280x800")
+        self.minsize(1280, 540)
+        self.configure(fg_color=COLOR_BG)
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+
+        self._load_camera_preference()
+
+        self._build_ui()
+        self._refresh_camera_switcher()   # populate quick source dropdown
+        # Listeners may run on recognition workers.  Queue the payload and let the
+        # feed loop perform every Tk/CTk operation on the UI thread.
+        self._notifier.subscribe(lambda item: _put_latest(self._notification_out, item))
+        self._build_menubar()
+        self._tick_clock()
+        self._schedule_feed_update()
+        self.after_idle(self._refresh_activity_sightings)
+        self.after(80, self._deferred_start_camera)   # start the camera ASAP after the UI maps
+        self.after(16, self.reveal_when_ready)
+
+    # ------------------------------------------------------------------
+    # UI construction
+    # ------------------------------------------------------------------
+
+    def _build_ui(self) -> None:
+        self.grid_columnconfigure(0, weight=0, minsize=220)
+        self.grid_columnconfigure(1, weight=1)
+        self.grid_columnconfigure(2, weight=0, minsize=280)
+        self.grid_rowconfigure(0, weight=0)
+        self.grid_rowconfigure(1, weight=1)
+        self._welcome_banner = welcome_banner(self, self.username, "Administrator")
+        self._welcome_banner.grid(
+            row=0, column=1, columnspan=2, sticky="ew", padx=16, pady=(16, 0))
+
+        self._build_left_sidebar()
+        self._build_center_panel()
+        self._build_right_sidebar()
+        self._appeal_counts = queue.Queue(maxsize=1)
+        self._appeal_count_busy = threading.Event()
+        self._refresh_appeal_counts()
+
+    def _refresh_appeal_counts(self):
+        counts = _drain(self._appeal_counts)
+        if counts is not None:
+            pending, self._appeal_unread = counts
+            self._nav_buttons["appeals"].configure(text=f"⚖  Appeals ({pending})")
+            self._update_bell_badge()
+        def read():
+            try:
+                self._database.process_expired_deadlines()
+                counts = (self._database.admin_appeal_pending_count(), self._database.admin_appeal_unread_count())
+                if self._appeal_counts.empty():
+                    self._appeal_counts.put_nowait(counts)
+            except Exception:
+                pass
+            finally:
+                self._appeal_count_busy.clear()
+        if not self._appeal_count_busy.is_set():
+            self._appeal_count_busy.set()
+            threading.Thread(target=read, daemon=True, name="appeal-counts").start()
+        self._appeal_count_job = self.after(5000, self._refresh_appeal_counts)
+
+    def _build_left_sidebar(self) -> None:
+        sidebar = ctk.CTkFrame(
+            self,
+            width=SIDEBAR_LEFT_WIDTH,
+            fg_color=COLOR_SURFACE,
+            corner_radius=CORNER_RADIUS,
+            border_width=1,
+            border_color=COLOR_BORDER,
+        )
+        sidebar.grid(row=0, column=0, rowspan=2, sticky="nsw", padx=(PADDING, 0), pady=PADDING)
+        sidebar.grid_propagate(False)
+        sidebar.grid_columnconfigure(0, weight=1)
+        sidebar.grid_rowconfigure(3, weight=1)
+
+        ctk.CTkLabel(
+            sidebar, text="CBVMS", font=heading_font(26), text_color="#D0AE68",
+        ).grid(row=0, column=0, sticky="w", padx=PADDING, pady=(PADDING_LG, 0))
+
+        ctk.CTkLabel(
+            sidebar, text="CAMPUS OPERATIONS",
+            font=body_small_font(), text_color=COLOR_TEXT_MUTED,
+        ).grid(row=1, column=0, sticky="w", padx=PADDING, pady=(0, PADDING))
+
+        # Notification bell with unread-count badge overlay.
+        bell_wrap = ctk.CTkFrame(sidebar, fg_color="transparent", height=44)
+        bell_wrap.grid(row=2, column=0, sticky="ew", padx=PADDING, pady=(0, PADDING))
+        bell_btn = ctk.CTkButton(
+            bell_wrap, text="🔔  Alerts", anchor="w", height=40,
+            corner_radius=CORNER_RADIUS, fg_color=COLOR_BORDER, hover_color=COLOR_ACCENT_HOVER,
+            text_color=COLOR_TEXT, font=body_small_font(),
+            command=self._open_alerts_from_bell,
+        )
+        bell_btn.pack(fill="x")
+        self._bell_badge = ctk.CTkLabel(
+            bell_wrap, text="", width=18, height=18, corner_radius=999,
+            fg_color=COLOR_DANGER, text_color=COLOR_TEXT, font=body_small_font(),
+        )
+        # Placed/forgotten dynamically in _update_bell_badge().
+
+        # Only the menu shrinks/scrolls; reserve the footer even on short displays.
+        navigation = ctk.CTkScrollableFrame(
+            sidebar, height=1, fg_color="transparent", corner_radius=0,
+            scrollbar_button_color=COLOR_BORDER,
+            scrollbar_button_hover_color=COLOR_ACCENT_HOVER,
+        )
+        navigation.grid(row=3, column=0, sticky="nsew", padx=6)
+
+        nav_items = [
+            ("live",       "📹  Live Monitor"),
+            ("enrollment", "👤  Student Management"),
+            ("recycle_bin", "Recycle Bin"),
+            ("attendance", "Attendance"),
+            ("unknown", "Unknown Sightings"),
+            ("suspensions", "⏸  Suspensions"),
+            ("violation_history", "📋  Violation History"),
+            ("violations", "⚠  Violation Log"),
+            ("appeals",    "⚖  Appeals"),
+            ("records",    "🗄  Records"),
+            ("reports",    "📊  Reports"),
+            ("training",   "🎓  Training"),
+            ("accounts",   "🔑  Account Manager"),
+            ("settings",   "⚙  Settings"),
+        ]
+        self._nav_buttons: dict[str, ctk.CTkButton] = {}
+        for key, label in nav_items:
+            if key in {"training", "accounts", "recycle_bin"} and not self._is_superadmin:
+                continue
+            btn = ctk.CTkButton(
+                navigation, text=label, anchor="w", height=40,
+                corner_radius=CORNER_RADIUS,
+                fg_color=COLOR_ACCENT if key == "live" else "transparent",
+                hover_color=COLOR_ACCENT_HOVER if key == "live" else COLOR_BORDER,
+                text_color=COLOR_TEXT, font=body_small_font(),
+                command=lambda k=key: self._on_nav_select(k),
+            )
+            btn.pack(fill="x", padx=4, pady=4)
+            self._nav_buttons[key] = btn
+
+            def _enter(_e, b=btn, k=key):
+                if self._active_nav != k:
+                    b.configure(fg_color=COLOR_BORDER)
+
+            def _leave(_e, b=btn, k=key):
+                if self._active_nav != k:
+                    b.configure(fg_color="transparent")
+
+            btn.bind("<Enter>", _enter)
+            btn.bind("<Leave>", _leave)
+
+        footer = ctk.CTkFrame(sidebar, fg_color="transparent")
+        footer.grid(row=4, column=0, sticky="ew", padx=PADDING, pady=PADDING)
+
+        ctk.CTkLabel(
+            footer, text=f"{'Superadmin' if self._is_superadmin else 'Administrator'}\n{self.username}",
+            font=body_small_font(), text_color=COLOR_TEXT_MUTED,
+        ).pack(anchor="w", pady=(0, 8))
+
+        ctk.CTkButton(
+            footer, text="Logout", height=36, corner_radius=CORNER_RADIUS,
+            fg_color=COLOR_BORDER, hover_color=COLOR_DANGER, command=self._logout,
+        ).pack(fill="x")
+
+    def _build_center_panel(self) -> None:
+        center = self._center_panel = ctk.CTkFrame(self, fg_color="transparent")
+        center.grid(row=1, column=1, sticky="nsew", padx=PADDING, pady=PADDING)
+        center.grid_columnconfigure(0, weight=1)
+        center.grid_rowconfigure(1, weight=1)
+
+        title_row = self._title_row = ctk.CTkFrame(center, fg_color="transparent")
+        title_row.grid(row=0, column=0, sticky="ew", pady=(0, PADDING))
+
+        self._center_title = ctk.CTkLabel(
+            title_row, text="Live Monitor",
+            font=panel_title_font(), text_color=COLOR_TEXT,
+        )
+        self._center_title.pack(side="left")
+
+        self._datetime_label = ctk.CTkLabel(
+            title_row, text="", font=body_small_font(), text_color=COLOR_TEXT_MUTED,
+        )
+        self._datetime_label.pack(side="right")
+
+        # Quick camera source switcher — flip between the MacBook camera and any saved
+        # IP camera instantly, without opening Settings. Persists the choice.
+        self._cam_sources: dict[str, dict] = {}
+        self._cam_source_var = ctk.StringVar(value=usb_camera_label(0))
+        self._cam_switcher = CameraSourceSelector(
+            title_row, variable=self._cam_source_var, values=[usb_camera_label(0)],
+            width=190, height=30, command=self._on_switch_camera,
+            fg_color=COLOR_SURFACE, hover_color=COLOR_ACCENT_HOVER, font=body_small_font(),
+        )
+        self._cam_switcher.pack(side="right", padx=(0, 12))
+        ctk.CTkLabel(
+            title_row, text="📷 Source", font=body_small_font(), text_color=COLOR_TEXT_MUTED,
+        ).pack(side="right", padx=(0, 6))
+
+        self._content_stack = ctk.CTkFrame(center, fg_color="transparent")
+        self._content_stack.grid(row=1, column=0, sticky="nsew")
+        self._content_stack.grid_columnconfigure(0, weight=1)
+        self._content_stack.grid_rowconfigure(0, weight=1)
+
+        self._view_host = ctk.CTkFrame(self._content_stack, fg_color="transparent")
+        self._view_host.grid(row=0, column=0, sticky="nsew")
+        self._view_host.grid_columnconfigure(0, weight=1)
+        self._view_host.grid_rowconfigure(0, weight=1)
+
+        self._live_frame = ctk.CTkFrame(self._view_host, fg_color="transparent")
+        self._live_frame.grid_columnconfigure(0, weight=1)
+        self._live_frame.grid_rowconfigure(0, weight=0)  # stat cards
+        self._live_frame.grid_rowconfigure(1, weight=1)  # camera feed
+        self._live_frame.grid_rowconfigure(2, weight=0)  # status bar
+
+        self._stats_row = self._build_stats_row(self._live_frame)
+        self._stats_row.grid(row=0, column=0, sticky="ew", pady=(0, PADDING))
+
+        # Camera feed — no fixed width/height; grid(sticky="nsew") controls size
+        self._monitor_workspace = MonitorWorkspace(self._live_frame, self)
+        self._monitor_workspace.grid(row=1, column=0, padx=10, pady=10, sticky="nsew")
+        self.camera_feed = self._monitor_workspace.primary_feed
+
+        # Display-only mirror toggle, overlaid in the feed's top-right corner. Flips only
+        # the shown pixels — detection/recognition still run on the un-mirrored frame.
+        self._mirror = MirrorController()
+        self._mirror_btn = make_mirror_button(self._monitor_workspace.primary, self._mirror)
+        self._mirror_btn.place(in_=self.camera_feed, relx=1.0, x=-14, y=14, anchor="ne")
+        self._mirror_btn.lift()
+
+        status_bar = ctk.CTkFrame(
+            self._live_frame, fg_color=COLOR_SURFACE,
+            corner_radius=CORNER_RADIUS, border_width=1, border_color=COLOR_BORDER,
+        )
+        status_bar.grid(row=2, column=0, sticky="ew")
+        status_bar.grid_columnconfigure(0, weight=1)
+
+        self._status_camera = ctk.CTkLabel(
+            status_bar, text="Camera: Starting…",
+            font=body_small_font(), text_color=COLOR_TEXT_MUTED,
+        )
+        self._status_camera.grid(row=0, column=0, sticky='w', padx=PADDING, pady=(8,0))
+
+        spinner_host = ctk.CTkFrame(status_bar, fg_color='transparent', width=110, height=24)
+        spinner_host.pack_propagate(False)
+        spinner_host.grid(row=0, column=1, padx=8)
+        self._camera_spinner = ctk.CTkProgressBar(spinner_host, mode="indeterminate", width=100)
+        self._camera_spinner.pack(side="right", padx=(0, 10), pady=14)
+        self._camera_spinner.stop()
+        self._camera_spinner.pack_forget()
+
+        self._retry_model_btn = ctk.CTkButton(status_bar, text="Retry model loading", width=145,
+                                              command=self._retry_models)
+        self._retry_model_btn.grid(row=0, column=2, rowspan=2, padx=8, pady=8)
+        self._status_fps = ctk.CTkLabel(
+            status_bar, text="FPS: —",
+            font=body_small_font(), text_color=COLOR_ACCENT,
+        )
+        self._status_fps.grid(row=1, column=0, columnspan=2, sticky='w', padx=PADDING, pady=(0,8))
+        status_bar.bind('<Configure>', lambda e: self._status_camera.configure(
+            wraplength=max(150,e.width-300)))
+        self._camera_actions = ctk.CTkFrame(self._live_frame, fg_color='transparent')
+        self._camera_actions.grid(row=5, column=0, sticky='w', padx=PADDING, pady=4)
+        for text, command in (
+            ('Retry camera', self._retry_selected_camera),
+            (f'Return to {usb_camera_label(0)}', lambda: self._on_switch_camera(usb_camera_label(0))),
+            ('Camera Settings', lambda: self._on_nav_select('settings')),
+        ):
+            ctk.CTkButton(self._camera_actions, text=text, command=command, height=28).pack(side='left', padx=(0, 8))
+        self._camera_actions.grid_remove()
+        self._status_models = ctk.CTkLabel(
+            self._live_frame, text="Loading face detector", anchor="w", justify="left",
+            wraplength=1050, font=body_small_font(), text_color=COLOR_TEXT_MUTED)
+        self._status_models.grid(row=3, column=0, sticky="ew", padx=PADDING, pady=(4, 8))
+        self._attendance_writer_status = ctk.CTkLabel(self._live_frame, text='', anchor='w',
+            text_color=COLOR_TEXT_MUTED, wraplength=1000)
+        self._attendance_writer_status.grid(row=4,column=0,sticky='ew',padx=PADDING)
+        self._live_frame.bind('<Configure>' ,lambda e: self._status_models.configure(
+            wraplength=max(180,e.width-2*PADDING)),add='+')
+
+        # Build secondary pages only when first opened, then reuse them.
+        self._panel_factories = {
+            "unknown": ("_unknown_panel", lambda: AttendancePanel(self._view_host, database=self._database, username=self.username, unknown=True)),
+            "attendance": ("_attendance_panel", lambda: AttendancePanel(self._view_host, database=self._database, username=self.username)),
+            "reports": ("_reports_panel", lambda: ReportsPanel(self._view_host, database=self._database)),
+            "enrollment": ("_enrollment_panel", lambda: EnrollmentPanel(
+            self._view_host,
+            database=self._database,
+            recognizer=self._recognizer,
+            get_frame=self._get_camera_frame,
+            get_frame_sample=self._get_camera_sample,
+            username=self.username,
+            actor_token=self.staff_session_token,
+            on_open_suspensions=self._open_student_suspensions,
+        )),
+            "violation_history": ("_violation_history_panel", lambda: SuspensionsPanel(
+                self._view_host, database=self._database, username=self.username, history_view="violations")),
+            "suspensions": ("_suspensions_panel", lambda: SuspensionsWorkspace(
+            self._view_host, database=self._database, username=self.username)),
+            "violations": ("_violation_panel", lambda: ViolationLogPanel(self._view_host, database=self._database, username=self.username)),
+            "training": ("_training_panel", lambda: TrainingPanel(
+            self._view_host,
+            trainer=self._trainer,
+            get_frame=self._get_camera_frame,
+        )),
+            "settings": ("_settings_panel", lambda: SettingsPanel(
+            self._view_host,
+            database=self._database,
+            recognizer=self._recognizer,
+            username=self.username,
+            get_detector_loaded=lambda: (
+                self._person_detector is not None
+                and getattr(self._person_detector, "_model", None) is not None
+            ),
+            apply_camera_settings=self._apply_camera_settings,
+            on_camera_source_connected=self._on_camera_source_connected,
+            on_camera_sources_changed=self._on_camera_sources_changed,
+            trainer=self._trainer,
+            checker=self._checker,
+            notifier=self._notifier,
+        )),
+            "alerts": ("_notifications_panel", lambda: NotificationsPanel(
+            self._view_host, notifier=self._notifier, on_change=self._update_bell_badge,
+            database=self._database, on_open=self._open_alert_record,
+        )),
+            "records": ("_records_panel", lambda: RecordsPanel(self._view_host, database=self._database, username=self.username)),
+            "appeals": ("_appeals_panel", lambda: AppealsPanel(self._view_host, database=self._database, username=self.username, on_change=self._update_bell_badge)),
+            "accounts": ("_account_manager_panel", lambda: AccountManagerPanel(
+            self._view_host, database=self._database)),
+        }
+        if not self._is_superadmin:
+            for key in ("training", "accounts", "recycle_bin"):
+                self._panel_factories.pop(key, None)
+        self._views = {"live": self._live_frame}
+        self._live_frame.grid(row=0, column=0, sticky="nsew")
+        self._schedule_stats_refresh()
+
+    def _build_stats_row(self, master: ctk.CTkFrame) -> ctk.CTkFrame:
+        row = ctk.CTkFrame(master, fg_color="transparent")
+        row.grid_columnconfigure((0, 1, 2, 3), weight=1, uniform="stats")
+
+        def _card(col: int, *, label: str, accent: str) -> ctk.CTkLabel:
+            card = ctk.CTkFrame(
+                row, fg_color=COLOR_SURFACE, corner_radius=CORNER_RADIUS,
+                border_width=1, border_color=COLOR_BORDER, height=80,
+            )
+            card.grid(row=0, column=col, sticky="ew", padx=(0 if col == 0 else 10, 0))
+            card.grid_propagate(False)
+            card.grid_columnconfigure(0, weight=1)
+            value = ctk.CTkLabel(card, text="—", font=heading_font(22), text_color=accent)
+            value.grid(row=0, column=0, sticky="w", padx=14, pady=(12, 0))
+            ctk.CTkLabel(
+                card, text=label, font=body_font(12), text_color=COLOR_TEXT_MUTED,
+            ).grid(row=1, column=0, sticky="w", padx=14, pady=(0, 12))
+            return value
+
+        self._stat_today_value    = _card(0, label="Total Violations Today", accent=COLOR_DANGER)
+        self._stat_unreviewed_value = _card(1, label="Pending Review",       accent=COLOR_WARNING)
+        self._stat_students_value = _card(2, label="Students Enrolled",       accent=COLOR_ACCENT)
+        self._stat_last_value     = _card(3, label="Last Violation (local time)",          accent=COLOR_SAFE)
+        return row
+
+    def _build_right_sidebar(self) -> None:
+        sidebar = self._activity_sidebar = ctk.CTkFrame(
+            self, width=SIDEBAR_RIGHT_WIDTH, fg_color=COLOR_SURFACE,
+            corner_radius=CORNER_RADIUS, border_width=1, border_color=COLOR_BORDER,
+        )
+        sidebar.grid(row=1, column=2, sticky="nsew", padx=(0, 10), pady=10)
+        sidebar.grid_propagate(False)
+        sidebar.grid_rowconfigure(1, weight=1)
+
+        ctk.CTkLabel(
+            sidebar, text="Activity & alerts", font=heading_font(18), text_color=COLOR_TEXT,
+        ).grid(row=0, column=0, sticky="w", padx=PADDING, pady=(PADDING, PADDING))
+
+        self._alerts_scroll = LiveAlerts(sidebar, max_cards=MAX_ALERTS)
+        self._alerts_scroll.grid(row=1, column=0, sticky="nsew", padx=PADDING, pady=(0, PADDING))
+        self._alerts_scroll.on_open_unknown = self._open_unknown_sighting
+        self._alerts_scroll.set_monitor_session(self._monitor_session_id)
+        self._alerts_scroll.set_activity_opener(self._open_session_activity)
+        self._alerts_scroll.show_message(
+            "Observation-only mode: new Unknown Logs cannot be saved"
+            if self._observation_only else "No confirmed activity yet")
+
+        ctk.CTkButton(
+            sidebar, text="Clear Alerts", height=36, corner_radius=CORNER_RADIUS,
+            fg_color=COLOR_BORDER, hover_color=COLOR_ACCENT_HOVER,
+            command=self._clear_alerts,
+        ).grid(row=2, column=0, sticky="ew", padx=PADDING, pady=(0, PADDING))
+
+    def _build_menubar(self) -> None:
+        menubar = tk.Menu(self)
+        file_menu = tk.Menu(menubar, tearoff=0)
+        file_menu.add_command(label="Exit", command=self._on_close)
+        menubar.add_cascade(label="File", menu=file_menu)
+        help_menu = tk.Menu(menubar, tearoff=0)
+        help_menu.add_command(label="About CBVMS", command=self._open_about_dialog)
+        menubar.add_cascade(label="Help", menu=help_menu)
+        self.config(menu=menubar)
+
+    def _open_about_dialog(self) -> None:
+        from ui.components import APP_COLLEGE_NAME, APP_VERSION
+
+        win = ctk.CTkToplevel(self)
+        win.title("About CBVMS")
+        win.geometry("460x240")
+        win.configure(fg_color=COLOR_BG)
+        win.resizable(False, False)
+
+        ctk.CTkLabel(
+            win, text="Computer Based Vision Monitoring System (CBVMS)",
+            font=panel_title_font(), text_color=COLOR_TEXT,
+            wraplength=420, justify="center",
+        ).pack(padx=PADDING, pady=(PADDING, 10))
+
+        ctk.CTkLabel(
+            win, text=f"Version {APP_VERSION}\n{APP_COLLEGE_NAME}",
+            font=body_small_font(), text_color=COLOR_TEXT_MUTED, justify="center",
+        ).pack(padx=PADDING, pady=(0, 14))
+
+        ctk.CTkButton(
+            win, text="Close", height=34, corner_radius=CORNER_RADIUS,
+            fg_color=COLOR_BORDER, hover_color=COLOR_ACCENT_HOVER, command=win.destroy,
+        ).pack(pady=(0, PADDING))
+
+    # ------------------------------------------------------------------
+    # Navigation
+    # ------------------------------------------------------------------
+
+    def _open_student_suspensions(self, student_id: str) -> None:
+        self._suspension_student_id = student_id
+        self._on_nav_select("suspensions")
+
+    def _sightings_layout(self, active):
+        compact = active and self._active_nav in {'attendance','unknown','records'}
+        live = self._active_nav == 'live'
+        self._activity_sidebar.grid() if live else self._activity_sidebar.grid_remove()
+        self._title_row.grid_remove() if compact else self._title_row.grid()
+        self.grid_columnconfigure(2, minsize=280 if live else 0)
+        self._center_panel.grid_configure(columnspan=1 if live else 2)
+
+    def _open_unknown_sighting(self, event_id: int, reference_id: str) -> None:
+        self._pending_unknown_event_id = int(event_id)
+        self._pending_unknown_reference = str(reference_id or event_id)
+        self._on_nav_select('unknown')
+
+    def _open_session_activity(self, event_type: str, event_id: int, row) -> None:
+        """Route a card to its exact persisted record, bypassing default filters."""
+        if event_type == 'unknown':
+            self._pending_unknown_event_id = int(event_id)
+            self._on_nav_select('unknown')
+        elif event_type == 'attendance':
+            self._pending_attendance_event_id = int(event_id)
+            self._on_nav_select('attendance')
+        elif event_type == 'violation':
+            self._pending_violation_event_id = int(event_id)
+            self._on_nav_select('violations')
+
+    def _refresh_activity_sightings(self) -> None:
+        if self._closed.is_set() or self._active_nav != 'live' or self._activity_read_busy:
+            return
+        generation = self._activity_generation
+        username, database = self.username, self._database
+        session_id = getattr(self, "_monitor_session_id", None)
+        self._activity_read_busy = True
+        def read():
+            try:
+                rows = database.query_monitor_activity(
+                    username=username, monitor_session_id=session_id, limit=MAX_ALERTS)
+                for row in rows:
+                    if self._closed.is_set() or generation != self._activity_generation:
+                        break
+                    data = row.get('snapshot')
+                    row['thumbnail'] = None
+                    if data:
+                        try:
+                            with Image.open(BytesIO(data)) as source:
+                                if source.width * source.height <= 25_000_000:
+                                    source.load()
+                                    image = source.convert('RGB')
+                                    image.thumbnail((160, 100))
+                                    row['thumbnail'] = image
+                        except Exception:
+                            pass
+                    row['snapshot'] = None  # Keep only the decoded thumbnail across the worker handoff.
+                payload = (generation, username, session_id, rows, None)
+            except Exception as exc:
+                payload = (generation, username, session_id, [], str(exc))
+            try:
+                self._activity_read_result.put_nowait(payload)
+            except queue.Full:
+                pass
+        try:
+            threading.Thread(target=read, daemon=True, name='activity-sightings-read').start()
+        except Exception:
+            self._activity_read_busy = False
+            self._schedule_activity_refresh()
+            return
+        self.after(40, self._deliver_activity_sightings)
+
+    def _deliver_activity_sightings(self) -> None:
+        if self._closed.is_set():
+            return
+        try:
+            payload = self._activity_read_result.get_nowait()
+        except queue.Empty:
+            self.after(40, self._deliver_activity_sightings)
+            return
+        generation, username, session_id, rows, failure = payload
+        self._activity_read_busy = False
+        if (generation == self._activity_generation and self._active_nav == 'live'
+                and username == self.username
+                and session_id == getattr(self, "_monitor_session_id", None)):
+            if failure:
+                self._alerts_scroll.update_persisted_session_activity(())
+                self._alerts_scroll.show_message('Activity unavailable')
+            else:
+                self._alerts_scroll.update_persisted_session_activity(rows)
+        if self._active_nav == 'live':
+            self._schedule_activity_refresh()
+
+    def _schedule_activity_refresh(self) -> None:
+        if self._activity_refresh_job is None and self._active_nav == 'live' and not self._closed.is_set():
+            self._activity_refresh_job = self.after(5000, self._activity_refresh_tick)
+
+    def _activity_refresh_tick(self) -> None:
+        self._activity_refresh_job = None
+        self._refresh_activity_sightings()
+
+    def _on_nav_select(self, key: str) -> None:
+        if key in {"training", "accounts", "recycle_bin"} and not self._is_superadmin:
+            return
+        if key != 'live' and (key in self._views or key in self._panel_factories):
+            workspace = getattr(self, '_monitor_workspace', None)
+            if workspace is not None:
+                workspace.suspend()
+                workspace.close_popup()
+        if key in {"enrollment", "recycle_bin"} and key not in self._views:
+            # Both sidebar destinations share the existing student workspace.
+            if self._enrollment_panel is None:
+                attribute, factory = self._panel_factories["enrollment"]
+                panel = factory()
+                panel.grid_remove()
+                setattr(self, attribute, panel)
+            self._views[key] = self._enrollment_panel
+        if key not in self._views:
+            if key not in self._panel_factories:
+                return
+            attribute, factory = self._panel_factories[key]
+            panel = factory()
+            panel.grid_remove()
+            setattr(self, attribute, panel)
+            self._views[key] = panel
+        panel = self._views[key]
+        if isinstance(panel, AttendancePanel):
+            panel.bind("<<SightingsModeChanged>>", lambda e: self._sightings_layout(e.widget.view.get() == "Unknown / Unrecognized") if e.widget.winfo_ismapped() else None)
+        elif key == "records":
+            panel._attendance_frame.bind("<<SightingsModeChanged>>", lambda e: self._sightings_layout(e.widget.view.get() == "Unknown / Unrecognized") if e.widget.winfo_ismapped() else None)
+        previous_nav = self._active_nav
+        self._activity_generation += 1
+        if self._activity_refresh_job is not None:
+            try:
+                self.after_cancel(self._activity_refresh_job)
+            except Exception:
+                pass
+            self._activity_refresh_job = None
+        if previous_nav != key:
+            self._invalidate_monitor()
+        self._active_nav = key
+        if previous_nav == "appeals" and key != "appeals":
+            self._appeals_panel.on_hide()
+        if key == "appeals":
+            self._activity_sidebar.grid_remove()
+            self._title_row.grid_remove()
+            self._welcome_banner.grid_remove()
+            self.grid_columnconfigure(2, minsize=0)
+            self._center_panel.grid_configure(columnspan=2)
+        elif previous_nav == "appeals":
+            self._activity_sidebar.grid()
+            self._title_row.grid()
+            self._welcome_banner.grid()
+            self.grid_columnconfigure(2, minsize=280)
+            self._center_panel.grid_configure(columnspan=1)
+
+        if key != "appeals" and hasattr(self,"_activity_sidebar"):
+            self._sightings_layout(key in {"unknown", "attendance", "records"})
+
+        # Power saver: entering Live (re)opens the camera if it was released; leaving Live
+        # is handled lazily by the idle watchdog in _update_feed (with a grace window).
+        if key == "live":
+            # Apply any USB discovery results while handling the navigation button,
+            # never asynchronously while the source menu itself may be posted.
+            self._refresh_camera_switcher()
+            self._acquire_camera()
+        elif key == "settings":
+            # Camera discovery opens USB devices briefly.  Stop the live owner first so
+            # the Settings scan cannot contend for the same AVFoundation device.
+            self._halt_camera()
+
+        for nav_key, btn in self._nav_buttons.items():
+            btn.configure(
+                fg_color=COLOR_ACCENT if nav_key == key else "transparent",
+                hover_color=COLOR_ACCENT_HOVER if nav_key == key else COLOR_BORDER,
+            )
+
+        if previous_nav in {"enrollment", "recycle_bin"} and self._enrollment_panel is not None:
+            self._enrollment_panel.on_hide()
+        if previous_nav == "training" and self._training_panel is not None:
+            self._training_panel.on_hide()
+        if previous_nav == "settings" and self._settings_panel is not None:
+            self._settings_panel.on_hide()
+        history_panels = {"suspensions": self._suspensions_panel,
+                          "violation_history": self._violation_history_panel}
+        if previous_nav in history_panels and history_panels[previous_nav] is not None:
+            history_panels[previous_nav].on_hide()
+
+        titles = {
+            "unknown": "Unknown Sightings",
+            "attendance": "Attendance — Campus Sightings",
+            "reports":    "Reports",
+            "live":       "Live Monitor",
+            "enrollment": "Student Management",
+            "recycle_bin": "Recycle Bin",
+            "suspensions": "Suspensions",
+            "violation_history": "Violation History",
+            "violations": "Violation Log",
+            "records":    "Database & Record Management",
+            "training":   "Training",
+            "accounts":   "Account Manager",
+            "settings":   "Settings",
+            "alerts":     "Notifications",
+        }
+        self._center_title.configure(text=titles.get(key, "CBVMS"))
+        if key in {"suspensions", "violation_history"}:
+            self._center_title.pack_forget()
+        else:
+            self._center_title.pack(side="left")
+
+        def _switch_views() -> None:
+            for view in self._views.values():
+                view.grid_remove()
+            self._views[key].grid(row=0, column=0, sticky="nsew")
+            self._view_host.tkraise()
+            if key in {"enrollment", "recycle_bin"} and self._enrollment_panel is not None:
+                self._enrollment_panel.on_show(show_archived=key == "recycle_bin")
+            if key == "violation_history":
+                selected = self._suspensions_panel.records.student_id if self._suspensions_panel and self._suspensions_panel.records else None
+                self._violation_history_panel.on_show(selected)
+            if key == "suspensions":
+                if self._suspension_student_id is None and previous_nav == "violation_history":
+                    self._suspension_student_id = self._violation_history_panel.student_id
+                self._suspensions_panel.on_show(self._suspension_student_id)
+                self._suspension_student_id = None
+            if key == "training" and self._training_panel is not None:
+                self._training_panel.on_show()
+            if key == "violations" and self._violation_panel is not None:
+                if getattr(self, "_pending_violation_event_id", None) is not None:
+                    self._violation_panel.open_exact_violation(self._pending_violation_event_id)
+                    self._pending_violation_event_id = None
+                    return
+                self._violation_panel.refresh()
+            if key == "appeals":
+                self._appeals_panel.on_show()
+            if key == "unknown":
+                self._unknown_panel.view.set("Unknown / Unrecognized")
+                if getattr(self, "_pending_unknown_event_id", None) is not None:
+                    self._unknown_panel.open_exact_unknown(self._pending_unknown_event_id)
+                    self._pending_unknown_event_id = None
+                    self._pending_unknown_reference = None
+                    return
+                if self._pending_unknown_reference is not None:
+                    self._unknown_panel.filters['search'].set(self._pending_unknown_reference)
+                    self._unknown_panel.filters['start'].set('')
+                    self._unknown_panel.filters['end'].set('')
+                    self._unknown_panel.filters['source_id'].set('All')
+                    self._pending_unknown_reference = None
+                    self._unknown_panel.refresh()
+                else:
+                    self._unknown_panel.refresh()
+            if key == "attendance":
+                if getattr(self, "_pending_attendance_event_id", None) is not None:
+                    self._attendance_panel.open_exact_event(self._pending_attendance_event_id)
+                    self._pending_attendance_event_id = None
+                else:
+                    self._attendance_panel.refresh()
+            if key == "reports":
+                self._reports_panel.refresh()
+            if key == "records" and self._records_panel is not None:
+                self._records_panel.on_show()
+            if key == "accounts" and self._account_manager_panel is not None:
+                self._account_manager_panel.on_show()
+            if key == "settings" and self._settings_panel is not None:
+                self._settings_panel.on_show()
+            if key == "alerts" and self._notifications_panel is not None:
+                self._notifications_panel.refresh_external()
+
+        self._fade_transition(_switch_views)
+        if key == "live":
+            self._monitor_card_key = None
+            self._alerts_scroll.update_unknown_sightings(())
+            self._alerts_scroll.show_message(
+                "Observation-only mode: new Unknown Logs cannot be saved"
+                if self._observation_only else "No confirmed activity yet")
+            self._refresh_activity_sightings()
+
+    def _fade_transition(self, on_midpoint) -> None:
+        # Switch views immediately, then force window opacity back to fully opaque.
+        # The previous animated fade compounded transparency when navigations
+        # overlapped (it restored to the mid-fade alpha instead of 1.0), leaving
+        # the window progressively see-through. Always reset to 1.0.
+        on_midpoint()
+        try:
+            self.attributes("-alpha", 1.0)
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------------
+    # Notifications
+    # ------------------------------------------------------------------
+
+    def _on_notification(self, notif) -> None:
+        """UI-thread: show a toast (if enabled) and refresh the bell badge."""
+        if self._notifier.toast_enabled:
+            try:
+                show_toast(
+                    self, f"⚠  {notif.student_name}: {notif.violation}",
+                    type="warning", duration=4000,
+                )
+            except Exception:
+                pass
+        self._update_bell_badge()
+
+    def _update_bell_badge(self) -> None:
+        """Refresh the sidebar bell badge from the notifier's unread count.
+
+        Tolerant of teardown: a notification can be scheduled (after(0, …)) and
+        then run after the window is closed, at which point Tk calls raise
+        TclError — including winfo_exists() — so the whole body is guarded.
+        """
+        badge = getattr(self, "_bell_badge", None)
+        if badge is None:
+            return
+        try:
+            count = self._notifier.unread_count() + getattr(self, "_appeal_unread", 0)
+            if count <= 0:
+                badge.place_forget()
+                return
+            badge.configure(text="9+" if count > 9 else str(count))
+            badge.place(relx=1.0, rely=0.0, anchor="ne", x=-2, y=2)
+        except Exception:
+            pass
+
+    def _mark_all_read(self) -> None:
+        self._notifier.mark_all_read()
+        self._update_bell_badge()
+        if self._notifications_panel is not None:
+            self._notifications_panel.refresh_external()
+
+    def _open_alerts_from_bell(self) -> None:
+        self._on_nav_select("alerts")
+
+    def _open_alert_record(self, category: str, record_id: int | None) -> None:
+        if category == "appeals":
+            self._on_nav_select("appeals")
+            self._appeals_panel.open_alert(category, record_id)
+            return
+        self._on_nav_select("records")
+        if self._records_panel is not None:
+            self._records_panel.open_alert(category, record_id)
+
+    # ------------------------------------------------------------------
+    # Camera preferences
+    # ------------------------------------------------------------------
+
+    def _load_camera_preference(self) -> None:
+        try:
+            from api.camera_store import get_camera_preference
+            pref = get_camera_preference()
+        except Exception:
+            pref = None
+        if not pref:
+            return
+        if pref.get('type') in ('ip', 'rj45'):
+            from api.camera_store import get_saved_ip_cameras
+            saved = next((c for c in get_saved_ip_cameras()
+                          if str(c['id']) == str(pref.get('id', '')).removeprefix('ip_')), None)
+            if saved:
+                pref = dict(saved, id=pref['id'], type='rj45')
+        self._camera_requested_source = dict(pref)
+        cam_type = str(pref.get("type", "")).lower()
+        if cam_type == "usb":
+            self._camera_index_setting = int(pref.get("index", 0))
+            self._camera_source_url = None
+        elif cam_type in ("rj45", "ip"):
+            url = str(pref.get("url", "")).strip()
+            self._camera_source_url = url or None
+
+    def _on_camera_source_connected(self, pref: dict) -> None:
+        self._camera_requested_source = dict(pref)
+        cam_type = str(pref.get("type", "")).lower()
+        if cam_type == "usb":
+            self._camera_index_setting = int(pref.get("index", 0))
+            self._camera_source_url = None
+        elif cam_type in ("rj45", "ip"):
+            self._camera_source_url = str(pref.get("url", "")).strip() or None
+        self._camera_retry_count = 0
+        self._camera_established = False
+        self._cam_source_var.set(str(pref.get('label', 'Camera')))
+        self._cancel_camera_retry()
+        if self._active_nav == "live":
+            self._deferred_start_camera()
+        else:
+            # Settings selects metadata only.  The source opens when Live is shown,
+            # keeping discovery and live capture mutually exclusive.
+            self._halt_camera()
+            self._status_camera.configure(
+                text="Camera: Source selected", text_color=COLOR_TEXT_MUTED
+            )
+
+    def _on_camera_sources_changed(self, cameras: list[dict]) -> None:
+        """Merge USB devices discovered in Settings into the quick switcher."""
+        self._discovered_usb_sources = [
+            dict(cam) for cam in cameras if str(cam.get("type", "")).lower() == "usb"
+        ]
+
+    def _refresh_camera_switcher(self) -> None:
+        """Repopulate the quick source dropdown from the MacBook cam + saved IP cameras."""
+        try:
+            from api.camera_store import get_saved_ip_cameras
+            saved = get_saved_ip_cameras()
+        except Exception:
+            saved = []
+        sources: dict[str, dict] = {}
+
+        def _add_source(label: str, source: dict) -> None:
+            key = label
+            if key in sources and sources[key].get("id") != source.get("id"):
+                key = f"{label} ({str(source.get('id', ''))[-4:]})"
+            sources[key] = source
+
+        usb_by_index: dict[int, dict] = {
+            0: {"id": "usb_0", "type": "usb", "index": 0,
+                "label": usb_camera_label(0), "status": "connected"},
+        }
+        for cam in self._discovered_usb_sources:
+            try:
+                index = int(cam.get("index", 0))
+            except (TypeError, ValueError):
+                continue
+            usb_by_index[index] = {
+                "id": str(cam.get("id") or f"usb_{index}"),
+                "type": "usb",
+                "index": index,
+                "label": usb_camera_label(0) if index == 0 else str(
+                    cam.get("label") or f"USB Camera {index}"
+                ),
+                "status": cam.get("status", "available"),
+            }
+        # Preserve a selected non-zero USB source even before the next discovery scan.
+        if self._camera_source_url is None and self._camera_index_setting not in usb_by_index:
+            index = self._camera_index_setting
+            usb_by_index[index] = {
+                "id": f"usb_{index}", "type": "usb", "index": index,
+                "label": f"USB Camera {index}", "status": "connected",
+            }
+        for index, source in sorted(usb_by_index.items()):
+            _add_source(str(source["label"]), source)
+
+        for cam in saved:
+            label = str(cam.get("label", "IP Camera"))
+            _add_source(
+                label,
+                {"id": f"ip_{cam['id']}", "type": "rj45",
+                 "label": label, "url": cam["url"]},
+            )
+        self._cam_sources = sources
+        values = list(sources.keys())
+        try:
+            self._cam_switcher.set_values(values)
+        except Exception:
+            return
+        # Reflect the currently-active source in the dropdown without re-triggering it.
+        current = usb_camera_label(0)
+        if self._camera_source_url:
+            for k, v in sources.items():
+                if v.get("url") == self._camera_source_url:
+                    current = k
+                    break
+        else:
+            for k, v in sources.items():
+                if v.get("type") == "usb" and int(v.get("index", 0)) == self._camera_index_setting:
+                    current = k
+                    break
+        self._cam_source_var.set(current)
+
+    def _on_switch_camera(self, choice: str) -> None:
+        """Queue a quick switch and return from the native menu callback immediately."""
+        pref = self._cam_sources.get(choice)
+        if not pref:
+            return
+        # A different USB index is a real switch.  A failed source may be selected
+        # again to force a retry instead of being incorrectly treated as a no-op.
+        same_usb = (
+            pref["type"] == "usb"
+            and self._camera_source_url is None
+            and int(pref.get("index", 0)) == self._camera_index_setting
+        )
+        same_ip = pref["type"] == "rj45" and pref.get("url") == self._camera_source_url
+        healthy = self._camera is not None and self._camera.is_open
+        if (same_usb or same_ip) and healthy and self._camera_switch_job is None:
+            return
+        if self._camera_switch_job is not None:
+            try:
+                self.after_cancel(self._camera_switch_job)
+            except Exception:
+                pass
+        if hasattr(self, '_monitor_cancel'):
+            self._monitor_cancel.set()
+        # Dismiss the selector and finish its input event before lifecycle changes.
+        self._camera_switch_job = self.after(
+            1, lambda: self._commit_camera_switch(choice, dict(pref))
+        )
+
+    def _commit_camera_switch(self, choice: str, pref: dict) -> None:
+        self._camera_switch_job = None
+        self._on_camera_source_connected(pref)
+
+    def _apply_camera_settings(
+        self, camera_index: int, resolution: tuple[int, int], fps_cap: int
+    ) -> None:
+        if self._camera_source_url is None:
+            self._camera_index_setting = int(camera_index)
+            self._camera_requested_source = dict(id=f'usb_{camera_index}', type='usb',
+                index=int(camera_index), label=usb_camera_label(int(camera_index)))
+        self._camera_resolution_setting = (int(resolution[0]), int(resolution[1]))
+        self._fps_cap_setting = max(10, min(60, int(fps_cap)))
+        self._feed_interval_ms = max(16, 1000 // self._fps_cap_setting)
+        self._camera_retry_count = 0
+        if self._active_nav == "live":
+            self._deferred_start_camera()
+            message = "Restarting camera…"
+        else:
+            message = "Stream settings saved; they will apply on Live Monitor."
+        show_toast(self, message, type="info", duration=1800)
+
+    # ------------------------------------------------------------------
+    # Camera lifecycle
+    # ------------------------------------------------------------------
+
+    def _camera_needed(self) -> bool:
+        """True while a consumer needs the camera: Live view, or a recent frame request
+        (the enroll wizard / training capture modal pull frames via _get_camera_frame)."""
+        return (
+            self._active_nav == "live"
+            or (time.monotonic() - self._last_frame_request) <= CAMERA_IDLE_RELEASE_SECS
+        )
+
+    def _acquire_camera(self) -> None:
+        """Start the camera if it's currently off (no-op if open/opening)."""
+        if self._camera_state in ('STOPPING', 'CONNECTING', 'WAITING_FOR_FIRST_FRAME', 'ERROR', 'RECONNECTING'):
+            return
+        if self._camera is None:
+            self._camera_retry_count = 0
+            self._deferred_start_camera()
+
+    def _cancel_camera_retry(self) -> None:
+        if self._camera_retry_job is not None:
+            self.after_cancel(self._camera_retry_job)
+            self._camera_retry_job = None
+
+    def _set_camera_state(self, state: str, message: str) -> None:
+        self._camera_state = state
+        self._camera_message = message
+        color = COLOR_SAFE if state == 'STREAMING' else COLOR_DANGER if state == 'ERROR' else COLOR_TEXT_MUTED
+        self._status_camera.configure(text=message, text_color=color)
+        busy = state in ('STOPPING', 'CONNECTING', 'WAITING_FOR_FIRST_FRAME')
+        if busy:
+            self._camera_spinner.pack(side='right', padx=(0, 10), pady=14)
+            self._camera_spinner.start()
+        else:
+            self._camera_spinner.stop()
+            self._camera_spinner.pack_forget()
+        if hasattr(self, '_camera_actions'):
+            if state in ('ERROR', 'RECONNECTING'):
+                self._camera_actions.grid()
+            else:
+                self._camera_actions.grid_remove()
+        if os.environ.get('CBVMS_CAMERA_DIAGNOSTICS') == '1':
+            event('camera_state', state=state, generation=self._camera_generation,
+                  monotonic=time.monotonic())
+
+    def _deferred_start_camera(self) -> None:
+        self._cancel_camera_retry()
+        if self._camera_start_job is not None:
+            self.after_cancel(self._camera_start_job)
+            self._camera_start_job = None
+        self._camera_generation += 1
+        generation = self._camera_generation
+        self._last_frame_request = time.monotonic()
+        if hasattr(self, '_monitor_cancel'):
+            self._invalidate_monitor()
+        previous_done = self._stop_camera()
+        workspace = getattr(self, '_monitor_workspace', None)
+        companion_done = workspace.suspend() if workspace else None
+        self._camera_active_source = None
+        self._camera_open_deadline = None
+        label = self._camera_requested_source.get('label', 'camera')
+        self._set_camera_state('STOPPING' if not previous_done.is_set() else 'CONNECTING',
+                               f'Connecting to {label}…')
+        waiting_since = time.monotonic()
+
+        def wait_for_previous():
+            self._camera_start_job = None
+            if generation != self._camera_generation:
+                return
+            if not previous_done.is_set() or (companion_done is not None and not companion_done.is_set()):
+                if time.monotonic() - waiting_since >= 3:
+                    self._set_camera_state('ERROR', f'{label} unavailable · Previous camera is still stopping. Retry after it releases.')
+                    return
+                self._camera_start_job = self.after(40, wait_for_previous)
+                return
+            self._start_camera_worker(generation)
+
+        self._camera_start_job = self.after(0, wait_for_previous)
+
+    def _start_camera_worker(self, generation: int) -> None:
+        """USB owns its native capture; IP owns a cancellable decoder process."""
+        if generation != self._camera_generation:
+            return
+        source = dict(self._camera_requested_source)
+        is_ip = source.get('type') in ('rj45', 'ip')
+        stop, done = threading.Event(), threading.Event()
+        width, height = self._camera_resolution_setting
+        cap = CameraCapture(camera_index=int(source.get('index', 0)), width=width,
+                            height=height, fps_cap=self._fps_cap_setting, cancel_event=stop)
+        self._camera = cap
+        self._camera_reader_stop = stop
+        self._camera_worker_done = done
+        self._camera_open_deadline = time.monotonic() + (18 if is_ip else 10)
+        self._set_camera_state('WAITING_FOR_FIRST_FRAME', f"Connecting to {source.get('label', 'camera')}…")
+
+        def worker():
+            acquired = False
+            activated = False
+            try:
+                if is_ip:
+                    from api.camera_store import resolve_camera_source
+                    resolved = resolve_camera_source(source, cancel_event=stop)
+                    cap._source_url = cap.source_url = resolved['url']
+                    cap.transport = resolved.get('transport', 'tcp')
+                else:
+                    deadline = time.monotonic() + 3
+                    while not stop.is_set() and time.monotonic() < deadline:
+                        acquired = CAMERA_DEVICE_LOCK.acquire(timeout=.05)
+                        if acquired:
+                            break
+                    if not acquired:
+                        cap.last_error = 'Camera device is busy. Finish camera scanning and retry.'
+                        if not stop.is_set():
+                            self._camera_events.put(('opened', generation, cap, False))
+                        return
+                if stop.is_set():
+                    return
+                if os.environ.get('CBVMS_CAMERA_DIAGNOSTICS') == '1':
+                    event('camera_open_started', generation=generation, monotonic=time.monotonic())
+                ok = cap.open()
+                # Native open alone is not activation. Require a valid cached frame.
+                ok = ok and cap.get_latest_sample() is not None
+                if ok:
+                    try:
+                        settings = cap.get_settings()
+                    except Exception:
+                        settings = {'reported_settings': 'unavailable'}
+                    if os.environ.get('CBVMS_CAMERA_DIAGNOSTICS') == '1':
+                        print(f'[Dashboard camera] requested {width}x{height} '
+                              f'@ {self._fps_cap_setting} FPS; reported {settings}')
+                if not stop.is_set():
+                    self._camera_events.put(('opened', generation, cap, ok))
+                activated = ok
+                last_received = time.monotonic()
+                while ok and not stop.is_set():
+                    frame = cap.read()
+                    if frame is None:
+                        if not cap.is_open or time.monotonic() - last_received > 3:
+                            break
+                        stop.wait(.005)
+                    else:
+                        last_received = time.monotonic()
+            except Exception:
+                # Exceptions from native/credential code may contain complete URLs.
+                cap.last_error = ('Camera connection failed. Check saved credentials and stream settings.'
+                                  if is_ip else 'Local camera failed. Check permissions and retry.')
+                if not stop.is_set():
+                    self._camera_events.put(('opened', generation, cap, False))
+            finally:
+                try:
+                    cap.release()
+                except Exception:
+                    cap.last_error = 'Camera release failed.'
+                    self._camera_events.put(('release_error', generation, cap, False))
+                finally:
+                    if acquired:
+                        CAMERA_DEVICE_LOCK.release()
+                    done.set()
+                    self._camera_events.put(('stopped', generation, cap, activated))
+                    if os.environ.get('CBVMS_CAMERA_DIAGNOSTICS') == '1':
+                        event('camera_owner_stopped', generation=generation, monotonic=time.monotonic())
+
+        self._camera_reader = threading.Thread(target=worker, daemon=True, name=f'camera-{generation}')
+        self._camera_reader.start()
+
+    def _drain_camera_events(self) -> None:
+        deadline = self._camera_open_deadline
+        if deadline is not None and time.monotonic() >= deadline:
+            self._camera_open_deadline = None
+            self._camera_generation += 1
+            self._stop_camera()
+            self._set_camera_state('ERROR', f"{self._camera_requested_source.get('label', 'Camera')} unavailable · Timed out waiting for a frame. Retry or select another source.")
+        while True:
+            try:
+                kind, generation, cap, ok = self._camera_events.get_nowait()
+            except queue.Empty:
+                return
+            if generation != self._camera_generation or self._camera is not cap:
+                continue
+            if kind == 'opened':
+                self._on_camera_opened(cap, ok, generation)
+            elif kind == 'release_error':
+                self._set_camera_state('ERROR', 'Camera release failed. Retry after it releases.')
+            elif kind == 'stopped' and self._camera_state == 'STREAMING':
+                self._invalidate_monitor()
+                self._camera_active_source = None
+                self._schedule_camera_reconnect(generation)
+
+    def _schedule_camera_reconnect(self, generation: int) -> None:
+        label = self._camera_requested_source.get('label', 'Camera')
+        if self._camera_established and self._camera_retry_count < 3 and self._camera_needed():
+            delay = (1, 2, 4)[self._camera_retry_count]
+            self._camera_retry_count += 1
+            self._set_camera_state('RECONNECTING', f'Reconnecting to {label}…')
+            self._cancel_camera_retry()
+            self._camera_retry_job = self.after(delay * 1000, lambda: self._retry_camera(generation))
+        else:
+            self._set_camera_state('ERROR', f'{label} unavailable · Retry or select another source.')
+
+    def _on_camera_opened(self, cap: CameraCapture, ok: bool, generation: int) -> None:
+        if generation != self._camera_generation or self._camera is not cap:
+            return
+        self._camera_open_deadline = None
+        source = dict(self._camera_requested_source)
+        label = source.get('label', 'Camera')
+        if ok and cap.get_latest_sample() is not None:
+            self._camera_active_source = source
+            self._camera_established = True
+            self._set_camera_state('STREAMING', f'Camera: Active · {label}')
+            from api.camera_store import save_camera_preference
+            try:
+                save_camera_preference(source)
+            except OSError:
+                event('camera_preference_save_failed', generation=generation)
+        elif self._camera_established:
+            self._schedule_camera_reconnect(generation)
+        else:
+            self._set_camera_state('ERROR', f'{label} unavailable · {cap.last_error or "No usable frame received. Check camera settings."}')
+
+    def _retry_camera(self, generation: int) -> None:
+        self._camera_retry_job = None
+        if generation == self._camera_generation and self._camera_needed():
+            self._deferred_start_camera()
+
+    def _retry_selected_camera(self) -> None:
+        self._camera_retry_count = 0
+        self._camera_established = False
+        self._deferred_start_camera()
+
+    def _stop_camera(self) -> threading.Event:
+        """Signal only. The owner performs all native release/process cleanup."""
+        stop = self._camera_reader_stop
+        done = self._camera_worker_done
+        self._camera = None
+        self._camera_reader = None
+        self._camera_reader_stop = None
+        if stop is not None:
+            stop.set()
+        return done
+
+    def _halt_camera(self) -> threading.Event:
+        self._cancel_camera_retry()
+        if self._camera_start_job is not None:
+            self.after_cancel(self._camera_start_job)
+            self._camera_start_job = None
+        if self._camera_switch_job is not None:
+            self.after_cancel(self._camera_switch_job)
+            self._camera_switch_job = None
+        self._camera_generation += 1
+        self._camera_open_deadline = None
+        self._camera_active_source = None
+        self._camera_state = 'CANCELLED'
+        self._camera_message = 'Camera: Disconnected'
+        if hasattr(self, '_monitor_cancel'):
+            self._invalidate_monitor()
+        return self._stop_camera()
+
+    def _get_camera_frame(self):
+        # A consumer (enroll wizard / training capture modal) wants a frame — mark the
+        # camera as needed and lazily start it if it was released for power saving.
+        self._last_frame_request = time.monotonic()
+        if self._camera is None:
+            self._acquire_camera()
+        if self._camera and self._camera.is_open:
+            # The reader thread owns cap.read(); calling it here too would mean two
+            # concurrent reads on one VideoCapture (unsafe). Use the latest pumped frame.
+            return self._camera.get_latest_frame()
+        return None
+
+    def _get_camera_sample(self):
+        self._last_frame_request = time.monotonic()
+        if self._camera is None:
+            self._acquire_camera()
+        if self._camera and self._camera.is_open:
+            return self._camera.get_latest_sample()
+        return None
+
+    # ------------------------------------------------------------------
+    # Background face detection worker
+    # ------------------------------------------------------------------
+
+    def _prewarm_models(self) -> None:
+        self._monitor_models.start()
+
+    def _retry_models(self):
+        self._monitor_models.start(retry=True)
+
+    def _on_localized(self, result):
+        """Tracking worker submits its original pixels, landmarks and ownership token."""
+        candidate_observation_route = (getattr(self, "_observation_only", False)
+            and getattr(self, "_candidate_router", None) is not None
+            and (CLEAR_FRAME_SELECTION or PRIORITIZED_ASSESSMENT))
+        if (not result.task.valid() or not self._readiness.ready('recognition')
+                or result.task.context.generation != self._monitor_generation
+                or result.task.camera_generation != self._camera_generation
+                or (result.task.context.captured_at-self._monitor_offer_time < REID_MIN_GAP_SECS
+                    and not candidate_observation_route)):
+            return
+        if getattr(self, "_observation_only", False):
+            if getattr(self, "_candidate_router", None) is not None:
+                self._candidate_router.observe(result,
+                    prioritize=PRIORITIZED_ASSESSMENT,
+                    select=CLEAR_FRAME_SELECTION)
+                self._dispatch_assessment_candidate()
+                return
+            else:
+                task = result.task.for_observation_only(result.observations)
+        else:
+            task = result.task.with_observations(result.observations)
+        self._live_worker.offer(task)
+        self._monitor_offer_time = result.task.context.captured_at
+
+    def _dispatch_assessment_candidate(self):
+        """Dispatch only to the idle worker; called by tracking/worker threads."""
+        router = getattr(self, "_candidate_router", None)
+        worker = getattr(self, "_live_worker", None)
+        if (router is None or worker is None or not getattr(self, "_observation_only", False)
+                or worker.stop_event.is_set()):
+            return
+        candidate = router.next(prioritize=PRIORITIZED_ASSESSMENT)
+        if candidate is None:
+            return
+        from copy import copy
+        task = copy(candidate.task)
+        object.__setattr__(task, "candidate_on_complete", router.complete)
+        if not worker.offer(task):
+            router.complete(candidate.ticket_id, None, "worker_rejected")
+
+    def _on_gallery_revision(self, _revision):
+        """Cancel only queued/in-flight candidate evidence when enrollment reloads."""
+        router = getattr(self, "_candidate_router", None)
+        if router is not None:
+            router.reset()
+
+    def _latest_monitor_sample(self):
+        """Worker-safe read; never starts devices or touches Tk."""
+        camera = self._camera
+        return camera.get_latest_sample() if (camera is not None and camera.is_open
+            and self._camera_state == 'STREAMING') else None
+
+    def _invalidate_monitor(self):
+        PERF.start_monitor()
+        notifier = getattr(self, "_notifier", None)
+        if notifier is not None:
+            notifier.audio.cancel_detection()
+        if hasattr(self, "_tracking_worker"):
+            _drain(self._tracking_worker.requests)
+            _drain(self._tracking_worker.results)
+            self._tracking_result = None
+            self._tracking_projections.clear()
+            self._tracking_last_offered = None
+        self._monitor_cancel.set()
+        self._monitor_cancel = threading.Event()
+        self._monitor_generation += 1
+        self._monitor_result = None
+        self._monitor_projections.clear()
+        self._monitor_last_offered = None
+        self._monitor_last_rendered = None
+        self._monitor_render_key = None
+        self._monitor_card_key = None
+        self._monitor_status_text = None
+        self._preview_times.clear()
+        self._analysis_times.clear()
+        self._tracking_times.clear()
+        if getattr(self, "_candidate_router", None) is not None:
+            self._candidate_router.reset()
+        _drain(self._live_worker.requests)
+        _drain(self._live_worker.results)
+        if getattr(self, "_alerts_scroll", None) is not None:
+            self._alerts_scroll.mark_all_inactive()
+
+    def _monitor_rows(self, sample):
+        for name, projections in (("_monitor_result", self._monitor_projections),
+                                  ("_tracking_result", self._tracking_projections)):
+            result = getattr(self, name)
+            if result is not None and (not result.task.valid()
+                    or result.task.context.generation != self._monitor_generation
+                    or result.task.camera_generation != self._camera_generation
+                    or result.task.context.frame_id[0] != sample.frame_id[0]):
+                event("frame_rejected", stage="display", reason="expired_or_obsolete_session",
+                      frame_id=result.task.context.frame_id)
+                setattr(self, name, None)
+                projections.clear()
+        rows = self._project_rows(self._monitor_result, self._monitor_projections, sample)
+        tracking = self._project_rows(self._tracking_result, self._tracking_projections, sample)
+        if self._tracking_result is not None and self._tracking_result.observations is not None:
+            # One presence namespace. A result is attached only to the track that
+            # supplied its original pixels, and only while optical flow validates it.
+            by_presence={r['presence_id']:r for r in rows}
+            combined=[]
+            for current in tracking:
+                assessed=by_presence.get(current['presence_id'])
+                if assessed is not None:
+                    a,b=current['face_box'],assessed['face_box']
+                    overlap=max(0,min(a[2],b[2])-max(a[0],b[0]))*max(0,min(a[3],b[3])-max(a[1],b[1]))
+                    area=max(1,(a[2]-a[0])*(a[3]-a[1]))
+                    if overlap/area >= .5:
+                        # Current geometry, same-person validated original evidence.
+                        assessed.update(face_box=current['face_box'],torso_box=current['torso_box'])
+                        if current['torso_box'] is None and assessed.get('state') != 'Enrollment review':
+                            assessed.update(state='Uniform not assessed',reason=current['reason'],
+                                            detail=current['reason'],accepted_categories=())
+                        current=assessed
+                combined.append(current)
+            return combined
+        for row in tracking:
+            a = row['face_box']
+            if not any(max(a[0], b['face_box'][0]) < min(a[2], b['face_box'][2]) and
+                       max(a[1], b['face_box'][1]) < min(a[3], b['face_box'][3]) for b in rows):
+                # A detection-only presence cannot inherit a delayed student's result.
+                row['presence_id'] = "tracking:" + row['presence_id']
+                rows.append(row)
+        return rows
+
+    def _project_rows(self, result, projections, sample):
+        if result is None or not result.task.valid():
+            return []
+        if (result.task.context.generation != self._monitor_generation
+                or result.task.camera_generation != self._camera_generation
+                or result.task.context.frame_id[0] != sample.frame_id[0]):
+            return []
+        gray = None
+        rows = []
+        for assessment in result.assessments:
+            row = asdict(assessment)
+            row.update(observed_at=result.task.observed_at, detail=assessment.reason)
+            projection = projections.get(assessment.track_id)
+            if sample.frame_id == result.task.context.frame_id:
+                box = assessment.face_box
+            elif projection is not None:
+                if gray is None:
+                    gray = MotionProjection.gray_frame(sample.frame)
+                box = projection.advance(sample.frame, gray)
+            else:
+                box = None
+            if box is None:
+                # Never attach an old name or verdict to a newly occupied location.
+                if projection is not None and not getattr(projection,'withheld_logged',False):
+                    event('overlay_withheld', presence_id=assessment.presence_id,
+                          frame_id=result.task.context.frame_id, reason='motion_not_verified')
+                    projection.withheld_logged=True
+                continue
+            offset = getattr(projection,'offset',None) if projection is not None else None
+            dx,dy = offset if isinstance(offset,tuple) and len(offset)==2 else (
+                box[0]-max(0,assessment.face_box[0]), box[1]-max(0,assessment.face_box[1]))
+            row['face_box'] = box
+            if assessment.torso_box:
+                x1,y1,x2,y2 = assessment.torso_box
+                row['torso_box'] = (x1+dx,y1+dy,x2+dx,y2+dy)
+            rows.append(row)
+        return rows
+
+    @staticmethod
+    def _measured_rate(times, now):
+        recent = [t for t in times if now-t <= 5.0]
+        return (len(recent)-1)/(recent[-1]-recent[0]) if len(recent)>1 else 0.0
+
+    def _schedule_feed_update(self) -> None:
+        self._feed_deadline = time.monotonic() + self._feed_interval_ms/1000
+        self._feed_period_ms = self._feed_interval_ms
+        self._feed_job = self.after(self._feed_interval_ms, self._update_feed)
+
+    def _update_feed(self) -> None:
+        if self._closed.is_set():
+            return
+        started = time.monotonic()
+        try:
+            self._drain_camera_events()
+            notification = _drain(self._notification_out)
+            if notification is not None and (notification.valid_if is None or notification.valid_if()):
+                self._on_notification(notification)
+            stats = _drain(self._stats_out)
+            if stats is not None:
+                for widget, value in zip((self._stat_today_value, self._stat_unreviewed_value,
+                                          self._stat_students_value, self._stat_last_value), stats):
+                    if widget is not None:
+                        widget.configure(text=value)
+            if self._camera is not None and not self._camera_needed():
+                self._halt_camera()
+            if self._active_nav == "live":
+                model_message = self._readiness.message()
+                if model_message != getattr(self, '_model_status_text', None):
+                    self._status_models.configure(text=model_message)
+                    self._model_status_text = model_message
+                failed = any(v.state == 'failed' for v in self._readiness.snapshot().values())
+                if failed != getattr(self, '_model_retry_enabled', None):
+                    self._retry_model_btn.configure(state="normal" if failed else "disabled")
+                    self._model_retry_enabled = failed
+                attendance_status = writer_status(self._database)
+                if attendance_status != getattr(self, '_attendance_status_text', None):
+                    self._attendance_writer_status.configure(text=attendance_status)
+                    self._attendance_status_text = attendance_status
+                sample = self._latest_monitor_sample()
+                if sample is None or started-sample.captured_at > 1.0:
+                    if self._monitor_last_rendered is not None:
+                        self._invalidate_monitor()
+                    message = ('Camera: Reconnecting…' if self._camera_state == 'STREAMING'
+                               else self._camera_message)
+                    self._status_camera.configure(text=message, text_color=COLOR_WARNING)
+                    self._monitor_status_text = message
+                    self.camera_feed.show_placeholder(message)
+                else:
+                    self._last_frame_request = started
+                    PERF.first("first_camera_frame")
+                    tracking = _drain(self._tracking_worker.results)
+                    if (tracking is not None and tracking.task.valid()
+                            and tracking.task.context.generation == self._monitor_generation
+                            and tracking.task.camera_generation == self._camera_generation
+                            and tracking.task.context.frame_id[0] == sample.frame_id[0]):
+                        self._tracking_times.append(started)
+                        self._tracking_result = tracking
+                        self._tracking_projections = {a.track_id: MotionProjection(tracking.task.frame, a.face_box)
+                                                      for a in tracking.assessments}
+                    if (self._readiness.ready('face') and sample.frame_id != self._tracking_last_offered
+                            and started-self._tracking_offer_time >= .12):
+                        self._tracking_worker.offer(MonitorTask(
+                            FrameContext(self._monitor_generation, sample.frame_id, sample.captured_at),
+                            sample.frame, sample.captured_wall_time or time.time()-(started-sample.captured_at), self._monitor_cancel,
+                            uniform_enabled=self._checker.check_uniform, earring_enabled=self._checker.check_earring,
+                            camera_generation=self._camera_generation,
+                            source_id=str((self._camera_active_source or {}).get('id', '')),
+                            source_label=str((self._camera_active_source or {}).get('label', 'Camera'))))
+                        self._tracking_last_offered = sample.frame_id
+                        self._tracking_offer_time = started
+                    result = _drain(self._live_worker.results)
+                    if (result is not None and result.task.valid()
+                            and result.task.context.generation == self._monitor_generation
+                            and result.task.camera_generation == self._camera_generation
+                            and result.task.context.frame_id[0] == sample.frame_id[0]):
+                        if self._monitor_result is None or self._monitor_result.task.context.frame_id != result.task.context.frame_id:
+                            self._analysis_times.append(started)
+                        self._monitor_result = result
+                        PERF.observe("result_to_ui", max(0., time.monotonic()-result.finished_at))
+                        if TRACES.enabled:
+                            with TRACES.observation(result.task, "ui_available", None):
+                                TRACES.result(result)
+                        self._monitor_projections = {
+                            a.track_id: MotionProjection(result.task.frame, a.face_box)
+                            for a in result.assessments}
+                    render_key = (sample.frame_id, self._mirror.display_mirror(),
+                                  self.camera_feed.winfo_width(), self.camera_feed.winfo_height())
+                    expired = self._monitor_result is not None and not self._monitor_result.task.valid()
+                    rows = self._monitor_rows(sample)
+                    if render_key != self._monitor_render_key or result is not None or tracking is not None or expired:
+                        card_key = tuple((row['presence_id'], row['state'], row['student_id'],
+                                          row['reason'], row['observed_at']) for row in rows)
+                        if card_key != self._monitor_card_key:
+                            activity_rows = []
+                            result_for_rows = self._monitor_result
+                            task = result_for_rows.task if result_for_rows is not None else None
+                            for row in rows:
+                                activity_rows.append(dict(row,
+                                    monitor_session_id=getattr(self, "_monitor_session_id", None),
+                                    source_id=str((self._camera_active_source or {}).get('id', '')),
+                                    source_label=str((self._camera_active_source or {}).get('label', 'Camera')),
+                                    monitor_generation=task.context.generation if task else self._monitor_generation,
+                                    camera_generation=task.camera_generation if task else self._camera_generation))
+                            self._alerts_scroll.update_assessments(rows)
+                            self._alerts_scroll.update_session_assessments(
+                                activity_rows, monitor_generation=self._monitor_generation)
+                            self._monitor_card_key = card_key
+                        self._display_rows = tuple(rows)
+                        with measure("ui_render"):
+                            annotated = draw_assessments(sample.frame, rows, mirror=self._mirror.display_mirror())
+                            rendered = self.camera_feed.render(self._mirror.apply_anim(annotated))
+                        if rendered:
+                            PERF.observe("preview_age", time.monotonic()-sample.captured_at)
+                            if sample.frame_id != self._monitor_last_rendered:
+                                self._preview_times.append(started)
+                            self._monitor_last_rendered = sample.frame_id
+                            self._monitor_render_key = render_key
+                    result = self._monitor_result
+                    detail = (result.detail if result is not None and result.task.valid() and result.detail else
+                              self._tracking_result.detail if self._tracking_result is not None
+                              and self._tracking_result.task.valid() else "Waiting for analysis")
+                    if rows:
+                        detail = ' · '.join(dict.fromkeys(r['state'] for r in rows))
+                    if (detail == "No faces detected" and self._tracking_result is not None
+                            and self._tracking_result.task.valid() and self._tracking_result.assessments):
+                        detail = "Face detected · Identity uncertain"
+                    for worker in (self._tracking_worker, self._live_worker):
+                        if worker.last_error:
+                            detail = f"Analysis failed: {worker.last_error}"
+                        elif worker.active_task is not None and started-worker.active_since > 3:
+                            detail += " · Slow analysis; stale results rejected"
+                    mode_label = ("OBSERVATION ONLY · NO ATTENDANCE OR DISCIPLINE SAVED · "
+                                  if self._observation_only else "")
+                    status_text = f"{mode_label}Camera: Active · {(self._camera_active_source or {}).get('label', 'Camera')} · {detail}"
+                    if status_text != getattr(self, '_monitor_status_text', None):
+                        self._status_camera.configure(text=status_text, text_color=COLOR_SAFE)
+                        self._monitor_status_text = status_text
+            if started-self._metrics_time >= 1:
+                self._metrics_time = started
+                self._status_fps.configure(text=f"Preview {self._measured_rate(self._preview_times, started):.1f} FPS · "
+                                          f"Tracking {self._measured_rate(self._tracking_times, started):.1f}/s · "
+                                          f"Analysis {self._measured_rate(self._analysis_times, started):.1f}/s")
+                if PERF.enabled and started-getattr(self, "_performance_report_at", 0.) >= 5.:
+                    self._performance_report_at = started
+                    event("performance_summary", timings=PERF.snapshot())
+        except Exception as exc:
+            print(f"[CBVMS] feed error: {exc}")
+        if not self._closed.is_set():
+            deadline = (getattr(self, '_feed_deadline', None)
+                        if getattr(self, '_feed_period_ms', None) == self._feed_interval_ms else None)
+            self._feed_deadline, delay = next_preview_tick(
+                deadline, started, time.monotonic(), self._feed_interval_ms)
+            self._feed_period_ms = self._feed_interval_ms
+            self._feed_job = self.after(delay, self._update_feed)
+
+    # ------------------------------------------------------------------
+    # Clock & stats
+    # ------------------------------------------------------------------
+
+    def _tick_clock(self) -> None:
+        self._datetime_label.configure(text=datetime.now().strftime("%A, %d %b %Y  %H:%M:%S"))
+        self._clock_job = self.after(1000, self._tick_clock)
+
+    def _schedule_stats_refresh(self) -> None:
+        if self._stats_job:
+            try:
+                self.after_cancel(self._stats_job)
+            except Exception:
+                pass
+            self._stats_job = None
+        self._refresh_stats()
+
+    def _refresh_stats(self) -> None:
+        if not self._closed.is_set() and not self._stats_busy.is_set():
+            self._stats_busy.set()
+            threading.Thread(target=self._read_stats, daemon=True, name="monitor-statistics").start()
+        if not self._closed.is_set():
+            self._stats_job = self.after(10_000, self._refresh_stats)
+
+    def _read_stats(self):
+        try:
+            self._database.process_expired_deadlines()
+            start, end = local_calendar_day_utc_bounds(date.today().isoformat())
+            with self._database.connect() as conn:
+                today = conn.execute("SELECT COUNT(*) FROM violations WHERE datetime(timestamp)>=datetime(?) AND datetime(timestamp)<datetime(?)", (start,end)).fetchone()[0]
+                pending = conn.execute("SELECT COUNT(*) FROM violations WHERE status='pending_review'").fetchone()[0]
+                from core.academic_calendar import resolve_term
+                term=resolve_term(conn)
+                students = conn.execute("SELECT COUNT(*) FROM student_term_enrollments WHERE status='confirmed' AND semester_id=?",(term.get('id'),)).fetchone()[0]
+                last = conn.execute("SELECT MAX(timestamp) FROM violations").fetchone()[0]
+            from core.discipline import parse_db_datetime
+            stamp = parse_db_datetime(last).astimezone().strftime("%m-%d %H:%M:%S") if last else "—"
+            if not self._closed.is_set():
+                _put_latest(self._stats_out, (str(today),str(pending),str(students),stamp))
+        except Exception as exc:
+            print(f"[CBVMS] statistics unavailable: {exc}")
+        finally:
+            self._stats_busy.clear()
+
+    # ------------------------------------------------------------------
+    # Alerts
+    # ------------------------------------------------------------------
+
+    def _clear_alerts(self) -> None:
+        self._alerts_scroll.note_monitor_generation(self._monitor_generation)
+        self._alerts_scroll.clear_session_activity()
+        self._alerts_scroll.clear()
+
+    def _logout(self) -> None:
+        self._logout_requested = True
+        self._on_close()
+
+    def _on_close(self) -> None:
+        self._closed.set()
+        workspace = getattr(self, '_monitor_workspace', None)
+        if workspace is not None:
+            self._companion_done = workspace.close()
+        self._activity_generation += 1
+        if self._activity_refresh_job is not None:
+            try:
+                self.after_cancel(self._activity_refresh_job)
+            except Exception:
+                pass
+            self._activity_refresh_job = None
+        gallery_listener = getattr(self, "_gallery_listener", None)
+        if gallery_listener is not None:
+            self._recognizer.remove_gallery_listener(gallery_listener)
+            self._gallery_listener = None
+        models = getattr(self, "_monitor_models", None)
+        if models is not None:
+            models.cancel_pending()
+        self._notifier.close()
+        self._monitor_cancel.set()
+        self._tracking_worker.stop()
+        self._live_worker.stop()
+        if self._enrollment_panel is not None:
+            self._enrollment_panel.on_hide()
+        if self._training_panel is not None:
+            self._training_panel.on_hide()
+        if self._camera_switch_job is not None:
+            try:
+                self.after_cancel(self._camera_switch_job)
+            except Exception:
+                pass
+            self._camera_switch_job = None
+        for job_attr in ("_feed_job", "_clock_job", "_stats_job", "_appeal_count_job"):
+            job = getattr(self, job_attr, None)
+            if job:
+                try:
+                    self.after_cancel(job)
+                except Exception:
+                    pass
+                setattr(self, job_attr, None)
+        self._halt_camera()
+        self.camera_feed.cleanup()
+        self.destroy()
+
+
+def open_dashboard(
+    username: str = "admin",
+    *,
+    database=None,
+    recognizer=None,
+    person_detector=None,
+    monitor_models=None,
+    staff_session_token=None,
+) -> bool:
+    """Run the dashboard. Returns True if the user logged out (vs. closed the app)."""
+    app = CBVMSDashboard(
+        username=username,
+        database=database,
+        recognizer=recognizer,
+        person_detector=person_detector,
+        monitor_models=monitor_models,
+        staff_session_token=staff_session_token,
+    )
+    app.mainloop()
+    app._monitor_models.cancel_pending()
+    if database is not None and staff_session_token:
+        database.revoke_staff_session(staff_session_token)
+    # Let cancelled native calls return before Python tears down ONNX/PyTorch
+    # types. Otherwise closing the window can emit spurious model-type errors.
+    deadline=time.monotonic()+5
+    for worker in (app._tracking_worker,app._live_worker):
+        worker.done.wait(max(0,deadline-time.monotonic()))
+    app._live_worker.writes_done.wait(max(0,deadline-time.monotonic()))
+    if app._live_worker.attendance_writer is not None:
+        writer=app._live_worker.attendance_writer
+        if not writer.done.wait(max(0,deadline-time.monotonic())):
+            event('attendance_shutdown_incomplete',status=writer.status())
+            print('[Attendance] Shutdown deadline reached: '+writer.status())
+    writer=app._live_worker.processor.security_writer
+    if writer is not None and not writer.done.wait(max(0,deadline-time.monotonic())):
+        event('unknown_sightings_shutdown_incomplete',status=writer.status())
+        print('[Unknown sightings] Shutdown deadline reached: '+writer.status())
+    app._camera_worker_done.wait(max(0,deadline-time.monotonic()))
+    companion_done = getattr(app, "_companion_done", None)
+    if companion_done is not None and not companion_done.wait(max(0, deadline-time.monotonic())):
+        event("companion_preview_shutdown_incomplete")
+    app._monitor_models.wait(max(0,deadline-time.monotonic()))
+    return getattr(app, "_logout_requested", False)

@@ -1,0 +1,86 @@
+{
+  "physical": true,
+  "observation_only": true,
+  "temporary_database": true,
+  "phases": [
+    {
+      "name": "front gate Focus",
+      "seconds": 8.03,
+      "primary_samples": 151,
+      "companion_samples": 0,
+      "cpu_percent": 114.1,
+      "rss_mb": 1223.6,
+      "status": "Preview 19.9 FPS \u00b7 Tracking 7.6/s \u00b7 Analysis 1.9/s",
+      "primary": "front gate \u00b7 Observation only",
+      "secondary": "MacBook Camera \u00b7 Preview only \u00b7 Select another saved camera",
+      "size": [
+        1280,
+        800
+      ]
+    },
+    {
+      "name": "front gate Split",
+      "seconds": 8.03,
+      "primary_samples": 149,
+      "companion_samples": 151,
+      "cpu_percent": 127.4,
+      "rss_mb": 993.0,
+      "status": "Preview 19.6 FPS \u00b7 Tracking 7.6/s \u00b7 Analysis 1.8/s",
+      "primary": "front gate \u00b7 Observation only",
+      "secondary": "MacBook Camera \u00b7 Preview only \u00b7 Preview only \u00b7 no analysis or logs",
+      "size": [
+        1280,
+        800
+      ]
+    },
+    {
+      "name": "MacBook Camera Focus",
+      "seconds": 8.04,
+      "primary_samples": 150,
+      "companion_samples": 0,
+      "cpu_percent": 871.5,
+      "rss_mb": 867.4,
+      "status": "Preview 29.8 FPS \u00b7 Tracking 7.6/s \u00b7 Analysis 1.9/s",
+      "primary": "MacBook Camera \u00b7 Observation only",
+      "secondary": "front gate \u00b7 Preview only \u00b7 Select another saved camera",
+      "size": [
+        1280,
+        800
+      ]
+    },
+    {
+      "name": "MacBook Camera Split",
+      "seconds": 8.03,
+      "primary_samples": 145,
+      "companion_samples": 145,
+      "cpu_percent": 864.8,
+      "rss_mb": 853.7,
+      "status": "Preview 29.3 FPS \u00b7 Tracking 7.5/s \u00b7 Analysis 1.9/s",
+      "primary": "MacBook Camera \u00b7 Observation only",
+      "secondary": "front gate \u00b7 Preview only \u00b7 Preview only \u00b7 no analysis or logs",
+      "size": [
+        1280,
+        800
+      ]
+    }
+  ],
+  "errors": [],
+  "navigation": "settings/enrollment/live passed",
+  "popup": "shared session, source title, Other camera, F11/Escape events passed",
+  "retry": "explicit retry with owner released passed",
+  "shutdown": {
+    "primary": true,
+    "companions": true,
+    "live": true,
+    "tracking": true,
+    "logout": true
+  },
+  "record_counts": {
+    "attendance": 0,
+    "violations": 0,
+    "attendance_events": 0,
+    "attendance_receipts": 0,
+    "attendance_settings": 1,
+    "attendance_legacy": 0
+  }
+}

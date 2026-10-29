@@ -1,0 +1,85 @@
+{
+  "renders": 703,
+  "render_ms": 885.9282007906586,
+  "max_render_ms": 11.03295898064971,
+  "errors": [],
+  "phases": {
+    "startup": {
+      "renders": 238,
+      "render_ms": 220.71407816838473,
+      "configure_events": 5
+    },
+    "focus_pop": {
+      "renders": 35,
+      "render_ms": 32.515087514184415,
+      "configure_events": 0
+    },
+    "resize": {
+      "renders": 48,
+      "render_ms": 79.55608214251697,
+      "configure_events": 0
+    },
+    "minimize": {
+      "renders": 19,
+      "render_ms": 18.188832909800112,
+      "configure_events": 0
+    },
+    "restore": {
+      "renders": 25,
+      "render_ms": 51.689540850929916,
+      "configure_events": 0
+    },
+    "fullscreen": {
+      "renders": 31,
+      "render_ms": 126.04945769999176,
+      "configure_events": 0
+    },
+    "exit_fullscreen": {
+      "renders": 49,
+      "render_ms": 98.26712438371032,
+      "configure_events": 0
+    },
+    "close": {
+      "renders": 36,
+      "render_ms": 36.13954002503306,
+      "configure_events": 0
+    },
+    "split": {
+      "renders": 34,
+      "render_ms": 21.99911663774401,
+      "configure_events": 0
+    },
+    "split_pop": {
+      "renders": 59,
+      "render_ms": 67.95975391287357,
+      "configure_events": 0
+    },
+    "close_again": {
+      "renders": 57,
+      "render_ms": 37.94962458778173,
+      "configure_events": 0
+    },
+    "reopen": {
+      "renders": 72,
+      "render_ms": 94.899961957708,
+      "configure_events": 0
+    },
+    "source_switch": {
+      "renders": 0,
+      "render_ms": 0.0,
+      "configure_events": 2
+    },
+    "return": {
+      "renders": 0,
+      "render_ms": 0.0,
+      "configure_events": 9
+    }
+  },
+  "primary_stopped": true,
+  "analysis_stopped": true,
+  "max_gap_ms": 1807.3485000059009,
+  "p95_gap_ms": 72.50549993477762,
+  "heartbeats": 437,
+  "sessions": 2,
+  "clean_stop": true
+}

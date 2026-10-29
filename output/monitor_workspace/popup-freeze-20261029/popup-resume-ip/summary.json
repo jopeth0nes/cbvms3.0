@@ -1,0 +1,90 @@
+{
+  "renders": 636,
+  "render_ms": 801.1412457562983,
+  "max_render_ms": 8.174667018465698,
+  "errors": [],
+  "phases": {
+    "startup": {
+      "renders": 183,
+      "render_ms": 158.18295627832413,
+      "configure_events": 5
+    },
+    "focus_pop": {
+      "renders": 25,
+      "render_ms": 26.46871015895158,
+      "configure_events": 0
+    },
+    "resize": {
+      "renders": 48,
+      "render_ms": 98.40070887003094,
+      "configure_events": 0
+    },
+    "minimize": {
+      "renders": 14,
+      "render_ms": 16.087207361124456,
+      "configure_events": 0
+    },
+    "restore": {
+      "renders": 24,
+      "render_ms": 48.87466412037611,
+      "configure_events": 0
+    },
+    "fullscreen": {
+      "renders": 36,
+      "render_ms": 119.5330829359591,
+      "configure_events": 0
+    },
+    "exit_fullscreen": {
+      "renders": 46,
+      "render_ms": 92.1656257705763,
+      "configure_events": 0
+    },
+    "close": {
+      "renders": 26,
+      "render_ms": 22.915789857506752,
+      "configure_events": 0
+    },
+    "split": {
+      "renders": 36,
+      "render_ms": 21.66341501288116,
+      "configure_events": 0
+    },
+    "split_pop": {
+      "renders": 69,
+      "render_ms": 82.07770984154195,
+      "configure_events": 0
+    },
+    "close_again": {
+      "renders": 51,
+      "render_ms": 30.505997710861266,
+      "configure_events": 0
+    },
+    "reopen": {
+      "renders": 69,
+      "render_ms": 78.28591973520815,
+      "configure_events": 0
+    },
+    "source_switch": {
+      "renders": 8,
+      "render_ms": 5.3599580423906446,
+      "configure_events": 4
+    },
+    "return": {
+      "renders": 0,
+      "render_ms": 0.0,
+      "configure_events": 9
+    },
+    "final_pop": {
+      "renders": 1,
+      "render_ms": 0.6195000605657697,
+      "configure_events": 0
+    }
+  },
+  "primary_stopped": true,
+  "analysis_stopped": true,
+  "max_gap_ms": 1800.8891670033336,
+  "p95_gap_ms": 65.3904170030728,
+  "heartbeats": 447,
+  "sessions": 4,
+  "clean_stop": true
+}

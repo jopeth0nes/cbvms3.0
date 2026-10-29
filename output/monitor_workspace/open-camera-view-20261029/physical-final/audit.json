@@ -1,0 +1,19 @@
+{
+  "capture_operations_on_main": 0,
+  "maximum_camera_windows_at_snapshots": 1,
+  "maximum_companion_owners_at_snapshots": 1,
+  "largest_gaps": [
+    {
+      "ms": 1797.2347079776227,
+      "after_action": "settings"
+    },
+    {
+      "ms": 665.9235419938341,
+      "after_action": "restore"
+    },
+    {
+      "ms": 625.9038749849424,
+      "after_action": "minimize"
+    }
+  ]
+}

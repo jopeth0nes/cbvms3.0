@@ -1,0 +1,9 @@
+{
+  "ui/monitor_workspace.py": "1fb43e3965ca52f92194fa32503e2db89c12d838d2261b95bb2cb6d16fcd9ff5",
+  "ui/dashboard.py": "57fa6567cdd83d08c5799de12bb57903f353141b5d9cdfd63c673ff9cc780bb9",
+  "core/preview_session.py": "e0b2b6a2b30d15bf9f36dcfe9227d23fb6e3206e248aa1803f1ed6c16b0221c0",
+  "ui/camera_source_selector.py": "dae58282247998b872a90c9c4e533d27e67900c1017454bd95f0b21214ecf3a7",
+  "scripts/verify_monitor_popup.py": "e2d4b66ea9805f2af59b2d83c56fd82f34f9e4fd49d28dd32ffb9c460ad47e9c",
+  "scripts/monitor_handoff_diagnostics.py": "56e85308bf9d8a5874c8fc90c8f1d75ebb8be7ff22d04eb1489890ccc6d97b3a",
+  "scripts/monitor_normal_diagnostics.py": "9258f32a0715635002cc7bf16812070e72c50f84abad49c616a5c87759bb2427"
+}

@@ -1,0 +1,9 @@
+{
+  "ui/monitor_workspace.py": "46f7c009ae8c6248afa70f221ce70b83f0f1f5b10343857791d85c29e9c737c7",
+  "ui/dashboard.py": "2ceed58c1d045b6de5be38da463dc0bfb3eaee061d180082377a7406a66ccd44",
+  "ui/camera_view_dialog.py": "94a13f2b4311f987ee8614c99ae50fced82ae5fac6814f49f0dd537bab2c647a",
+  "api/camera_store.py": "dc73df6e43862d8519f4ce87a5554b11a9cf282f9c7ae96ccc8e5b68c1afdea2",
+  "scripts/monitor_view_diagnostics.py": "e340e3ac4ab787b0189e12a13d24f3fa7b0c0874d4e419ecb7a0960e36ffc9dc",
+  "scripts/verify_monitor_popup.py": "71f6323bdf9d276203b0da73a1cdc5f397d33d18271f5f5942cd1126fcb72700",
+  "scripts/monitor_normal_diagnostics.py": "d8d6edbe3253b6367037854e6fa5805b69eef10a52de9ea152519b614dde58ec"
+}

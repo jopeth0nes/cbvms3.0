@@ -1,3 +1,8 @@
+> Current presentation workflow: **Open camera view** chooses one or both cameras
+> for Live Monitor or one reusable separate window. Analysis ownership is unchanged.
+> See [current checkpoint, tests and rollback](OPEN_CAMERA_VIEW_CHECKPOINT.md).
+> The implementation/history below describes the original integration.
+
 # Two-camera monitor workspace — first implementation
 
 Based on `fad3e6e` (alerts update). This implements a primary analyzed stream plus

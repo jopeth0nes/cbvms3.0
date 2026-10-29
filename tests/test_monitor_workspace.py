@@ -12,7 +12,7 @@ def workspace():
         _popup_feed=None, _last={}, _failed_key=None, _choice_sources={},
         selector=MagicMock(), tabs=MagicMock(), primary_label=MagicMock(),
         secondary_label=MagicMock(), secondary_feed=MagicMock(), after=MagicMock(),
-        close_popup=MagicMock(), _tick=MagicMock())
+        close_popup=MagicMock(), after_cancel=MagicMock(), _tick=MagicMock())
     p.selector.get.return_value = 'Front Gate'
     p.tabs.get.return_value = 'Split'
     p.dashboard = SimpleNamespace(_active_nav='live', _closed=threading.Event(),
@@ -22,6 +22,74 @@ def workspace():
 
 
 class WorkspaceTests(unittest.TestCase):
+    def test_stale_popup_callbacks_cannot_affect_replacement(self):
+        p = workspace()
+        old = MagicMock()
+        current = p._popup = MagicMock()
+        MonitorWorkspace._close_popup_instance(p, old)
+        MonitorWorkspace._fullscreen_popup_instance(p, old, True)
+        MonitorWorkspace._popup_destroyed(p, SimpleNamespace(widget=old))
+        p.close_popup.assert_not_called()
+        current.attributes.assert_not_called()
+        self.assertIs(p._popup, current)
+
+    def test_minimized_focus_popup_does_not_copy_or_render_frames(self):
+        p = workspace()
+        p.tabs.get.return_value = 'Focus'
+        p._popup = MagicMock()
+        p._popup.state.return_value = 'iconic'
+        p._popup_feed = MagicMock()
+        p.session = MagicMock(key=('ip', 'gate'))
+        p.session.done.is_set.return_value = False
+        MonitorWorkspace._tick(p)
+        p.session.sample.assert_not_called()
+        p.session.stop.assert_not_called()
+        p._popup_feed.render.assert_not_called()
+
+    def test_unmapped_tile_does_not_render(self):
+        p = workspace()
+        p.secondary_feed.winfo_ismapped.return_value = False
+        p.session = MagicMock(key=('ip', 'gate'))
+        p.session.done.is_set.return_value = False
+        MonitorWorkspace._tick(p)
+        p.session.sample.assert_not_called()
+        p.secondary_feed.render.assert_not_called()
+
+    def test_minimized_popup_preserves_visible_tile_and_restores_latest(self):
+        p = workspace()
+        p._popup = MagicMock()
+        p._popup.state.return_value = 'iconic'
+        p._popup_feed = MagicMock()
+        p.session = MagicMock(key=('ip', 'gate'))
+        p.session.done.is_set.return_value = False
+        p.session.sample.return_value = SimpleNamespace(frame_id=1, frame=object())
+        MonitorWorkspace._tick(p)
+        p.secondary_feed.render.assert_called_once()
+        p._popup_feed.render.assert_not_called()
+        p.session.stop.assert_not_called()
+        p._popup.state.return_value = 'normal'
+        p.session.sample.return_value = SimpleNamespace(frame_id=2, frame=object())
+        MonitorWorkspace._tick(p)
+        p._popup_feed.render.assert_called_once_with(p.session.sample.return_value.frame)
+
+    def test_direct_popup_destroy_clears_references(self):
+        p = workspace()
+        popup = p._popup = MagicMock()
+        p._popup_feed = MagicMock()
+        p._last = {'window': 1, 'tile': 2}
+        MonitorWorkspace._popup_destroyed(p, SimpleNamespace(widget=popup))
+        self.assertIsNone(p._popup)
+        self.assertIsNone(p._popup_feed)
+        self.assertEqual(p._last, {'tile': 2})
+
+    def test_closed_tick_does_not_reschedule(self):
+        p = workspace()
+        p._closed = True
+        p._job = 'pending'
+        MonitorWorkspace._tick(p)
+        p.after_cancel.assert_called_once_with('pending')
+        p.after.assert_not_called()
+
     @patch('ui.monitor_workspace.PreviewSession')
     def test_split_starts_only_other_camera(self, factory):
         p = workspace()
