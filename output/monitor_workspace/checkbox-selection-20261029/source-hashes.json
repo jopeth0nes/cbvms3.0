@@ -1,0 +1,7 @@
+{
+  "ui/camera_view_dialog.py": "f6f859f6f136d7ff2fd237cf24295251f6f1bd24afb639009214874dd2d5ca73",
+  "ui/monitor_workspace.py": "38225cc882a81b5270e41cbb4d57fb9c4d21b6a0b42d4fb114c65771ed84d4b6",
+  "tests/test_camera_view.py": "17d2b951b84ddb5b2f4c4dc26ac4c14cdd37bacb2d5d0c36f6e2be85966b2d31",
+  "tests/test_camera_view_native_ui.py": "2e99ac7bda03a72f29b016724159c318b838584d764c2b19951625068446ca17",
+  "scripts/monitor_view_diagnostics.py": "1622c21815830c69d2a26c83ae44c47859eec02dd62b8cddbcff0c84c5173259"
+}

@@ -1,0 +1,153 @@
+{
+  "cycles_completed": 0,
+  "renders": 1181,
+  "render_ms": 983.5833421675488,
+  "max_render_ms": 6.504249991849065,
+  "errors": [],
+  "phases": {
+    "startup": {
+      "renders": 243,
+      "render_ms": 218.49295927677304,
+      "configure_events": 5
+    },
+    "usb_primary": {
+      "renders": 17,
+      "render_ms": 14.420040417462587,
+      "configure_events": 0
+    },
+    "dialog_cancel": {
+      "renders": 16,
+      "render_ms": 13.158584129996598,
+      "configure_events": 0
+    },
+    "usb_separate": {
+      "renders": 36,
+      "render_ms": 45.06908799521625,
+      "configure_events": 0
+    },
+    "close_single": {
+      "renders": 17,
+      "render_ms": 13.439581962302327,
+      "configure_events": 0
+    },
+    "main_other": {
+      "renders": 12,
+      "render_ms": 12.505290796980262,
+      "configure_events": 0
+    },
+    "main_both": {
+      "renders": 23,
+      "render_ms": 14.552044100128114,
+      "configure_events": 0
+    },
+    "both_separate": {
+      "renders": 54,
+      "render_ms": 38.08187379036099,
+      "configure_events": 0
+    },
+    "gate_only_reconfigure": {
+      "renders": 36,
+      "render_ms": 34.29454320576042,
+      "configure_events": 0
+    },
+    "usb_only_reconfigure": {
+      "renders": 46,
+      "render_ms": 47.87317314185202,
+      "configure_events": 0
+    },
+    "both_again": {
+      "renders": 56,
+      "render_ms": 40.966539876535535,
+      "configure_events": 0
+    },
+    "resize": {
+      "renders": 48,
+      "render_ms": 38.72745577245951,
+      "configure_events": 0
+    },
+    "minimize": {
+      "renders": 27,
+      "render_ms": 17.464833916164935,
+      "configure_events": 0
+    },
+    "restore": {
+      "renders": 56,
+      "render_ms": 46.678043669089675,
+      "configure_events": 0
+    },
+    "fullscreen": {
+      "renders": 38,
+      "render_ms": 54.738621111027896,
+      "configure_events": 0
+    },
+    "exit_fullscreen": {
+      "renders": 50,
+      "render_ms": 41.709329350851476,
+      "configure_events": 0
+    },
+    "close_both": {
+      "renders": 27,
+      "render_ms": 17.991378786973655,
+      "configure_events": 0
+    },
+    "ip_primary": {
+      "renders": 13,
+      "render_ms": 7.8583345748484135,
+      "configure_events": 4
+    },
+    "usb_companion": {
+      "renders": 39,
+      "render_ms": 33.197085722349584,
+      "configure_events": 0
+    },
+    "close_usb_companion": {
+      "renders": 24,
+      "render_ms": 14.604461030103266,
+      "configure_events": 0
+    },
+    "both_ip_primary": {
+      "renders": 45,
+      "render_ms": 31.083410140126944,
+      "configure_events": 0
+    },
+    "reconfigure_ip_only": {
+      "renders": 36,
+      "render_ms": 34.572124015539885,
+      "configure_events": 0
+    },
+    "reconfigure_both": {
+      "renders": 44,
+      "render_ms": 30.78733489383012,
+      "configure_events": 0
+    },
+    "return_live": {
+      "renders": 14,
+      "render_ms": 8.640957996249199,
+      "configure_events": 11
+    },
+    "usb_back": {
+      "renders": 14,
+      "render_ms": 9.011624846607447,
+      "configure_events": 4
+    },
+    "final_both": {
+      "renders": 123,
+      "render_ms": 88.05025287438184,
+      "configure_events": 0
+    },
+    "final_close": {
+      "renders": 27,
+      "render_ms": 15.614374773576856,
+      "configure_events": 0
+    }
+  },
+  "view_steps_completed": 27,
+  "primary_stopped": true,
+  "analysis_stopped": true,
+  "tracking_stopped": true,
+  "max_gap_ms": 1774.4101249845698,
+  "p95_gap_ms": 68.65770800504833,
+  "heartbeats": 599,
+  "sessions": 4,
+  "clean_stop": true
+}

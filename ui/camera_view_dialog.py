@@ -93,7 +93,7 @@ class CameraViewDialog(ctk.CTkToplevel):
             self._closed_callback(self)
 
     def selection(self):
-        return [key for key, var in self._vars.items() if self.getvar(var)]
+        return [key for key, var in self._vars.items() if self.tk.getboolean(self.getvar(var))]
 
     def refresh(self):
         keys = self.selection()

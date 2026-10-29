@@ -170,7 +170,18 @@ class MonitorWorkspace(ctk.CTkFrame):
         return (feed is not None and feed.winfo_exists() and feed.winfo_ismapped()
                 and feed.winfo_toplevel().state() not in ('withdrawn', 'iconic'))
 
+    def _sync_selected_views(self):
+        primary = getattr(self.dashboard, '_camera_requested_source', None)
+        if primary is not None:
+            self._sync_presentation(primary, self._choice_sources)
+
     def primary_targets(self):
+        # A primary-source switch can precede the companion poll. Reassign roles
+        # and discard old pixels before the dashboard renders into any target.
+        if self._popup is not None:
+            signature = getattr(self, '_popup_layout_signature', None)
+            if signature is None or signature[0] != source_key(self.dashboard._camera_requested_source):
+                self._sync_selected_views()
         targets = [self.primary_feed]
         if self._popup_keys and source_key(self.dashboard._camera_requested_source) in self._popup_keys:
             targets.append(self._popup_primary_feed)
@@ -203,6 +214,14 @@ class MonitorWorkspace(ctk.CTkFrame):
         signature = (key, tuple(self._popup_keys or ()), tuple(sources))
         if self._popup is not None and self._popup_keys is not None and signature != getattr(self, '_popup_layout_signature', None):
             self._popup_layout_signature = signature
+            # Reused role canvases may contain pixels from a different source.
+            # Clear on Tk before exposing the newly selected arrangement.
+            for feed in (self._popup_primary_feed, self._popup_feed):
+                feed.cleanup()
+                feed.show_placeholder('Connecting')
+            for label in self._popup_labels.values():
+                label.configure(text='Connecting')
+            self._last.pop('window', None)
             self._popup_keys = tuple(k for k in self._popup_keys if k in sources)
             if not self._popup_keys:
                 self.close_popup()
@@ -235,6 +254,9 @@ class MonitorWorkspace(ctk.CTkFrame):
         self._popup_layout_signature = None
         if self._popup is not None and self._popup.winfo_exists():
             self._last.clear()
+            self._sync_selected_views()
+            if self._popup is None:
+                return
             self._popup.deiconify()
             self._popup.lift()
             return
@@ -267,13 +289,12 @@ class MonitorWorkspace(ctk.CTkFrame):
                 self._popup_feed = feed
             ctk.CTkButton(tile, text='Retry', width=70, font=(theme_font['family'], theme_font['size']),
                           command=lambda r=role: self.retry_source(r)).grid(row=2, column=0)
-        # Legacy callers open the companion; presentation is reconciled next tick.
-        self._popup_secondary_tile.grid(row=1, column=0, sticky='nsew')
         popup = self._popup
         self._popup.protocol('WM_DELETE_WINDOW', lambda: self._close_popup_instance(popup))
         self._popup.bind('<Destroy>', self._popup_destroyed, add='+')
         self._popup.bind('<F11>', lambda _: self._fullscreen_popup_instance(popup, None))
         self._popup.bind('<Escape>', lambda _: self._fullscreen_popup_instance(popup, False))
+        self._sync_selected_views()
         self._last.clear()
 
     def retry_source(self, role):

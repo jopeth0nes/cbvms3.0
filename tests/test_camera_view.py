@@ -15,6 +15,16 @@ SOURCES = {USB: dict(type='usb', index=0, label='MacBook'), IP: dict(type='ip', 
 
 
 class ViewSelectionTests(unittest.TestCase):
+    def test_checkbox_tcl_boolean_values(self):
+        import tkinter as tk
+        from ui.camera_view_dialog import CameraViewDialog
+        interp = tk.Tcl()
+        for value, expected in [('0', []), ('1', [USB]), (0, []), (1, [USB])]:
+            with self.subTest(value=value):
+                interp.setvar('selected', value)
+                dialog = SimpleNamespace(_vars={USB:'selected'}, tk=interp.tk, getvar=interp.getvar)
+                self.assertEqual(CameraViewDialog.selection(dialog), expected)
+
     def test_missing_or_malformed_preference_falls_back(self):
         for preference in (None, {'sources': [['ip', 'deleted']]}, {'sources': 'bad'}, {'sources': [['usb', []]]}):
             self.assertEqual(validated_selection(preference, SOURCES, USB), ([USB], 'Live Monitor'))

@@ -1,5 +1,6 @@
 """Accepted-view workflow in one real dashboard, driven through actual controls."""
 import time
+import tkinter as tk
 from core.preview_session import source_key
 
 
@@ -16,10 +17,20 @@ def start_views(root, ws, stats, record, snapshot, finish, phase):
     def configure(keys, destination):
         ws.open_view_dialog()
         dialog=ws._dialog
-        for key,var in dialog._vars.items(): dialog.setvar(var,int(key in keys))
+        for key,var in dialog._vars.items():
+            if dialog.tk.getboolean(dialog.getvar(var)) != (key in keys):
+                control=next(w for w in dialog._cards[key].winfo_children() if isinstance(w,tk.Checkbutton))
+                control.invoke()
+        assert set(dialog.selection()) == set(keys), 'Checkbox selection disagrees with requested IDs'
+        assert ('Side-by-side' if len(keys)==2 else 'Focus') in dialog.preview.cget('text')
         dialog.setvar(dialog.destination,destination)
         dialog.refresh()
         dialog.open_button.invoke()
+        if destination == 'Separate window':
+            assert set(ws._popup_keys) == set(keys)
+            primary=source_key(root._camera_requested_source)
+            assert bool(ws._popup_primary_tile.winfo_manager()) == (primary in keys)
+            assert bool(ws._popup_secondary_tile.winfo_manager()) == any(k != primary for k in keys)
     def popup_frames(both=False):
         feeds=[ws._popup_feed,ws._popup_primary_feed] if both else [ws._popup_feed]
         return ws._popup is not None and all(f and f._photo is not None for f in feeds)
@@ -31,6 +42,9 @@ def start_views(root, ws, stats, record, snapshot, finish, phase):
            ('main_other',lambda:configure([ip],'Live Monitor'),lambda:ws._last.get('tile') is not None),
            ('main_both',lambda:configure([usb,ip],'Live Monitor'),lambda:ws.tabs.get()=='Split'),
            ('both_separate',lambda:configure([usb,ip],'Separate window'),lambda:popup_frames(True)),
+           ('gate_only_reconfigure',lambda:configure([ip],'Separate window'),popup_frames),
+           ('usb_only_reconfigure',lambda:configure([usb],'Separate window'),lambda:ws._popup_primary_feed._photo is not None),
+           ('both_again',lambda:configure([usb,ip],'Separate window'),lambda:popup_frames(True)),
            ('resize',lambda:ws._popup.geometry('1050x650'),lambda:True),
            ('minimize',lambda:ws._popup.iconify(),lambda:True),
            ('restore',lambda:ws._popup.deiconify(),lambda:True),

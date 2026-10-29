@@ -43,6 +43,77 @@ class CameraViewNativeTests(unittest.TestCase):
         self.root.after(ms,self.root.quit)
         self.root.mainloop()
 
+    def test_real_uncheck_front_gate_only(self):
+        import tkinter as tk
+        self.pref.return_value={'sources':[list(USB),list(IP)]}
+        self.ws.open_view_dialog()
+        dialog=self.ws._dialog
+        control=next(w for w in dialog._cards[USB].winfo_children() if isinstance(w,tk.Checkbutton))
+        control.invoke()
+        self.assertEqual(dialog.getvar(dialog._vars[USB]),'0')
+        self.assertEqual(dialog.selection(),[IP])
+
+    def test_real_checkboxes_drive_selection_and_reconfigured_window(self):
+        import tkinter as tk
+        from ui.components import COLOR_ACCENT, COLOR_BORDER
+        popup = None
+        # Each chooser starts with both checked, reproducing uncheck via Tcl.
+        self.pref.return_value={'sources':[list(USB),list(IP)], 'destination':'Separate window'}
+        for wanted in ([USB,IP], [IP], [USB], [USB,IP], []):
+            self.ws.open_view_dialog()
+            dialog=self.ws._dialog
+            controls={key:next(w for w in card.winfo_children() if isinstance(w,tk.Checkbutton))
+                      for key,card in dialog._cards.items()}
+            for key in (USB,IP):
+                if key not in wanted: controls[key].invoke()
+            # Toggle the other camera on and back off from a single selection.
+            if len(wanted)==1:
+                other=IP if wanted==[USB] else USB
+                controls[other].invoke()
+                controls[other].invoke()
+            self.assertEqual(dialog.selection(),wanted)
+            for key,card in dialog._cards.items():
+                self.assertEqual(card.cget('highlightbackground'),COLOR_ACCENT if key in wanted else COLOR_BORDER)
+            self.assertEqual(str(dialog.open_button.cget('state')),'normal' if wanted else 'disabled')
+            self.assertIn('Side-by-side' if len(wanted)==2 else 'Focus' if wanted else 'Select',dialog.preview.cget('text'))
+            previous_calls=self.save.call_count
+            dialog.submit()
+            if not wanted:
+                dialog.focus_force()
+                dialog.event_generate('<Return>')
+                self.assertEqual(self.save.call_count,previous_calls)
+                self.assertEqual(self.ws._popup_keys,(USB,IP))
+                dialog.cancel()
+                continue
+            self.save.assert_called_with(wanted,'Separate window')
+            self.assertEqual(self.ws._popup_keys,tuple(wanted))
+            if popup is not None: self.assertIs(self.ws._popup,popup)
+            popup=self.ws._popup
+            self.assertIsNone(self.ws._popup_primary_feed._photo)
+            self.assertIsNone(self.ws._popup_feed._photo)
+            # Geometry manager state must agree BEFORE the next polling tick.
+            self.assertEqual(bool(self.ws._popup_primary_tile.winfo_manager()),USB in wanted)
+            self.assertEqual(bool(self.ws._popup_secondary_tile.winfo_manager()),IP in wanted)
+            self.pump()
+            self.assertEqual(self.ws._popup_primary_feed in self.ws.primary_targets(),USB in wanted)
+            self.assertEqual(bool(self.ws._popup_feed.winfo_ismapped()),IP in wanted)
+        active_keys=self.ws._popup_keys
+        self.ws.open_view_dialog()
+        dialog=self.ws._dialog
+        control=next(w for w in dialog._cards[USB].winfo_children() if isinstance(w,tk.Checkbutton))
+        control.invoke()
+        dialog.cancel()
+        self.assertEqual(self.ws._popup_keys,active_keys)
+        self.assertIs(self.ws._popup,popup)
+        # Explicit IDs survive role reversal; no old pixels remain on reassignment.
+        self.ws.accept_view([USB],'Separate window')
+        self.dashboard._camera_requested_source=SOURCES[IP]
+        self.ws.primary_targets()
+        self.assertEqual(self.ws._popup_keys,(USB,))
+        self.assertFalse(self.ws._popup_primary_tile.winfo_manager())
+        self.assertTrue(self.ws._popup_secondary_tile.winfo_manager())
+        self.assertIsNone(self.ws._popup_feed._photo)
+
     def test_dialog_cancel_keyboard_scaling_and_single_instance(self):
         for scale in (1,1.25):
             ctk.set_widget_scaling(scale)

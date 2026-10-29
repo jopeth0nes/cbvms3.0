@@ -181,3 +181,76 @@ old scripts and measurement evidence. Do not restore all files from HEAD: that w
 lose the accepted uncommitted freeze fixes. The feature preference file, if created
 later during normal review, is separate from the primary/camera configuration and
 may be retained harmlessly after rollback. No git reset/clean/branch switch required.
+
+## Checkbox selection correction — 29 October 2026
+
+Baseline: clean `main` at `47a9d37`. This correction is uncommitted; do not push
+until the user manually accepts it. Earlier baseline/rollback instructions above
+refer to the original feature, not this small correction.
+
+Confirmed cause: the REAL Tk Checkbutton's `invoke()` sets unchecked values to the
+string `"0"`. `selection()` used Python truthiness, so that unchecked source stayed
+selected. Before the fix, both the headless Tcl regression (`value='0'`) and native
+`test_real_uncheck_front_gate_only` failed: actual `[USB, IP]`, expected `[IP]`.
+This explains the selected borders, Side-by-side preview and wrong submitted IDs.
+A second native assertion exposed deferred layout: the initial both-camera window
+had no primary tile gridded until the next poll.
+
+Correction:
+- `ui/camera_view_dialog.py`: use `self.tk.getboolean(self.getvar(var))` in the
+  existing authoritative `selection()` method. Refresh and submit continue to use
+  that result for borders, layout text, enabled state, accepted IDs and preferences.
+  Named Tcl variables, disposal, fonts and event handling are unchanged.
+- `ui/monitor_workspace.py`: reconcile popup selection immediately at creation and
+  reconfiguration. Clear old role-canvas images on Tk before mapping selected tiles;
+  reconcile role changes before primary rendering as well as during companion polls.
+  This avoids old/unselected tiles or pixels lingering for a poll interval. Capture
+  subscriptions remain derived from accepted IDs and other consumers; no capture,
+  inference, thread, GC or device-ownership changes were introduced.
+- `tests/test_camera_view.py`: real Tcl string/integer 0/1 regression, alongside
+  existing stale/missing preference checks.
+- `tests/test_camera_view_native_ui.py`: real Checkbutton invocation, each single
+  choice, both/none, toggling on/off, matching borders/text/submitted and saved IDs,
+  Enter-disabled submission, immediate mapping/image cleanup, existing-window
+  reconfiguration, cancel preservation and stable IDs through primary role reversal.
+- `scripts/monitor_view_diagnostics.py`: use actual checkbox invocation instead of
+  assigning integers; assert selection and immediate tile layout; add both → Front
+  Gate → MacBook → both reconfiguration to the same-process physical scenario.
+
+Verification:
+
+```sh
+.venv/bin/python -m unittest tests.test_camera_view tests.test_monitor_workspace tests.test_preview_session tests.test_camera_switching tests.test_live_dashboard tests.test_live_monitor_ui -q
+.venv/bin/python -m unittest tests.test_camera_view_native_ui tests.test_monitor_workspace_native_ui -q
+.venv/bin/python scripts/verify_monitor_popup.py --view-workflow --physical usb --output-dir /private/tmp/cbvms-checkbox-physical
+```
+
+100 headless/fake-widget tests passed. Nine distinct native tests passed (seven
+chooser, two workspace), including the existing worker-GC/font regression. The
+native chooser suite was rerun after adding explicit stale-image and cancel checks.
+The physical automated run used actual dialog controls, both cameras, temporary DB,
+observation-only mode and suppressed preference writes. All 27 steps passed;
+MacBook primary → views/reconfiguration → Front Gate primary → MacBook pop-out →
+both → Settings/back → MacBook primary → clean logout remained in ONE process.
+No callback errors, primary/tracking/analysis stopped, all four companion sessions
+stopped. 599 heartbeats, p95 68.66 ms, maximum 1774.41 ms following Settings navigation;
+1181 renders, maximum individual render 6.50 ms. No watchdog stall was triggered.
+This is automated physical/UI verification, not a claim of user manual acceptance.
+The existing Settings navigation pause was not part of this fix.
+
+Evidence: `output/monitor_workspace/checkbox-selection-20261029/` contains summary,
+provenance, sanitized events, source hashes and empty successful watchdog/stack
+outputs. Originals remain in `/private/tmp/cbvms-checkbox-physical`. `git diff --check`
+passes. No commit/push, production writes, camera configuration changes, or new
+simultaneous analysis were performed.
+
+Manual acceptance: use the isolated login command above with a fresh output folder.
+Open both cameras separately, reopen the chooser, uncheck MacBook: only Front Gate
+has a teal border, preview says Focus, and Open replaces the window with one Front
+Gate tile. Repeat MacBook only, both, neither (Open and Enter must not submit), and
+Cancel. Switch primary via Source and confirm explicit display selections persist.
+
+Next action: user manual verification, then commit/push only if explicitly requested.
+To undo only this correction, restore the five implementation/test/script files
+listed in this section to their `47a9d37` versions after preserving any later edits.
+Keep the evidence/checkpoint; do not apply the earlier feature rollback instructions.
