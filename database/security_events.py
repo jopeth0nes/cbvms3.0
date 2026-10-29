@@ -11,7 +11,7 @@ UNKNOWN_COLUMNS = ('observed_at', 'source_label', 'source_id', 'reference_id',
 
 def migrate_security_events(conn):
     columns = {r[1] for r in conn.execute('PRAGMA table_info(security_events)')}
-    for name in ('event_key', 'source_id', 'source_label', 'session_id'):
+    for name in ('event_key', 'source_id', 'source_label', 'session_id', 'evidence_key', 'monitor_session_id'):
         if name not in columns:
             conn.execute(f'ALTER TABLE security_events ADD COLUMN {name} TEXT')
     for name, kind in (('context_snapshot','BLOB'), ('evidence_metadata','TEXT')):
@@ -19,7 +19,10 @@ def migrate_security_events(conn):
             conn.execute(f'ALTER TABLE security_events ADD COLUMN {name} {kind}')
     # NULL keys preserve every historical row, including historical duplicates.
     conn.execute('CREATE UNIQUE INDEX IF NOT EXISTS security_event_key ON security_events(event_key)')
+    # No backfill: legacy evidence lacks a trustworthy acquisition identity.
+    conn.execute('CREATE UNIQUE INDEX IF NOT EXISTS security_evidence_key ON security_events(evidence_key)')
     conn.execute('CREATE INDEX IF NOT EXISTS security_event_source_time ON security_events(source_id, observed_at)')
+    conn.execute('CREATE INDEX IF NOT EXISTS security_event_monitor_session ON security_events(monitor_session_id,observed_at,id)')
 
 
 class SecurityEventStore:
@@ -53,7 +56,7 @@ class SecurityEventStore:
         return ' AND '.join(where), args
 
     _security_columns = """id, observed_at, presence_id, semester_id, term_classification,
-        COALESCE(event_key,'legacy:'||id) reference_id,
+        COALESCE(event_key,'legacy:'||id) reference_id, monitor_session_id,
         COALESCE(NULLIF(source_id,''),'Unavailable') source_id,
         COALESCE(NULLIF(source_label,''),'Camera not recorded') source_label,
         CASE WHEN (snapshot IS NOT NULL AND length(snapshot)>0) OR length(context_snapshot)>0 THEN 'Available' ELSE 'Unavailable' END snapshot_available,
@@ -74,6 +77,21 @@ class SecurityEventStore:
                 "COALESCE(source_label,?) source_label FROM security_events WHERE event_code='unknown_person' "
                 'ORDER BY source_label,source_id', (UNAVAILABLE_CAMERA,)).fetchall()
         return dict(rows=[dict(r) for r in rows], count=count, page=page, sources=[dict(r) for r in sources])
+
+    def query_unknown_sighting_by_id(self, *, username, event_id):
+        """Authorized exact-ID lookup for a destination opened from Activity."""
+        self._attendance_staff_only()
+        try:
+            event_id = int(event_id)
+        except (TypeError, ValueError):
+            return None
+        if event_id <= 0:
+            return None
+        with self.connect() as conn:
+            self._security_access(conn, username)
+            row = conn.execute(f'SELECT {self._security_columns} FROM security_events '
+                "WHERE event_code='unknown_person' AND id=?", (event_id,)).fetchone()
+        return dict(row) if row else None
 
     def iter_unknown_sightings(self, *, username, filters=None, selected_ids=None):
         self._attendance_staff_only()

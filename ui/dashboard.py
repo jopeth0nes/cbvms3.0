@@ -10,10 +10,13 @@ import time
 import tkinter as tk
 from collections import deque
 from datetime import date, datetime
+from datetime import timezone
 
 import cv2
 import customtkinter as ctk
 import numpy as np
+from PIL import Image
+from io import BytesIO
 
 from core.camera import CAMERA_DEVICE_LOCK, CameraCapture, usb_camera_label
 from core.discipline import local_calendar_day_utc_bounds
@@ -220,6 +223,11 @@ class CBVMSDashboard(WorkspaceWindow):
         self._tracking_times = deque(maxlen=30)
         self._metrics_time = 0.0
         self._closed = threading.Event()
+        self._activity_generation = 0
+        self._activity_read_busy = False
+        self._activity_read_result = queue.Queue(maxsize=1)
+        self._activity_refresh_job = None
+        self._pending_unknown_reference = None
         PERF.start_monitor()
         self._monitor_models = monitor_models or MonitorModels(
             self._recognizer, self._person_detector, self._trainer, self._uniform_matcher)
@@ -238,6 +246,8 @@ class CBVMSDashboard(WorkspaceWindow):
             state=LiveState(LiveConfig(violation_min_confidence=UNIFORM_VIOLATION_CONF)),
             observation_only=OBSERVATION_ONLY,
         )
+        self._monitor_session_id = self._processor.security_session
+        self._monitor_session_started_at = datetime.now(timezone.utc)
         self._processor.audio_task_valid = lambda task: (
             not self._closed.is_set()
             and task.context.generation == self._monitor_generation
@@ -303,6 +313,7 @@ class CBVMSDashboard(WorkspaceWindow):
         self._build_menubar()
         self._tick_clock()
         self._schedule_feed_update()
+        self.after_idle(self._refresh_activity_sightings)
         self.after(80, self._deferred_start_camera)   # start the camera ASAP after the UI maps
         self.after(16, self.reveal_when_ready)
 
@@ -661,6 +672,12 @@ class CBVMSDashboard(WorkspaceWindow):
 
         self._alerts_scroll = LiveAlerts(sidebar, max_cards=MAX_ALERTS)
         self._alerts_scroll.grid(row=1, column=0, sticky="nsew", padx=PADDING, pady=(0, PADDING))
+        self._alerts_scroll.on_open_unknown = self._open_unknown_sighting
+        self._alerts_scroll.set_monitor_session(self._monitor_session_id)
+        self._alerts_scroll.set_activity_opener(self._open_session_activity)
+        self._alerts_scroll.show_message(
+            "Observation-only mode: new Unknown Logs cannot be saved"
+            if self._observation_only else "No confirmed activity yet")
 
         ctk.CTkButton(
             sidebar, text="Clear Alerts", height=36, corner_radius=CORNER_RADIUS,
@@ -712,16 +729,100 @@ class CBVMSDashboard(WorkspaceWindow):
         self._on_nav_select("suspensions")
 
     def _sightings_layout(self, active):
-        if self._active_nav == 'appeals': return
-        active = active and self._active_nav in {'attendance','unknown','records'}
-        if active:
-            self._activity_sidebar.grid_remove()
-            self._title_row.grid_remove()
-        else:
-            self._activity_sidebar.grid()
-            self._title_row.grid()
-        self.grid_columnconfigure(2,minsize=0 if active else 280)
-        self._center_panel.grid_configure(columnspan=2 if active else 1)
+        compact = active and self._active_nav in {'attendance','unknown','records'}
+        live = self._active_nav == 'live'
+        self._activity_sidebar.grid() if live else self._activity_sidebar.grid_remove()
+        self._title_row.grid_remove() if compact else self._title_row.grid()
+        self.grid_columnconfigure(2, minsize=280 if live else 0)
+        self._center_panel.grid_configure(columnspan=1 if live else 2)
+
+    def _open_unknown_sighting(self, event_id: int, reference_id: str) -> None:
+        self._pending_unknown_event_id = int(event_id)
+        self._pending_unknown_reference = str(reference_id or event_id)
+        self._on_nav_select('unknown')
+
+    def _open_session_activity(self, event_type: str, event_id: int, row) -> None:
+        """Route a card to its exact persisted record, bypassing default filters."""
+        if event_type == 'unknown':
+            self._pending_unknown_event_id = int(event_id)
+            self._on_nav_select('unknown')
+        elif event_type == 'attendance':
+            self._pending_attendance_event_id = int(event_id)
+            self._on_nav_select('attendance')
+        elif event_type == 'violation':
+            self._pending_violation_event_id = int(event_id)
+            self._on_nav_select('violations')
+
+    def _refresh_activity_sightings(self) -> None:
+        if self._closed.is_set() or self._active_nav != 'live' or self._activity_read_busy:
+            return
+        generation = self._activity_generation
+        username, database = self.username, self._database
+        session_id = getattr(self, "_monitor_session_id", None)
+        self._activity_read_busy = True
+        def read():
+            try:
+                rows = database.query_monitor_activity(
+                    username=username, monitor_session_id=session_id, limit=MAX_ALERTS)
+                for row in rows:
+                    if self._closed.is_set() or generation != self._activity_generation:
+                        break
+                    data = row.get('snapshot')
+                    row['thumbnail'] = None
+                    if data:
+                        try:
+                            with Image.open(BytesIO(data)) as source:
+                                if source.width * source.height <= 25_000_000:
+                                    source.load()
+                                    image = source.convert('RGB')
+                                    image.thumbnail((160, 100))
+                                    row['thumbnail'] = image
+                        except Exception:
+                            pass
+                    row['snapshot'] = None  # Keep only the decoded thumbnail across the worker handoff.
+                payload = (generation, username, session_id, rows, None)
+            except Exception as exc:
+                payload = (generation, username, session_id, [], str(exc))
+            try:
+                self._activity_read_result.put_nowait(payload)
+            except queue.Full:
+                pass
+        try:
+            threading.Thread(target=read, daemon=True, name='activity-sightings-read').start()
+        except Exception:
+            self._activity_read_busy = False
+            self._schedule_activity_refresh()
+            return
+        self.after(40, self._deliver_activity_sightings)
+
+    def _deliver_activity_sightings(self) -> None:
+        if self._closed.is_set():
+            return
+        try:
+            payload = self._activity_read_result.get_nowait()
+        except queue.Empty:
+            self.after(40, self._deliver_activity_sightings)
+            return
+        generation, username, session_id, rows, failure = payload
+        self._activity_read_busy = False
+        if (generation == self._activity_generation and self._active_nav == 'live'
+                and username == self.username
+                and session_id == getattr(self, "_monitor_session_id", None)):
+            if failure:
+                self._alerts_scroll.update_persisted_session_activity(())
+                self._alerts_scroll.show_message('Activity unavailable')
+            else:
+                self._alerts_scroll.update_persisted_session_activity(rows)
+        if self._active_nav == 'live':
+            self._schedule_activity_refresh()
+
+    def _schedule_activity_refresh(self) -> None:
+        if self._activity_refresh_job is None and self._active_nav == 'live' and not self._closed.is_set():
+            self._activity_refresh_job = self.after(5000, self._activity_refresh_tick)
+
+    def _activity_refresh_tick(self) -> None:
+        self._activity_refresh_job = None
+        self._refresh_activity_sightings()
 
     def _on_nav_select(self, key: str) -> None:
         if key in {"training", "accounts", "recycle_bin"} and not self._is_superadmin:
@@ -748,6 +849,13 @@ class CBVMSDashboard(WorkspaceWindow):
         elif key == "records":
             panel._attendance_frame.bind("<<SightingsModeChanged>>", lambda e: self._sightings_layout(e.widget.view.get() == "Unknown / Unrecognized") if e.widget.winfo_ismapped() else None)
         previous_nav = self._active_nav
+        self._activity_generation += 1
+        if self._activity_refresh_job is not None:
+            try:
+                self.after_cancel(self._activity_refresh_job)
+            except Exception:
+                pass
+            self._activity_refresh_job = None
         if previous_nav != key:
             self._invalidate_monitor()
         self._active_nav = key
@@ -767,7 +875,7 @@ class CBVMSDashboard(WorkspaceWindow):
             self._center_panel.grid_configure(columnspan=1)
 
         if key != "appeals" and hasattr(self,"_activity_sidebar"):
-            self._sightings_layout(key == "unknown")
+            self._sightings_layout(key in {"unknown", "attendance", "records"})
 
         # Power saver: entering Live (re)opens the camera if it was released; leaving Live
         # is handled lazily by the idle watchdog in _update_feed (with a grace window).
@@ -838,14 +946,35 @@ class CBVMSDashboard(WorkspaceWindow):
             if key == "training" and self._training_panel is not None:
                 self._training_panel.on_show()
             if key == "violations" and self._violation_panel is not None:
+                if getattr(self, "_pending_violation_event_id", None) is not None:
+                    self._violation_panel.open_exact_violation(self._pending_violation_event_id)
+                    self._pending_violation_event_id = None
+                    return
                 self._violation_panel.refresh()
             if key == "appeals":
                 self._appeals_panel.on_show()
             if key == "unknown":
                 self._unknown_panel.view.set("Unknown / Unrecognized")
-                self._unknown_panel.refresh()
+                if getattr(self, "_pending_unknown_event_id", None) is not None:
+                    self._unknown_panel.open_exact_unknown(self._pending_unknown_event_id)
+                    self._pending_unknown_event_id = None
+                    self._pending_unknown_reference = None
+                    return
+                if self._pending_unknown_reference is not None:
+                    self._unknown_panel.filters['search'].set(self._pending_unknown_reference)
+                    self._unknown_panel.filters['start'].set('')
+                    self._unknown_panel.filters['end'].set('')
+                    self._unknown_panel.filters['source_id'].set('All')
+                    self._pending_unknown_reference = None
+                    self._unknown_panel.refresh()
+                else:
+                    self._unknown_panel.refresh()
             if key == "attendance":
-                self._attendance_panel.refresh()
+                if getattr(self, "_pending_attendance_event_id", None) is not None:
+                    self._attendance_panel.open_exact_event(self._pending_attendance_event_id)
+                    self._pending_attendance_event_id = None
+                else:
+                    self._attendance_panel.refresh()
             if key == "reports":
                 self._reports_panel.refresh()
             if key == "records" and self._records_panel is not None:
@@ -858,6 +987,13 @@ class CBVMSDashboard(WorkspaceWindow):
                 self._notifications_panel.refresh_external()
 
         self._fade_transition(_switch_views)
+        if key == "live":
+            self._monitor_card_key = None
+            self._alerts_scroll.update_unknown_sightings(())
+            self._alerts_scroll.show_message(
+                "Observation-only mode: new Unknown Logs cannot be saved"
+                if self._observation_only else "No confirmed activity yet")
+            self._refresh_activity_sightings()
 
     def _fade_transition(self, on_midpoint) -> None:
         # Switch views immediately, then force window opacity back to fully opaque.
@@ -1645,7 +1781,19 @@ class CBVMSDashboard(WorkspaceWindow):
                         card_key = tuple((row['presence_id'], row['state'], row['student_id'],
                                           row['reason'], row['observed_at']) for row in rows)
                         if card_key != self._monitor_card_key:
+                            activity_rows = []
+                            result_for_rows = self._monitor_result
+                            task = result_for_rows.task if result_for_rows is not None else None
+                            for row in rows:
+                                activity_rows.append(dict(row,
+                                    monitor_session_id=getattr(self, "_monitor_session_id", None),
+                                    source_id=str((self._camera_active_source or {}).get('id', '')),
+                                    source_label=str((self._camera_active_source or {}).get('label', 'Camera')),
+                                    monitor_generation=task.context.generation if task else self._monitor_generation,
+                                    camera_generation=task.camera_generation if task else self._camera_generation))
                             self._alerts_scroll.update_assessments(rows)
+                            self._alerts_scroll.update_session_assessments(
+                                activity_rows, monitor_generation=self._monitor_generation)
                             self._monitor_card_key = card_key
                         self._display_rows = tuple(rows)
                         with measure("ui_render"):
@@ -1744,6 +1892,8 @@ class CBVMSDashboard(WorkspaceWindow):
     # ------------------------------------------------------------------
 
     def _clear_alerts(self) -> None:
+        self._alerts_scroll.note_monitor_generation(self._monitor_generation)
+        self._alerts_scroll.clear_session_activity()
         self._alerts_scroll.clear()
 
     def _logout(self) -> None:
@@ -1752,6 +1902,13 @@ class CBVMSDashboard(WorkspaceWindow):
 
     def _on_close(self) -> None:
         self._closed.set()
+        self._activity_generation += 1
+        if self._activity_refresh_job is not None:
+            try:
+                self.after_cancel(self._activity_refresh_job)
+            except Exception:
+                pass
+            self._activity_refresh_job = None
         gallery_listener = getattr(self, "_gallery_listener", None)
         if gallery_listener is not None:
             self._recognizer.remove_gallery_listener(gallery_listener)

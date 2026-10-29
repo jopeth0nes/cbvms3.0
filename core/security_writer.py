@@ -23,12 +23,15 @@ class UnknownEncounter:
 
     context_snapshot: bytes | None = None
     evidence_metadata: str | None = None
+    evidence_key: str | None = None
+    monitor_session_id: str | None = None
 
     def write(self, database, valid_if):
         return database.log_security_event(self.presence_id, observed_at=self.observed_at,
             snapshot_jpeg=self.snapshot, event_key=self.event_key, source_id=self.source_id,
             source_label=self.source_label, session_id=self.session_id, valid_if=valid_if,
-            context_snapshot=self.context_snapshot, evidence_metadata=self.evidence_metadata)
+            context_snapshot=self.context_snapshot, evidence_metadata=self.evidence_metadata,
+            evidence_key=self.evidence_key, monitor_session_id=self.monitor_session_id)
 
 
 class SecurityWriter:

@@ -29,9 +29,12 @@ def migrate_attendance(conn):
     event_cols = {r[1] for r in conn.execute('PRAGMA table_info(attendance_events)')}
     if 'lifecycle_version' not in event_cols:
         conn.execute('ALTER TABLE attendance_events ADD COLUMN lifecycle_version INTEGER NOT NULL DEFAULT 0')
+    if 'monitor_session_id' not in event_cols:
+        conn.execute('ALTER TABLE attendance_events ADD COLUMN monitor_session_id TEXT')
     conn.execute('CREATE INDEX IF NOT EXISTS attendance_event_student_time ON attendance_events(student_id,observed_at)')
     conn.execute('CREATE INDEX IF NOT EXISTS attendance_event_day ON attendance_events(attendance_date,student_id,id)')
     conn.execute('CREATE INDEX IF NOT EXISTS attendance_event_source ON attendance_events(source_id,attendance_date)')
+    conn.execute('CREATE INDEX IF NOT EXISTS attendance_event_monitor_session ON attendance_events(monitor_session_id,observed_at,id)')
     conn.execute('CREATE INDEX IF NOT EXISTS attendance_summary_day ON attendance(attendance_date,student_id,id)')
     conn.execute('''CREATE TABLE IF NOT EXISTS attendance_receipts (
         event_key TEXT PRIMARY KEY, outcome TEXT NOT NULL, observed_at TEXT NOT NULL)''')
@@ -196,6 +199,20 @@ class AttendanceStore:
             page = min(page,max(0,(count-1)//page_size))
             rows = conn.execute('SELECT a.* '+sql+' ORDER BY '+order+' LIMIT ? OFFSET ?', (*args,page_size,page*page_size)).fetchall()
         return dict(rows=[dict(r) for r in rows],count=count,page=page,page_size=page_size)
+
+    def query_attendance_event_by_id(self, *, username, event_id):
+        """Return one exact immutable event for an authorized staff destination."""
+        self._attendance_staff_only()
+        try:
+            event_id = int(event_id)
+        except (TypeError, ValueError):
+            return None
+        if event_id <= 0:
+            return None
+        with self.connect() as conn:
+            self._security_access(conn, username)
+            row = conn.execute('SELECT * FROM attendance_events WHERE id=?', (event_id,)).fetchone()
+        return dict(row) if row else None
 
     def iter_attendance(self, *, view='summary', filters=None, selected_ids=None):
         sql,args,order = self._attendance_query(view,filters,selected_ids)

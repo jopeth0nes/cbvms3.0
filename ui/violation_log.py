@@ -109,6 +109,7 @@ class ViolationLogPanel(CBVMSCard):
 
         self._selected_violation_id: int | None = None
         self._selected_violation_row: dict | None = None
+        self._pending_exact_violation_id: int | None = None
         self._snapshot_photo: ImageTk.PhotoImage | None = None
 
         self._page = 1
@@ -783,6 +784,19 @@ class ViolationLogPanel(CBVMSCard):
     # ------------------------------------------------------------------
 
     def _fetch_page(self) -> None:
+        exact_id = self._pending_exact_violation_id
+        if exact_id is not None:
+            self.database._attendance_staff_only()
+            with self.database.connect() as conn:
+                self.database._security_access(conn, self.username)
+                row = conn.execute('''SELECT id,student_id,student_name,violation_type,
+                    violation_code,timestamp,status FROM violations WHERE id=?''', (int(exact_id),)).fetchone()
+            self._pending_exact_violation_id = None
+            self._page = 1
+            self._page_count = 1
+            self._total_records = 1 if row else 0
+            self._rows = [dict(row)] if row else []
+            return
         where, params = self._filters_to_where()
 
         with self.database.connect() as conn:
@@ -858,6 +872,12 @@ class ViolationLogPanel(CBVMSCard):
                 return
 
         self._clear_details()
+
+    def open_exact_violation(self, violation_id: int) -> None:
+        """Select an exact record even when it is outside current filters/page."""
+        self._selected_violation_id = int(violation_id)
+        self._pending_exact_violation_id = int(violation_id)
+        self.refresh()
 
     def _prev_page(self) -> None:
         if self._page <= 1:

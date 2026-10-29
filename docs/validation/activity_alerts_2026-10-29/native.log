@@ -1,0 +1,12 @@
+test_session_activity_fits_280px_sidebar_and_routes_exact_id (tests.test_live_monitor_native_ui.LiveMonitorNativeUITests.test_session_activity_fits_280px_sidebar_and_routes_exact_id) ... .venv/lib/python3.12/site-packages/customtkinter/windows/widgets/core_widget_classes/ctk_base_class.py:179: UserWarning: CTkLabel Warning: Given image is not CTkImage but <class 'PIL.ImageTk.PhotoImage'>. Image can not be scaled on HighDPI displays, use CTkImage instead.
+
+  warnings.warn(f"{type(self).__name__} Warning: Given image is not CTkImage but {type(image)}. Image can not be scaled on HighDPI displays, use CTkImage instead.\n")
+ok
+test_exact_attendance_and_unknown_select_despite_filters_and_busy_initial_read (tests.test_activity_log_navigation_native.ActivityLogNavigationTests.test_exact_attendance_and_unknown_select_despite_filters_and_busy_initial_read) ... ok
+test_violation_exact_lookup_is_one_shot_and_restores_filters (tests.test_activity_log_navigation_native.ActivityLogNavigationTests.test_violation_exact_lookup_is_one_shot_and_restores_filters) ... ok
+test_small_windows_keep_logout_visible_and_navigation_reachable (tests.test_dashboard_sidebar.DashboardSidebarTests.test_small_windows_keep_logout_visible_and_navigation_reachable) ... ok
+
+----------------------------------------------------------------------
+Ran 4 tests in 3.353s
+
+OK

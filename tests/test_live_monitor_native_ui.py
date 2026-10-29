@@ -10,6 +10,7 @@ import unittest
 
 import customtkinter as ctk
 import numpy as np
+from PIL import Image
 
 from ui.camera_feed import CameraFeed
 from ui.live_alerts import LiveAlerts
@@ -110,6 +111,71 @@ class LiveMonitorNativeUITests(unittest.TestCase):
         self.pump()
         self.assertEqual(len(self.alerts._cards), 1)
         self.assertEqual(self.alerts._cards['native:1']._labels[3].cget('text'), 'Uniform compliant')
+
+    def test_unknown_record_refresh_reuses_widget_and_image_without_transient_cards(self):
+        from PIL import Image
+        row = dict(id=42, reference_id='synthetic-event', source_label='Synthetic camera',
+                   observed_at='2026-10-28T04:00:00+00:00', thumbnail=Image.new('RGB', (40, 40), 'red'))
+        self.alerts.update_assessments([dict(self.row(), student_id='', name='Identifying')])
+        self.assertFalse(self.alerts._cards)
+        self.alerts.update_unknown_sightings([row, row])
+        self.pump()
+        card = self.alerts._unknown_cards[42]
+        photo = card._photo
+        for _ in range(3):
+            self.alerts.update_unknown_sightings([row])
+            self.pump()
+            self.assertIs(self.alerts._unknown_cards[42], card)
+            self.assertIs(card._photo, photo)
+        row['thumbnail'] = Image.new('RGB', (40, 40), 'blue')
+        self.alerts.update_unknown_sightings([row])
+        self.pump()
+        self.assertIs(self.alerts._unknown_cards[42], card)
+        self.assertIsNot(card._photo, photo)
+        self.alerts.update_unknown_sightings([])
+        self.assertFalse(self.alerts._unknown_cards)
+
+    def test_session_activity_fits_280px_sidebar_and_routes_exact_id(self):
+        self.root.geometry('900x700+80+80')
+        self.root.grid_columnconfigure(0, weight=1)
+        self.root.grid_columnconfigure(1, minsize=280, weight=0)
+        self.alerts.destroy()
+        sidebar = ctk.CTkFrame(self.root, width=280)
+        sidebar.grid(row=0, column=1, sticky='ns')
+        sidebar.grid_propagate(False)
+        sidebar.grid_columnconfigure(0, weight=1)
+        sidebar.grid_rowconfigure(0, weight=1)
+        self.alerts = LiveAlerts(sidebar, width=180)
+        self.alerts.grid(row=0, column=0, sticky='nsew', padx=16, pady=16)
+        opened = []
+        self.alerts.set_monitor_session('session-current')
+        self.alerts.set_activity_opener(lambda kind, event_id, row: opened.append((kind, event_id)))
+        self.alerts.update_persisted_session_activity([dict(
+            id=91, event_type='attendance', monitor_session_id='session-current',
+            student_id='S-91', student_name='Student With A Long Name',
+            observed_at='2026-10-28T04:30:00+00:00', source_label='North Gate',
+            status='Attendance recorded', thumbnail=Image.new('RGB', (80, 50), 'red'))])
+        self.pump()
+        card = self.alerts._activity_cards['attendance:91']
+        self.assertLessEqual(self.alerts.winfo_width(), 248)
+        self.assertLessEqual(card.winfo_width(), self.alerts.winfo_width())
+        self.assertLessEqual(card._title.cget('wraplength'), card.winfo_width() - 24)
+        self.assertEqual(card._student_id.cget('text'), 'ID: S-91')
+        self.assertLessEqual(card._action.winfo_width(), card.winfo_width() - 16)
+        self.assertGreaterEqual(card._action.winfo_width(),
+            card._action.cget('font').measure(card._action.cget('text')) + 12)
+        self.assertIsNotNone(card._photo)
+        saved_card = card
+        self.alerts.update_persisted_session_activity([dict(
+            id=91, event_type='attendance', monitor_session_id='session-current',
+            student_id='S-91', student_name='Student With A Long Name',
+            observed_at='2026-10-28T04:30:00+00:00', source_label='North Gate',
+            status='Attendance recorded', thumbnail=Image.new('RGB', (80, 50), 'blue'))])
+        self.pump()
+        self.assertIs(self.alerts._activity_cards['attendance:91'], saved_card)
+        self.assertIsNotNone(saved_card._photo)
+        card._open()
+        self.assertEqual(opened, [('attendance', 91)])
 
 
 class DashboardNativeLifecycleTests(unittest.TestCase):

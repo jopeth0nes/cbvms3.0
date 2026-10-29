@@ -524,13 +524,15 @@ class LiveProcessor:
             term=dict(assessment.term_snapshot)
             fact=Sighting(student_id=assessment.student_id,student_name=assessment.name,
                 observed_at=utc_stamp(observed),source_id=task.source_id,source_label=task.source_label,
-                session_id=str(task.context.frame_id[0]),frame_id=json.dumps(task.context.frame_id,default=str),
+                session_id=json.dumps([self.security_session, str(task.context.frame_id[0]), task.camera_generation]),
+                frame_id=json.dumps(task.context.frame_id,default=str),
                 monitor_generation=task.context.generation,camera_generation=task.camera_generation,
                 presence_id=assessment.presence_id,student_status=assessment.student_status,
                 college_department=snapshot.get('college_department','Unspecified/Needs review'),
                 course=snapshot.get('course','Unspecified/Needs review'),report_year_level=snapshot.get('report_year_level',''),
                 report_section=snapshot.get('report_section',''),semester_id=term.get('id'),
                 lifecycle_version=assessment.lifecycle_version,
+                monitor_session_id=self.security_session,
                 semester_name=term.get('semester_name',''),school_year=term.get('school_year',''))
             if self.attendance_writer is not None:
                 self.attendance_writer.offer(fact,task.cancelled)
@@ -597,14 +599,25 @@ class LiveProcessor:
                 scale = 1280 / max(h,w)
                 context = cv2.resize(context,(max(1,int(w*scale)),max(1,int(h*scale))))
             context_ok, context_jpeg = cv2.imencode('.jpg',context,[cv2.IMWRITE_JPEG_QUALITY,80])
-            metadata = json.dumps(dict(frame_id=task.context.frame_id, camera_generation=task.camera_generation,
+            metadata = json.dumps(dict(frame_id=task.context.frame_id,
+                monitor_generation=task.context.generation, camera_generation=task.camera_generation,
                 face_box=[int(v) for v in assessment.face_box], original_width=w, original_height=h,
                 context_width=context.shape[1], context_height=context.shape[0]))
+            # Exact acquired evidence, never a person's appearance fingerprint.
+            # Include face location to keep distinct faces separate even in synthetic
+            # or identical crops, and frame sequence/session to permit later visits.
+            evidence_key = hashlib.sha256(json.dumps([
+                self.security_session, task.source_id, task.camera_generation,
+                task.context.generation, task.context.frame_id,
+                [int(v) for v in assessment.face_box],
+                hashlib.sha256(jpeg.tobytes()).hexdigest(),
+            ]).encode()).hexdigest() if ok else None
             fact = UnknownEncounter(key, assessment.presence_id,
                 utc_stamp(datetime.fromtimestamp(task.observed_at,timezone.utc)),
                 task.source_id, task.source_label, str(task.context.frame_id[0]),
                 jpeg.tobytes() if ok and jpeg.nbytes <= 2_000_000 else None,
-                context_jpeg.tobytes() if context_ok and context_jpeg.nbytes <= 1_000_000 else None, metadata)
+                context_jpeg.tobytes() if context_ok and context_jpeg.nbytes <= 1_000_000 else None,
+                metadata, evidence_key, self.security_session)
             try:
                 accepted = (self.security_writer.offer(fact,task.cancelled) if self.security_writer is not None
                             else fact.write(self.database,guard) is not None)
@@ -714,9 +727,11 @@ class LiveProcessor:
                     written=self.database.log_violation(student_id=sid,student_name=assessment.name,
                         violation_type=display,violation_code=code,snapshot_jpeg=jpeg.tobytes(),
                         detected_at=observed,status='pending_review',valid_if=guard,
+                        monitor_session_id=self.security_session,
                         evidence_provenance=dict(
                             captured_at=observed.isoformat(),
                             camera_session=str(task.context.frame_id[0]),
+                            source_id=task.source_id, source_label=task.source_label,
                             frame_id=list(task.context.frame_id),
                             monitor_generation=task.context.generation,
                             camera_generation=task.camera_generation,

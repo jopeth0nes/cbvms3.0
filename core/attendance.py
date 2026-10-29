@@ -58,6 +58,7 @@ class Sighting:
     school_year: str = ''
     provenance: str = 'confirmed_live_identity'
     lifecycle_version: int = 0
+    monitor_session_id: str | None = None
 
     @property
     def key(self):

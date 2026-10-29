@@ -422,6 +422,7 @@ class CBVMSDatabase(TermEnrollmentStore, StudentManagement, StudentCredentials, 
                 r[1] for r in conn.execute("PRAGMA table_info(violations)").fetchall()
             }
             violation_migrations = {
+                "monitor_session_id": "TEXT",
                 "violation_code": "TEXT DEFAULT 'unknown_violation'",
                 "review_deadline": "TEXT",
                 "confirmed_at": "TEXT",
@@ -439,6 +440,7 @@ class CBVMSDatabase(TermEnrollmentStore, StudentManagement, StudentCredentials, 
             for col, declaration in violation_migrations.items():
                 if col not in violation_cols:
                     conn.execute(f"ALTER TABLE violations ADD COLUMN {col} {declaration}")
+            conn.execute("CREATE INDEX IF NOT EXISTS violation_monitor_session ON violations(monitor_session_id,timestamp,id)")
 
             evidence_cols = {r[1] for r in conn.execute("PRAGMA table_info(evidence_files)")}
             if "file_sha256" not in evidence_cols:
@@ -977,6 +979,7 @@ class CBVMSDatabase(TermEnrollmentStore, StudentManagement, StudentCredentials, 
         semester_id: int | None = None,
         valid_if: Callable[[], bool] | None = None,
         evidence_provenance: dict | None = None,
+        monitor_session_id: str | None = None,
     ) -> int | None:
         """Persist and immediately publish a camera/manual detection for appeal.
 
@@ -1028,8 +1031,8 @@ class CBVMSDatabase(TermEnrollmentStore, StudentManagement, StudentCredentials, 
                 """
                 INSERT INTO violations
                     (student_id, student_name, violation_type, timestamp, snapshot,
-                     status, violation_code, review_deadline, semester_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     status, violation_code, review_deadline, semester_id, monitor_session_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     safe_student_id,
@@ -1041,6 +1044,7 @@ class CBVMSDatabase(TermEnrollmentStore, StudentManagement, StudentCredentials, 
                     safe_code,
                     review_deadline,
                     semester_id,
+                    monitor_session_id,
                 ),
             )
             violation_id = _inserted_row_id(cursor)
@@ -1089,6 +1093,62 @@ class CBVMSDatabase(TermEnrollmentStore, StudentManagement, StudentCredentials, 
 
     record_detected_violation = log_violation
 
+    def query_monitor_activity(self, *, username: str, monitor_session_id: str,
+                               limit: int = 50) -> list[dict]:
+        """Read only the authorized activity records explicitly owned by one monitor session."""
+        self._attendance_staff_only()
+        monitor_session_id = str(monitor_session_id or '').strip()
+        if not monitor_session_id or len(monitor_session_id) > 128:
+            raise ValueError('A valid monitor session is required.')
+        size = max(1, min(100, int(limit)))
+        with self.connect() as conn:
+            self._security_access(conn, username)
+            conn.execute('BEGIN')
+            attendance = [dict(row) for row in conn.execute('''
+                SELECT id,event_key,student_id,student_name,observed_at,source_id,source_label,
+                    monitor_session_id,monitor_generation,camera_generation,presence_id,
+                    NULL snapshot,NULL evidence_metadata,'attendance' event_type,
+                    'Attendance recorded' status
+                FROM attendance_events WHERE monitor_session_id=?
+                ORDER BY observed_at DESC,id DESC LIMIT ?''', (monitor_session_id,size))]
+            violations = [dict(row) for row in conn.execute('''
+                SELECT id,student_id,student_name,timestamp observed_at,monitor_session_id,
+                    CASE WHEN length(snapshot)<=1048576 THEN snapshot ELSE NULL END snapshot,
+                    snapshot_provenance evidence_metadata,violation_type,status,
+                    'violation' event_type FROM violations WHERE monitor_session_id=?
+                ORDER BY timestamp DESC,id DESC LIMIT ?''', (monitor_session_id,size))]
+            unknown = [dict(row) for row in conn.execute('''
+                SELECT id,presence_id,observed_at,source_id,source_label,monitor_session_id,
+                    CASE WHEN length(snapshot)<=1048576 THEN snapshot ELSE NULL END snapshot,
+                    evidence_metadata,'unknown' event_type,'Unknown person' status,
+                    COALESCE(event_key,'legacy:'||id) event_key
+                FROM security_events WHERE event_code='unknown_person' AND monitor_session_id=?
+                ORDER BY observed_at DESC,id DESC LIMIT ?''', (monitor_session_id,size))]
+        for row in violations:
+            try:
+                provenance = json.loads(row.get('evidence_metadata') or '{}')
+            except (TypeError, ValueError):
+                provenance = {}
+            row.update(source_id=provenance.get('source_id') or provenance.get('camera_session') or '',
+                       source_label=provenance.get('source_label') or 'Camera not recorded',
+                       monitor_generation=provenance.get('monitor_generation'),
+                       camera_generation=provenance.get('camera_generation'),
+                       presence_id=provenance.get('presence_id') or '')
+        for row in unknown:
+            try:
+                metadata = json.loads(row.get('evidence_metadata') or '{}')
+            except (TypeError, ValueError):
+                metadata = {}
+            row.update(monitor_generation=metadata.get('monitor_generation'),
+                       camera_generation=metadata.get('camera_generation'),
+                       frame_id=metadata.get('frame_id'))
+        rows = attendance + violations + unknown
+        def ordering(row):
+            value = parse_db_datetime(row.get('observed_at'))
+            return (value.timestamp() if value else 0., int(row.get('id') or 0))
+        rows.sort(key=ordering, reverse=True)
+        return rows[:size]
+
     def log_security_event(
         self,
         presence_id: str,
@@ -1101,6 +1161,8 @@ class CBVMSDatabase(TermEnrollmentStore, StudentManagement, StudentCredentials, 
         source_id: str | None = None,
         source_label: str | None = None,
         session_id: str | None = None,
+        evidence_key: str | None = None,
+        monitor_session_id: str | None = None,
         valid_if: Callable[[], bool] | None = None,
     ) -> int | None:
         """Store an unknown person's sighting separately from student discipline.
@@ -1124,10 +1186,14 @@ class CBVMSDatabase(TermEnrollmentStore, StudentManagement, StudentCredentials, 
                 existing = conn.execute('SELECT id FROM security_events WHERE event_key=?', (event_key,)).fetchone()
                 if existing:
                     return int(existing[0])
+            if evidence_key:
+                existing = conn.execute('SELECT id FROM security_events WHERE evidence_key=?', (evidence_key,)).fetchone()
+                if existing:
+                    return int(existing[0])
             cursor = conn.execute(
-                """INSERT INTO security_events (presence_id, observed_at, snapshot, event_key, source_id, source_label, session_id, context_snapshot, evidence_metadata)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (presence_id, format_db_datetime(observed), snapshot_jpeg, event_key, source_id, source_label, session_id, context_snapshot, evidence_metadata),
+                """INSERT INTO security_events (presence_id, observed_at, snapshot, event_key, source_id, source_label, session_id, context_snapshot, evidence_metadata, evidence_key, monitor_session_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (presence_id, format_db_datetime(observed), snapshot_jpeg, event_key, source_id, source_label, session_id, context_snapshot, evidence_metadata, evidence_key, monitor_session_id),
             )
             event_id = int(cursor.lastrowid)
             term = resolve_term(conn,observed)

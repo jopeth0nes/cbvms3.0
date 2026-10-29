@@ -26,6 +26,8 @@ class AttendancePanel(ctk.CTkFrame):
         self.preview_id = None
         self.preview_picture = None
         self.page, self.total, self.generation = 0, 0, 0
+        self._pending_exact_event_id = None
+        self._pending_exact_unknown_id = None
         self.applied = None
         self.rows = []
         self.columnconfigure(0,weight=1)
@@ -254,7 +256,8 @@ class AttendancePanel(ctk.CTkFrame):
         if self.task.busy:
             return  # Completion notices the generation change and schedules the latest request.
         try:
-            filters=dict(previous_applied[1]) if preserve and previous_applied else self._filter_values()
+            filters = ({} if self._pending_exact_event_id is not None or self._pending_exact_unknown_id is not None
+                       else dict(previous_applied[1]) if preserve and previous_applied else self._filter_values())
             view='unknown' if unknown else 'summary' if self.view.get()=='Daily Summary' else 'events'
             size=int(self.page_size.get())
         except ValueError as exc:
@@ -262,12 +265,25 @@ class AttendancePanel(ctk.CTkFrame):
             return
         generation=self.generation
         page=self.page
+        exact_event_id = self._pending_exact_event_id
+        exact_unknown_id = self._pending_exact_unknown_id
         self.message.configure(text='Loading campus sightings…')
         self.previous.configure(state='disabled');self.next.configure(state='disabled')
         def read():
             if view == 'unknown':
+                if exact_unknown_id is not None:
+                    exact = self.database.query_unknown_sighting_by_id(
+                        username=self.username, event_id=exact_unknown_id)
+                    rows = [exact] if exact else []
+                    return ({'rows':rows,'count':len(rows),'page':0,'sources':[]},
+                            {'sources':[],'semesters':[]},None)
                 data = self.database.query_unknown_sightings(username=self.username,filters=filters,page=page,page_size=size)
                 return data, {'sources':data['sources'], 'semesters':[dict(t,semester_id=t['id']) for t in self.database.get_academic_terms()]}, None
+            if exact_event_id is not None:
+                exact = self.database.query_attendance_event_by_id(
+                    username=self.username, event_id=exact_event_id)
+                return ({'rows':[exact] if exact else [],'count':1 if exact else 0,'page':0,'page_size':size},
+                        self.database.attendance_filter_options(),self.database.get_attendance_cooldown())
             return (self.database.query_attendance(view=view,filters=filters,page=page,page_size=size),
                     self.database.attendance_filter_options(),self.database.get_attendance_cooldown())
         def loaded(result):
@@ -299,7 +315,26 @@ class AttendancePanel(ctk.CTkFrame):
                 self.tree.insert('', 'end',iid=str(row['id']),values=[(display_time(row,key)[:19] if view=='unknown' else display_time(row,key)) if key in ('first_seen','last_seen','observed_at') else
                     (f"{row[key]} new (legacy total unknown)" if key=='sighting_count' and row.get('legacy_summary') else row[key]) for key in columns])
             retained=[i for i in current_selection if self.tree.exists(i)]
-            if retained:
+            exact_id = exact_event_id
+            if exact_id is not None and self.tree.exists(str(exact_id)):
+                self.tree.selection_set(str(exact_id))
+                self.tree.see(str(exact_id))
+                if self._pending_exact_event_id == exact_id:
+                    self._pending_exact_event_id = None
+            elif exact_id is not None:
+                if self._pending_exact_event_id == exact_id:
+                    self._pending_exact_event_id = None
+                self.message.configure(text='That attendance event is no longer available.')
+            if exact_unknown_id is not None:
+                if self.tree.exists(str(exact_unknown_id)):
+                    self.tree.selection_set(str(exact_unknown_id))
+                    self.tree.see(str(exact_unknown_id))
+                    self._selection_changed(force=True)
+                else:
+                    self.message.configure(text='That Unknown Logs record is no longer available.')
+                if self._pending_exact_unknown_id == exact_unknown_id:
+                    self._pending_exact_unknown_id = None
+            if retained and exact_event_id is None and exact_unknown_id is None:
                 self.tree.selection_set(retained)
             elif preserve:
                 self._clear_preview()
@@ -317,6 +352,24 @@ class AttendancePanel(ctk.CTkFrame):
                 self.summary.configure(text='Report unavailable')
                 self.message.configure(text=f'Could not load attendance: {error}')
         self.task.run(read,loaded,failed)
+
+    def open_exact_event(self, event_id: int) -> None:
+        """Show one event by immutable ID without date, search, or page filters."""
+        self.view.set('Sighting Events')
+        self._pending_exact_unknown_id = None
+        self._pending_exact_event_id = int(event_id)
+        self.refresh()
+
+    def open_exact_unknown(self, event_id: int) -> None:
+        """Select an authorized unknown event by ID with no stale date filters."""
+        self.view.set('Unknown / Unrecognized')
+        self._pending_exact_event_id = None
+        self.filters['start'].set('')
+        self.filters['end'].set('')
+        self.filters['source_id'].set('All')
+        self.filters['search'].set('')
+        self._pending_exact_unknown_id = int(event_id)
+        self.refresh()
 
     def retry_writer(self):
         count=retry_writers(self.database)

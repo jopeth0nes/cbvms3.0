@@ -50,6 +50,7 @@ def dashboard():
         _alerts_scroll=MagicMock(), _notification_out=queue.Queue(), _stats_out=queue.Queue(),
         _readiness=ModelReadiness(), _retry_model_btn=MagicMock(), _camera=MagicMock(), _camera_needed=lambda: True,
         _active_nav="live", _checker=types.SimpleNamespace(check_uniform=True, check_earring=True),
+        _observation_only=False, _activity_generation=0, _activity_refresh_job=None,
         _mirror=types.SimpleNamespace(display_mirror=lambda: False, apply_anim=lambda frame: frame),
         _status_camera=MagicMock(), _status_models=MagicMock(),
         _attendance_writer_status=MagicMock(), _database=MagicMock(),

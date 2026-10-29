@@ -52,6 +52,23 @@ class DashboardSidebarTests(unittest.TestCase):
                     self.assertEqual('accounts' in app._nav_buttons, superadmin)
                     self.assertEqual('training' in app._nav_buttons, superadmin)
                     self.assertEqual('recycle_bin' in app._nav_buttons, superadmin)
+                    # Use the dashboard's real geometry method for every reachable
+                    # destination in each role; no camera or business data involved.
+                    app._activity_sidebar = ctk.CTkFrame(app, width=280)
+                    app._activity_sidebar.grid(row=1, column=2, sticky='nsew')
+                    app._title_row = ctk.CTkFrame(app)
+                    app._title_row.grid(row=0, column=1)
+                    app._center_panel = ctk.CTkFrame(app)
+                    app._center_panel.grid(row=1, column=1, sticky='nsew')
+                    app.grid_columnconfigure(1, weight=1)
+                    for _ in range(2):
+                        for key in (*app._nav_buttons, 'alerts'):
+                            app._active_nav = key
+                            CBVMSDashboard._sightings_layout(app, key in {'unknown', 'attendance', 'records'})
+                            app.update_idletasks()
+                            self.assertEqual(bool(app._activity_sidebar.winfo_ismapped()), key == 'live', key)
+                            self.assertEqual(app._center_panel.grid_info()['columnspan'], 1 if key == 'live' else 2)
+                            self.assertEqual(app.grid_columnconfigure(2)['minsize'], 280 if key == 'live' else 0)
                     for height in (600, 768, 900, 540):
                         app.geometry(f'1280x{height}')
                         app.update()

@@ -59,6 +59,10 @@ class LivePersistenceTests(unittest.TestCase):
                 self.assertEqual(self._count(table), 0)
 
     def test_guard_is_checked_inside_the_write_transaction(self):
+        # Make this a genuine violation write, not an enrollment-review fallback
+        # that opens another connection while the fixture patches one connection.
+        from tests.term_fixture import verified_term
+        verified_term(self.db, 'S1', 2099)
         original_connect = self.db.connect
         for table, operation in self._operations():
             with self.subTest(table=table):

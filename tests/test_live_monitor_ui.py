@@ -9,16 +9,20 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 import numpy as np
+from PIL import Image
 
 from ui.camera_feed import CameraFeed, fitted_frame_rect, next_preview_tick
-from ui.live_alerts import LiveAlerts, LiveAlertsModel, _PresenceCard, assessment_style
+from ui.live_alerts import (LiveAlerts, LiveAlertsModel, _PresenceCard,
+                            _UnknownSightingCard, assessment_style)
 from ui.live_overlay import clipped_box, draw_assessments, label_rect
 
 
 def assessment(track=1, state="Checking uniform", **kwargs):
-    return dict(track_id=track, presence_id=f"session-2:{track}", student_id=f"S{track}",
-                name=f"Student {track}", gender="Female", student_status="Enrolled",
-                state=state, observed_at=1_800_000_000, **kwargs)
+    row = dict(track_id=track, presence_id=f"session-2:{track}", student_id=f"S{track}",
+               name=f"Student {track}", gender="Female", student_status="Enrolled",
+               state=state, observed_at=1_800_000_000)
+    row.update(kwargs)
+    return row
 
 
 def fake_canvas(width=800, height=600):
@@ -128,6 +132,172 @@ class CameraFeedLayoutTests(unittest.TestCase):
 
 
 class LiveAlertsModelTests(unittest.TestCase):
+    def test_activity_discards_transient_and_unconfirmed_identity_rows(self):
+        widget = types.SimpleNamespace(
+            model=LiveAlertsModel(), _cards={}, _unknown_cards={}, _unknown_rows={},
+            _order=(), _empty=MagicMock(), _empty_text="No confirmed activity yet",
+            _refresh=MagicMock(),
+        )
+        LiveAlerts.update_assessments(widget, [
+            assessment(1, "Identifying", student_id="—", name="Identifying"),
+            assessment(2, "Identity uncertain", student_id="", name="Unidentified person"),
+            assessment(3, "Uniform compliant"),
+        ])
+        self.assertEqual(tuple(widget.model.rows), ("session-2:3",))
+        self.assertEqual(widget.model.rows["session-2:3"].student_id, "S3")
+
+    def test_unknown_event_id_is_card_identity_and_updated_thumbnail_reuses_card(self):
+        widget = types.SimpleNamespace(
+            _unknown_cards={}, _unknown_rows={}, _cards={}, model=LiveAlertsModel(),
+            _order=(), _empty=MagicMock(), _empty_text="No confirmed activity yet",
+            _refresh=MagicMock(),
+        )
+        rows = [dict(id=41, observed_at="2026-10-28T04:00:00+00:00",
+                     source_label="Gate A", thumbnail=None)]
+        LiveAlerts.update_unknown_sightings(widget, rows)
+        LiveAlerts.update_unknown_sightings(widget, [dict(rows[0])])
+        self.assertEqual(tuple(widget._unknown_rows), (41,))
+        self.assertEqual(len(widget._unknown_rows), 1)
+
+    def test_unknown_card_thumbnail_replacement_updates_existing_widget(self):
+        image = MagicMock()
+        first, better = np.zeros((10, 12, 3), np.uint8), np.ones((10, 12, 3), np.uint8)
+        widget = types.SimpleNamespace(event_id=41, _signature=None, _photo=None,
+            _details=MagicMock(), _image=image)
+        with patch("ui.live_alerts.ImageTk.PhotoImage", side_effect=["first-photo", "better-photo"]) as photo:
+            _UnknownSightingCard.update_sighting(widget, dict(
+                observed_at="time", source_label="Gate A", thumbnail=Image.fromarray(first)))
+            _UnknownSightingCard.update_sighting(widget, dict(
+                observed_at="time", source_label="Gate A", thumbnail=Image.fromarray(better)))
+        self.assertEqual(photo.call_count, 2)
+        self.assertEqual(widget._photo, "better-photo")
+        self.assertEqual(image.configure.call_args.kwargs["image"], "better-photo")
+
+    def test_dashboard_activity_layout_reclaims_column_on_every_non_live_destination(self):
+        from ui.dashboard import CBVMSDashboard
+        sidebar, title, center = MagicMock(), MagicMock(), MagicMock()
+        app = types.SimpleNamespace(_active_nav="live", _activity_sidebar=sidebar,
+            _title_row=title, _center_panel=center, grid_columnconfigure=MagicMock())
+        destinations = ("enrollment", "recycle_bin", "attendance", "unknown",
+            "suspensions", "violation_history", "violations", "appeals", "records",
+            "reports", "training", "accounts", "settings", "alerts")
+        for destination in destinations:
+            app._active_nav = destination
+            CBVMSDashboard._sightings_layout(app, destination in {"attendance", "unknown", "records"})
+            sidebar.grid_remove.assert_called()
+            center.grid_configure.assert_called_with(columnspan=2)
+            app.grid_columnconfigure.assert_called_with(2, minsize=0)
+        app._active_nav = "live"
+        CBVMSDashboard._sightings_layout(app, False)
+        sidebar.grid.assert_called_once_with()
+        center.grid_configure.assert_called_with(columnspan=1)
+
+    def test_stale_activity_read_is_rejected_after_navigation_or_session_change(self):
+        from queue import Queue
+        from ui.dashboard import CBVMSDashboard
+        scroll = MagicMock()
+        result = Queue(maxsize=1)
+        result.put((4, 'admin', 'session', [dict(id=2)], None))
+        app = types.SimpleNamespace(_closed=types.SimpleNamespace(is_set=lambda: False),
+            _activity_read_result=result, _activity_read_busy=True,
+            _activity_generation=5, username='admin', _monitor_session_id='session', _active_nav="enrollment", _alerts_scroll=scroll,
+            _schedule_activity_refresh=MagicMock())
+        CBVMSDashboard._deliver_activity_sightings(app)
+        scroll.update_unknown_sightings.assert_not_called()
+        scroll.show_message.assert_not_called()
+        app._active_nav = "live"
+        result.put((5, 'admin', 'session', [dict(id=3)], None))
+        CBVMSDashboard._deliver_activity_sightings(app)
+        scroll.update_persisted_session_activity.assert_called_once_with([dict(id=3)])
+        scroll.reset_mock()
+        result.put((5, 'old-user', 'session', [dict(id=4)], None))
+        CBVMSDashboard._deliver_activity_sightings(app)
+        scroll.update_persisted_session_activity.assert_not_called()
+        result.put((5, 'admin', 'session', [], 'Permission denied'))
+        CBVMSDashboard._deliver_activity_sightings(app)
+        scroll.update_persisted_session_activity.assert_called_once_with(())
+
+    def test_session_read_uses_captured_uuid_and_rejects_previous_or_unknown_rows(self):
+        from queue import Queue
+        from ui.dashboard import CBVMSDashboard
+        scroll = MagicMock()
+        result = Queue(maxsize=1)
+        result.put((5, 'admin', 'old-session', [dict(id=3)], None))
+        app = types.SimpleNamespace(_closed=types.SimpleNamespace(is_set=lambda: False),
+            _activity_read_result=result, _activity_read_busy=True,
+            _activity_generation=5, username='admin', _active_nav='live',
+            _monitor_session_id='current-session', _alerts_scroll=scroll,
+            _schedule_activity_refresh=MagicMock())
+        CBVMSDashboard._deliver_activity_sightings(app)
+        scroll.update_persisted_session_activity.assert_not_called()
+        result.put((5, 'admin', 'current-session', [dict(id=4,
+            monitor_session_id='old-session')], None))
+        CBVMSDashboard._deliver_activity_sightings(app)
+        scroll.update_persisted_session_activity.assert_called_once_with([dict(
+            id=4, monitor_session_id='old-session')])
+
+    def test_clear_keeps_per_type_id_highwater_and_passage_provenance_is_strict(self):
+        from ui.activity_dismissals import ActivityDismissals
+        from ui.live_alerts import passage_association_key
+        base = dict(monitor_session_id='session', source_id='camera-a',
+            camera_generation=3, monitor_generation=8, presence_id='presence-1',
+            student_id='student-1')
+        key = passage_association_key(base)
+        self.assertIsNotNone(key)
+        self.assertNotEqual(key, passage_association_key(dict(base, source_id='camera-b')))
+        self.assertIsNone(passage_association_key(dict(base, monitor_generation=None)))
+
+        ledger = ActivityDismissals()
+        self.addCleanup(ledger.close)
+        passage_id = 'passage:' + key
+        event_id = 'attendance:12'
+        self.assertFalse(ledger.contains(passage_id, event_id))
+        ledger.add([passage_id, event_id])
+        self.assertTrue(ledger.contains(passage_id))
+        self.assertTrue(ledger.contains(event_id))
+        self.assertFalse(ledger.contains('passage:' + passage_association_key(
+            dict(base, presence_id='person:8:16'))))
+
+    def test_exact_log_actions_bypass_current_date_and_page_filters(self):
+        from ui.attendance_panel import AttendancePanel
+        from ui.violation_log import ViolationLogPanel
+        attendance = types.SimpleNamespace(view=MagicMock(), refresh=MagicMock())
+        AttendancePanel.open_exact_event(attendance, 21)
+        attendance.view.set.assert_called_once_with('Sighting Events')
+        self.assertEqual(attendance._pending_exact_event_id, 21)
+        violation = types.SimpleNamespace(refresh=MagicMock(), _selected_violation_id=None,
+                                          _pending_exact_violation_id=None)
+        ViolationLogPanel.open_exact_violation(violation, 44)
+        self.assertEqual(violation._selected_violation_id, 44)
+        self.assertEqual(violation._pending_exact_violation_id, 44)
+        violation.refresh.assert_called_once_with()
+
+        variables = {key: MagicMock() for key in ('start', 'end', 'source_id', 'search')}
+        unknown = types.SimpleNamespace(view=MagicMock(), filters=variables, refresh=MagicMock(),
+                                        _pending_exact_unknown_id=None)
+        AttendancePanel.open_exact_unknown(unknown, 73)
+        unknown.view.set.assert_called_once_with('Unknown / Unrecognized')
+        self.assertEqual(unknown._pending_exact_unknown_id, 73)
+        for key in ('start', 'end', 'source_id', 'search'):
+            variables[key].set.assert_called_once_with('All' if key == 'source_id' else '')
+
+    def test_activity_refresh_timer_is_single_and_logout_rejects_delivery(self):
+        import threading
+        from queue import Queue
+        from ui.dashboard import CBVMSDashboard
+        app = types.SimpleNamespace(_closed=threading.Event(), _active_nav='live',
+            _activity_refresh_job=None, after=MagicMock(return_value='timer'),
+            _activity_refresh_tick=MagicMock(), _activity_read_result=Queue(),
+            _alerts_scroll=MagicMock(), _monitor_session_id='session', username='admin',
+            _activity_generation=0, _activity_read_busy=True)
+        for _ in range(5):
+            CBVMSDashboard._schedule_activity_refresh(app)
+        app.after.assert_called_once_with(5000, app._activity_refresh_tick)
+        app._closed.set()
+        app._activity_read_result.put((0, 'admin', 'session', [dict(id=42)], None))
+        CBVMSDashboard._deliver_activity_sightings(app)
+        app._alerts_scroll.update_unknown_sightings.assert_not_called()
+
     def test_incomplete_assessments_never_display_ok_or_compliant(self):
         for state in ("Identifying", "Identity uncertain", "Checking uniform",
                       "Uniform not assessed", "Unknown person", "missing", None):
