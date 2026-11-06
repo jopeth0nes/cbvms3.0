@@ -507,7 +507,8 @@ class LiveState:
         # Earring evidence has its own eligibility, crop, and category; torso
         # unavailability must not disable the existing male-only face-crop check.
         earring = row.get("earring_violation")
-        earring_eligible = eligible and str(row.get("gender") or "").lower() == "male"
+        earring_eligible = (eligible and row.get('term_discipline_eligible', True)
+                           and str(row.get("gender") or "").lower() == "male")
         if not earring_eligible or earring is None:
             track.earrings.clear()
         else:

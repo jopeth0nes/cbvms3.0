@@ -52,6 +52,7 @@ data/
 # YOLO / model weights (download via install scripts)
 models/*.pt
 models/*.pth
+models/buffalo_l/
 !models/.gitkeep
 
 # Metadata-only attendance retry journals (may contain student identifiers)

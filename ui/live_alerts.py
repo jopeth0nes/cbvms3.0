@@ -216,12 +216,15 @@ class LiveAlerts(ctk.CTkScrollableFrame):
     def _refresh(self) -> None:
         for key in self._cards.keys() - self.model.rows.keys():
             self._cards.pop(key).destroy()
-        order = tuple(self.model.rows)
+        # Keep the model oldest-first for bounded history eviction, but display
+        # new appearances above earlier cards. Frame updates keep their position.
+        order = tuple(reversed(self.model.rows))
         if order:
             self._empty.grid_remove()
         else:
             self._empty.grid()
-        for index, (key, row) in enumerate(self.model.rows.items()):
+        for index, key in enumerate(order):
+            row = self.model.rows[key]
             card = self._cards.get(key)
             if card is None:
                 card = self._cards[key] = _PresenceCard(self)

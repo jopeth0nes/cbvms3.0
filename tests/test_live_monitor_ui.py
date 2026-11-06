@@ -174,6 +174,21 @@ class LiveAlertsModelTests(unittest.TestCase):
             factory.return_value.destroy.assert_not_called()
             self.assertEqual(factory.return_value.update_assessment.call_count, 2)
 
+    def test_new_alert_is_placed_above_existing_cards(self):
+        widget = types.SimpleNamespace(model=LiveAlertsModel(), _cards={}, _order=(), _empty=MagicMock())
+        older, newer = MagicMock(), MagicMock()
+        with patch('ui.live_alerts._PresenceCard', side_effect=[older, newer]):
+            widget.model.update_assessments([assessment(1)])
+            LiveAlerts._refresh(widget)
+            widget.model.update_assessments([assessment(1), assessment(2)])
+            LiveAlerts._refresh(widget)
+            self.assertEqual(widget._order, ('session-2:2', 'session-2:1'))
+            self.assertEqual(newer.grid.call_args.kwargs['row'], 0)
+            self.assertEqual(older.grid.call_args.kwargs['row'], 1)
+            widget.model.update_assessments([assessment(1, 'Uniform compliant'), assessment(2)])
+            LiveAlerts._refresh(widget)
+            self.assertEqual(widget._order, ('session-2:2', 'session-2:1'))
+
     def test_identical_card_content_avoids_repeated_widget_updates(self):
         model = LiveAlertsModel()
         model.update_assessments([assessment()])

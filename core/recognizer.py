@@ -59,6 +59,14 @@ class FaceRecognizer:
         self._recognition = None
         self.detector_error = None
         self.model_dir = Path(os.environ.get("CBVMS_FACE_MODEL_DIR", "~/.insightface/models/buffalo_l")).expanduser().resolve()
+        local_models = Path(__file__).resolve().parents[1] / "models" / "buffalo_l"
+        required_models = ("det_10g.onnx", "w600k_r50.onnx")
+        def complete(directory):
+            return all((directory / name).is_file() and (directory / name).stat().st_size >= 1024
+                       for name in required_models)
+        if (not os.environ.get("CBVMS_FACE_MODEL_DIR")
+                and not complete(self.model_dir) and complete(local_models)):
+            self.model_dir = local_models
         self._app = None             # lazy — avoid slow model load at startup
         self._frontal_cascade = None  # lightweight detectors for the has_face() UI hint
         self._profile_cascade = None
