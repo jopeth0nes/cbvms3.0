@@ -601,6 +601,7 @@ class CBVMSDashboard(WorkspaceWindow):
             self._view_host,
             trainer=self._trainer,
             get_frame=self._get_camera_frame,
+            on_model_trained=lambda _module: self._retry_models(),
         )),
             "settings": ("_settings_panel", lambda: SettingsPanel(
             self._view_host,

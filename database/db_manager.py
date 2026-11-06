@@ -38,7 +38,7 @@ from database.security_events import SecurityEventStore, migrate_security_events
 from auth.passwords import hash_password, verify_password
 from database.student_credentials import StudentCredentials, migrate_credentials
 from database.student_management import StudentManagement, migrate_student_management
-from core.student_status import validate_contacts
+from core.student_status import validate_contacts, uniform_monitor_eligible
 from core.academics import academic_values, resolve_pair, legacy_year_section
 from database.academic_migration import migrate_academics
 from core.appeal_evidence import validate_evidence
@@ -300,6 +300,9 @@ class CBVMSDatabase(TermEnrollmentStore, StudentManagement, StudentCredentials, 
             migrate(conn)
             for ddl in ALL_TABLES:
                 conn.execute(ddl)
+            from database import sms_notifications
+            sms_notifications.migrate(conn)
+            conn.after_commit(lambda: sms_notifications.wake(self))
             user_cols = {r[1] for r in conn.execute("PRAGMA table_info(users)")}
             if "role" not in user_cols:
                 conn.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'admin' "
@@ -928,6 +931,11 @@ class CBVMSDatabase(TermEnrollmentStore, StudentManagement, StudentCredentials, 
                 ),
             )
             pk = _inserted_row_id(cursor)
+            # Reused IDs must never accept frames/jobs from a deleted incarnation.
+            previous = conn.execute('SELECT MAX(lifecycle_version) FROM student_archive_audit WHERE student_id=?',
+                                    (student_id.strip(),)).fetchone()[0]
+            if previous is not None:
+                conn.execute('UPDATE students SET archive_version=? WHERE id=?', (int(previous) + 1, pk))
             academic_assignments = ', '.join(f'{key}=?' for key in academics)
             conn.execute(f'UPDATE students SET {academic_assignments} WHERE id=?', (*academics.values(), pk))
             assignments = ", ".join(f"{key}=?" for key in contact_values)
@@ -961,6 +969,11 @@ class CBVMSDatabase(TermEnrollmentStore, StudentManagement, StudentCredentials, 
 
     def delete_student(self, student_pk: int) -> bool:
         raise ValueError("Permanent deletion is disabled because trusted cloud identity provenance is unavailable. Archive the student instead.")
+
+    def permanently_delete_student(self, student_pk, expected_student_id, actor_token,
+                                   expected_version, reason):
+        from database.student_deletion import permanently_delete
+        return permanently_delete(self, student_pk, expected_student_id, actor_token, expected_version, reason)
 
     def permanently_delete_unused_student(self, student_pk: int, expected_student_id: str,
                                           actor_token: str) -> bool:
@@ -1011,7 +1024,7 @@ class CBVMSDatabase(TermEnrollmentStore, StudentManagement, StudentCredentials, 
             if valid_if is not None and not valid_if():
                 conn.rollback()
                 return None
-            standing = conn.execute("SELECT student_status, registration_pending,is_archived FROM students WHERE student_id=?", (safe_student_id,)).fetchone()
+            standing = conn.execute("SELECT student_status,registration_pending,is_archived,college_department,course,report_year_level,report_section FROM students WHERE student_id=?", (safe_student_id,)).fetchone()
             if standing and standing['is_archived']:
                 conn.rollback()
                 return None
@@ -1020,7 +1033,8 @@ class CBVMSDatabase(TermEnrollmentStore, StudentManagement, StudentCredentials, 
             if semester_id is not None and semester_id != occurrence_term:
                 raise ValueError('Explicit term conflicts with event occurrence time.')
             semester_id = occurrence_term
-            if standing and is_disciplinary_code(safe_code) and not context['eligible']:
+            uniform_allowed = safe_code == 'wrong_uniform' and uniform_monitor_eligible(standing)
+            if standing and is_disciplinary_code(safe_code) and not context['eligible'] and not uniform_allowed:
                 # Preserve the detection as an enrollment review, never a discipline case.
                 conn.rollback()
                 self.record_enrollment_review(safe_student_id, observed_at=detected_dt,
@@ -1050,7 +1064,7 @@ class CBVMSDatabase(TermEnrollmentStore, StudentManagement, StudentCredentials, 
             violation_id = _inserted_row_id(cursor)
             if not semester_id:
                 self._term_exception_conn(conn,"violations",violation_id)
-            enrollment = context['enrollment'] or {}
+            enrollment = context['enrollment'] or (dict(standing) if uniform_allowed else {})
             conn.execute('UPDATE violations SET enrollment_status=?,academic_snapshot=?,term_classification=? WHERE id=?',
                 (context['status'],json.dumps({k:enrollment.get(k) for k in ('college_department','course','report_year_level','report_section')}),
                  'published_term' if semester_id else 'outside_term',violation_id))
@@ -1451,6 +1465,8 @@ class CBVMSDatabase(TermEnrollmentStore, StudentManagement, StudentCredentials, 
             (opened, deadline, origin, violation_id))
         row = conn.execute("SELECT * FROM violations WHERE id=?", (violation_id,)).fetchone()
         label = violation_display_name(row["violation_code"], row["violation_type"])
+        from database import sms_notifications
+        sms_notifications.queue(conn, self, row)
         self._insert_event_notification_conn(conn, student_id=row["student_id"],
             title=f"Appeal available: {label}",
             message="A violation is available in My Violations. You have 120 hours from publication "
@@ -1767,7 +1783,10 @@ class CBVMSDatabase(TermEnrollmentStore, StudentManagement, StudentCredentials, 
                            st.deactivation_reason AS strike_removal_reason,
                            a.id AS appeal_id, a.status AS appeal_status,
                            a.submitted_at AS appeal_submitted_at,
-                           a.admin_notes AS appeal_admin_notes
+                           a.admin_notes AS appeal_admin_notes,
+                           a.decision_category_label AS appeal_decision_category_label,
+                           a.decided_by AS appeal_decided_by,
+                           a.decided_at AS appeal_decided_at
                     FROM violations v
                     LEFT JOIN academic_terms t ON t.id = v.semester_id
                     LEFT JOIN strikes st ON st.violation_id = v.id

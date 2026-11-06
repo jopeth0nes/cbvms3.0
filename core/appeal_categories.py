@@ -14,7 +14,7 @@ class DecisionCategory:
 
     @property
     def option(self):
-        return ('Approval' if self.decision == 'approved' else 'Rejection') + ' — ' + self.label
+        return self.label
 
 
 CATEGORIES = (

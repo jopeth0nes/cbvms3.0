@@ -228,6 +228,8 @@ def main():
     logging.basicConfig(level=logging.INFO)
     db = CBVMSDatabase(args.database)
     db.initialize()
+    from core.registration_sync import start as start_registration_sync
+    start_registration_sync(db)
     server = PortalServer((args.host, args.port), db, public_origin=args.public_origin)
     print(f'Student portal: http://{args.host}:{args.port} | Database: {db.db_path}', flush=True)
     try:

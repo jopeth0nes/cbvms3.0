@@ -85,6 +85,7 @@ def send_credentials(
     student_id: str,
     username: str,
     password: str,
+    website_note: str = '',
 ) -> tuple[bool, str]:
     """Send login credentials to a student's email address.
 
@@ -100,6 +101,8 @@ def send_credentials(
         return False, "SMTP not configured. Set sender email and password in Settings → Email."
 
     subject = "CBVMS — Your Student Login Credentials"
+    from html import escape
+    website_html = f'<p>{escape(website_note)}</p>' if website_note else ''
     html_body = f"""
 <html><body style="font-family:Arial,sans-serif;color:#222;max-width:520px">
   <div style="background:#1a1a2e;padding:24px 32px;border-radius:8px 8px 0 0">
@@ -123,6 +126,7 @@ def send_credentials(
         <td style="padding:10px 14px;font-family:monospace;font-size:15px">{password}</td>
       </tr>
     </table>
+    {website_html}
     <p style="color:#888;font-size:13px">
       Please keep your credentials confidential. Website access requires campus
       synchronization. After setting a personal password on the website, use that
@@ -142,6 +146,7 @@ def send_credentials(
         "Website access requires campus synchronization. After setting a personal password on the website, "
         "use that password instead of this temporary password. A new campus enrollment email does not "
         "automatically replace an existing website password.\n"
+        + (website_note + "\n" if website_note else "")
     )
 
     msg = MIMEMultipart("alternative")

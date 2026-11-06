@@ -463,7 +463,7 @@ class LiveAlerts(ctk.CTkScrollableFrame):
             return
         for key in self._cards.keys() - self.model.rows.keys():
             self._cards.pop(key).destroy()
-        order = tuple(self.model.rows)
+        order = tuple(reversed(self.model.rows))
         unknown_rows = getattr(self, "_unknown_rows", {})
         unknown_cards = getattr(self, "_unknown_cards", {})
         all_order = tuple(("known", key) for key in order) + tuple(
@@ -473,7 +473,8 @@ class LiveAlerts(ctk.CTkScrollableFrame):
         else:
             self._empty.configure(text=self._empty_text)
             self._empty.grid()
-        for index, (key, row) in enumerate(self.model.rows.items()):
+        for index, key in enumerate(order):
+            row = self.model.rows[key]
             card = self._cards.get(key)
             if card is None:
                 card = self._cards[key] = _PresenceCard(self)
