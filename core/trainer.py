@@ -74,6 +74,47 @@ class ViolationTrainer:
         self._model_lock = RLock()
         self._models: dict[str, object] = {}  # module -> loaded YOLO model
         self.last_error = {}
+        from core.uniform_model_registry import UniformModelRegistry
+        self.uniform_registry = UniformModelRegistry()
+        self._uniform_deployment = None
+        self._uniform_deployment_token = None
+
+    def uniform_version(self):
+        return self.uniform_registry.token()
+
+    def uniform_version_matches(self, token):
+        return self.uniform_registry.matches(token)
+
+    def uniform_result_guard(self, token):
+        return self.uniform_registry.result_guard(token)
+
+    def uniform_decision(self, crop, matcher, token):
+        """Called by the serial inference worker, never Tk. No implicit fallback."""
+        with self._model_lock:
+            if not self.uniform_version_matches(token):
+                raise ValueError('Uniform model version changed')
+            if token != 'legacy-default':
+                if self._uniform_deployment_token != token:
+                    from core.uniform_model_registry import DeploymentPredictor
+                    loaded = DeploymentPredictor(self.uniform_registry.current())
+                    if not self.uniform_version_matches(token):
+                        raise ValueError('Uniform model changed while loading')
+                    self._uniform_deployment = loaded
+                    self._uniform_deployment_token = token
+                return self._uniform_deployment(crop)
+            # Keep the existing default live policy exactly, including no
+            # color-only verdict if classifier inference fails.
+            from core.uniform_matcher import fuse_uniform_prob
+            proba = self.predict_proba('uniform', crop) if self.is_trained('uniform') else None
+            p_cls = proba.get('correct_uniform') if proba else None
+            p_col = None
+            if matcher.is_loaded():
+                verdict, p = matcher.is_uniform(crop)
+                p_col = p if verdict is not None else None
+            fused = fuse_uniform_prob(p_cls,p_col) if p_cls is not None else None
+            confidence = max(fused,1-fused) if fused is not None and np.isfinite(fused) else 0.
+            return {'policy_label': ('compliant' if fused>=.5 else 'violation') if confidence>=.60 else None,
+                    'policy_confidence':float(confidence), 'available':fused is not None}
 
     # ------------------------------------------------------------------
     # Helpers
@@ -432,6 +473,8 @@ class ViolationTrainer:
 
     def is_trained(self, module: str) -> bool:
         self._validate(module)
+        if module == 'uniform' and self.uniform_registry.pointer() is not None:
+            return True  # Actual bundle/model validity is checked by uniform_decision.
         return (ROOT / MODULES[module]["model_out"]).exists()
 
     def model_mtime(self, module: str) -> float | None:

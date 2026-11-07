@@ -6,6 +6,7 @@ import tkinter as tk
 from tkinter import ttk
 
 import customtkinter as ctk
+from ui.scrolling import ScrollableFrame
 
 from core.discipline import parse_db_datetime, utc_now, violation_display_name
 from core.academics import YEAR_LEVELS, legacy_year_section, resolve_pair, NEEDS_REVIEW, display_academics
@@ -244,7 +245,7 @@ class SuspensionsPanel(ctk.CTkFrame):
 
         # Suspensions is a summary page. History and lifting belong together
         # on Violation History, where staff can select the suspension to lift.
-        history_frame = ctk.CTkScrollableFrame if self.history_view == "violations" else ctk.CTkFrame
+        history_frame = ScrollableFrame if self.history_view == "violations" else ctk.CTkFrame
         self._history_area = history_frame(self, fg_color=COLOR_SURFACE,
                                         corner_radius=CORNER_RADIUS)
         if self.history_view == "violations":

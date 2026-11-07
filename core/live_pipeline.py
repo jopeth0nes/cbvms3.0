@@ -60,7 +60,7 @@ class MonitorTask:
     observed_at: float
     cancelled: threading.Event
     uniform_enabled: bool = True
-    earring_enabled: bool = True
+    earring_enabled: bool = False  # Retained for old callers; earring checks are retired.
     camera_generation: int = 0
     observations: tuple[TrackedFace, ...] | None = None
     source_id: str = "unspecified-camera"
@@ -76,6 +76,11 @@ class MonitorTask:
     observation_only: bool = False
     passage_entered_at: float | None = None
     first_usable_at: float | None = None
+    uniform_model_version: str | None = None
+    uniform_version_valid: object | None = None
+    uniform_tickets: tuple | None = None
+    assessment_queued_at: float | None = None
+    analysis_started_at: float | None = None
 
     def __post_init__(self):
         with measure("frame_copy"):
@@ -92,6 +97,13 @@ class MonitorTask:
         from copy import copy
         result = copy(self)
         object.__setattr__(result, "observations", tuple(observations))
+        return result
+
+    def with_uniform_version(self, version, valid):
+        from copy import copy
+        result = copy(self)
+        object.__setattr__(result, 'uniform_model_version', version)
+        object.__setattr__(result, 'uniform_version_valid', valid)
         return result
 
     def for_observation_candidate(self, observations, presence_id, selected_at,
@@ -126,9 +138,12 @@ class MonitorTask:
         candidate_cancelled = self.candidate_cancelled is not None and self.candidate_cancelled.is_set()
         passage_cancelled = self.passage_cancelled is not None and self.passage_cancelled.is_set()
         return (not self.cancelled.is_set() and not candidate_cancelled and not passage_cancelled
+                and (self.uniform_version_valid is None or self.uniform_version_valid(self.uniform_model_version))
                 and 0 <= now-self.context.captured_at <= 3.0)
 
     def rejection(self):
+        if self.uniform_version_valid is not None and not self.uniform_version_valid(self.uniform_model_version):
+            return 'uniform_model_changed'
         if self.cancelled.is_set():
             return "session_cancelled"
         if self.candidate_cancelled is not None and self.candidate_cancelled.is_set():
@@ -217,7 +232,11 @@ class MotionProjection:
 
 class LiveProcessor:
     def __init__(self, database, recognizer, person_detector, trainer, uniform_matcher,
-                 notifier, *, latest_sample=lambda:None, state=None, observation_only=False):
+                 notifier, *, latest_sample=lambda:None, state=None, observation_only=False,
+                 uniform_observation=None):
+        if uniform_observation is not None and not observation_only:
+            raise ValueError('Candidate assessment requires observation-only processing')
+        self.uniform_observation = uniform_observation
         self.database=database
         self.recognizer=recognizer
         self.person_detector=person_detector
@@ -242,12 +261,30 @@ class LiveProcessor:
         self._assessment_cursor = 0
         self.audio_task_valid = lambda task: True
         self.observation_only = bool(observation_only)
+        self._uniform_model_version = None
 
     def analyze(self,task):
+        candidate_session = self.uniform_observation
+        if candidate_session is not None:
+            if not self.observation_only:
+                raise RuntimeError('Observation candidate cannot run in production mode')
+            if task.uniform_tickets is None:
+                task = candidate_session.observe(task,task.observations)
+            task = task.with_uniform_version(candidate_session.version_token,candidate_session.matches)
+        elif task.uniform_enabled and callable(getattr(type(self.trainer), 'uniform_version', None)):
+            try:
+                version = self.trainer.uniform_version()
+            except Exception as exc:
+                event('uniform_version_unavailable', error=str(exc))
+                return None
+            if version != self._uniform_model_version:
+                self.state.clear_uniform_evidence()
+                self._uniform_model_version = version
+            task = task.with_uniform_version(version,self.trainer.uniform_version_matches)
         if not task.valid():
             event("frame_rejected", stage="analysis_start", reason=task.rejection())
             return None
-        key = (task.context.generation, task.context.frame_id)
+        key = (task.source_id,task.cancelled,task.camera_generation,task.context.generation,task.context.frame_id)
         if key in self._analyzed_frames:
             return None
         self._analyzed_frames.append(key)
@@ -321,7 +358,7 @@ class LiveProcessor:
             self.publish_identity(MonitorResult(task, identities, time.monotonic(),
                 "Face detected · Identity uncertain" if rows and not any(a.reliable_identity for a in identities)
                 else "Recognition ready · Uniform not assessed" if rows else "No faces detected"))
-        uniform_available=(task.uniform_enabled and self.person_detector is not None and
+        uniform_available=(candidate_session is None and task.uniform_enabled and self.person_detector is not None and
                            (self.readiness is None or self.readiness.ready('uniform')) and
                            self.trainer.is_trained('uniform'))
         bodies=[]
@@ -396,39 +433,17 @@ class LiveProcessor:
                             if skin_ratio>MAX_TORSO_SKIN_FRACTION:
                                 row['reason']='Shirt obscured or mostly skin; show more of your shirt'
                             else:
-                                p_cls=p_col=None
-                                if self.trainer.is_trained('uniform'):
-                                    proba=self.trainer.predict_proba('uniform',crop)
-                                    p_cls=proba.get('correct_uniform') if proba else None
-                                if self.uniform_matcher.is_loaded():
-                                    verdict,p=self.uniform_matcher.is_uniform(crop)
-                                    p_col=p if verdict is not None else None
-                                # A colour match is supplementary evidence; it cannot
-                                # classify a garment when the trained classifier failed.
-                                fused=fuse_uniform_prob(p_cls,p_col) if p_cls is not None else None
-                                if fused is not None and np.isfinite(fused):
-                                    confidence=max(fused,1-fused)
-                                    row.update(uniform_available=True,
-                                               uniform_label=('correct_uniform' if fused>=.5 else 'wrong_uniform') if confidence>=.60 else None,
-                                               uniform_confidence=float(confidence),reason='Checking uniform')
+                                if task.uniform_model_version is not None:
+                                    decision = self.trainer.uniform_decision(crop,self.uniform_matcher,task.uniform_model_version)
+                                    row.update(uniform_available=decision.get('available',True),
+                                               uniform_label={'compliant':'correct_uniform','violation':'wrong_uniform'}.get(decision.get('policy_label')),
+                                               uniform_confidence=float(decision.get('policy_confidence') or 0),
+                                               reason='Checking uniform' if decision.get('policy_label') else 'Unable to assess uniform confidently')
                                 else:
-                                    row['reason']='Uniform classifier could not assess this crop'
+                                    self._legacy_uniform_decision(row,crop)
                     except Exception as exc:
                         row['reason']='Uniform assessment unavailable'
                         event("uniform_assessment_failed", error=str(exc))
-            # Existing earring rule: male and eligible, independent category.
-            row['earring_violation']=False
-            if (task.earring_enabled and (self.readiness is None or self.readiness.ready('earring'))
-                    and row.get('gender','').lower()=='male' and self.trainer.is_trained('earring')):
-                try:
-                    x1,y1,x2,y2=map(int,row['box'])
-                    h,w=frame.shape[:2]
-                    crop=frame[max(0,y1):min(h,y2),max(0,x1):min(w,x2)]
-                    label,conf=self.trainer.predict('earring',crop) if crop.size else (None,0)
-                    row['earring_violation']=label=='with_earring' and conf>=.65
-                    row['earring_confidence']=float(conf)
-                except Exception:
-                    row['earring_violation']=False
             event("stage_complete", stage="uniform", face_index=index,
                   elapsed=time.monotonic()-crop_started, reason=row['reason'])
         if not task.valid():
@@ -443,6 +458,25 @@ class LiveProcessor:
         if observations is not None:
             assessments=tuple(replace(a, track_id=o.track_id, presence_id=o.presence_id)
                               for a,o in zip(assessments,observations))
+        if candidate_session is not None and task.uniform_enabled:
+            tickets = {t.key[-2:]:t for t in task.uniform_tickets or ()}
+            updated = []
+            bound_tickets = []
+            for assessment,observation,row in zip(assessments,observations or (),rows):
+                ticket = tickets.get((observation.track_id,observation.presence_id))
+                if ticket is not None:
+                    ticket = candidate_session.bind_identity(ticket,str(row.get('student_id') or '') if row.get('matched') else 'unknown')
+                    bound_tickets.append(ticket)
+                garment = candidate_session.assess(task,ticket) if ticket is not None else None
+                updated.append(replace(assessment,garment=garment,
+                    state=garment.state if garment else 'Unable to assess',
+                    reason=garment.reason if garment else 'No fresh associated candidate evidence',
+                    torso_box=observation.torso_box,body_box=observation.body_box,
+                    body_index=observation.body_index,uniform_label=None,uniform_confidence=0.,
+                    accepted_categories=tuple(c for c in assessment.accepted_categories if c!='wrong_uniform')))
+            assessments=tuple(updated)
+            task = candidate_session._attach(task,tuple(bound_tickets))
+            if not task.valid(): return None
         for a in assessments:
             event('person_assessed', frame_id=task.context.frame_id, presence_id=a.presence_id,
                   state=a.state, reason=a.reason, reliable_identity=a.reliable_identity,
@@ -455,6 +489,7 @@ class LiveProcessor:
         if not self.observation_only and not task.observation_only:
             self.submit_detection_audio(MonitorResult(task, assessments, time.monotonic()))
         return MonitorResult(task,assessments,time.monotonic(),
+                             candidate_session.status_text() if candidate_session is not None else
                              "No faces detected" if not rows else
                              "Face detected · Identity uncertain" if not any(a.reliable_identity for a in assessments) else
                              "Uniform not assessed" if not any(r.get('uniform_available') for r in rows) else "")
@@ -495,6 +530,8 @@ class LiveProcessor:
 
     def assessment_failed(self, task):
         """An unobserved frame breaks evidence without recycling presence IDs."""
+        if self.uniform_observation is not None:
+            self.uniform_observation.invalidate()
         if task.valid():
             self.state.update(task.context, (), now=time.monotonic())
             self.submit_detection_audio(MonitorResult(task, (), time.monotonic()))
@@ -629,7 +666,32 @@ class LiveProcessor:
             except Exception as exc:
                 event('unknown_write_failed', error=str(exc))
 
+    def _legacy_uniform_decision(self,row,crop):
+        p_cls=p_col=None
+        if self.trainer.is_trained('uniform'):
+            proba=self.trainer.predict_proba('uniform',crop)
+            p_cls=proba.get('correct_uniform') if proba else None
+        if self.uniform_matcher.is_loaded():
+            verdict,p=self.uniform_matcher.is_uniform(crop)
+            p_col=p if verdict is not None else None
+        fused=fuse_uniform_prob(p_cls,p_col) if p_cls is not None else None
+        if fused is not None and np.isfinite(fused):
+            confidence=max(fused,1-fused)
+            row.update(uniform_available=True,
+                       uniform_label=('correct_uniform' if fused>=.5 else 'wrong_uniform') if confidence>=.60 else None,
+                       uniform_confidence=float(confidence),reason='Checking uniform')
+        else:
+            row['reason']='Uniform classifier could not assess this crop'
+
     def persist(self,result):
+        if result.task.uniform_model_version is not None:
+            with self.trainer.uniform_result_guard(result.task.uniform_model_version) as valid:
+                if valid:
+                    return self._persist(result)
+            return None
+        return self._persist(result)
+
+    def _persist(self,result):
         """Side effects consume the very same accepted assessment as the UI.
 
         Revalidate immediately before each write, inside DB transactions, and before
@@ -710,9 +772,9 @@ class LiveProcessor:
                 key=(sid if assessment.reliable_identity else assessment.presence_id,code)
                 if now-self.cooldowns.get(key,-300)<300:
                     continue
-                if code not in ('wrong_uniform', 'earring') or not (assessment.reliable_identity and assessment.discipline_eligible):
+                if code != 'wrong_uniform' or not (assessment.reliable_identity and assessment.discipline_eligible):
                     continue
-                box=assessment.body_box if code=='wrong_uniform' else assessment.face_box
+                box=assessment.body_box
                 x1,y1,x2,y2=map(int,box or assessment.face_box)
                 h,w=task.frame.shape[:2]
                 crop=task.frame[max(0,y1):min(h,y2),max(0,x1):min(w,x2)]
@@ -721,8 +783,7 @@ class LiveProcessor:
                 ok,jpeg=cv2.imencode('.jpg',crop,[cv2.IMWRITE_JPEG_QUALITY,85])
                 if not ok:
                     continue
-                display=('Suspected uniform violation' if code=='wrong_uniform' else
-                         'Earring detected')
+                display='Suspected uniform violation'
                 try:
                     written=self.database.log_violation(student_id=sid,student_name=assessment.name,
                         violation_type=display,violation_code=code,snapshot_jpeg=jpeg.tobytes(),
@@ -906,7 +967,7 @@ class LiveWorker:
                     self._ack_candidate(task, None, "worker_busy")
                     return False
                 self.requests.put_nowait(task)
-                if PERF.enabled or TRACES.enabled:
+                if PERF.enabled or TRACES.enabled or getattr(self.processor,'uniform_observation',None) is not None:
                     with self._queue_clock_lock:
                         self._queue_clock[id(task)] = time.monotonic()
                 self._request_ready.set()
@@ -915,7 +976,7 @@ class LiveWorker:
         if not candidate and not self.stop_event.is_set():
             event("frame_submitted", worker=type(self.processor).__name__, frame_id=task.context.frame_id)
             with self._dispatch_lock:
-                if not PERF.enabled and not TRACES.enabled:
+                if not PERF.enabled and not TRACES.enabled and getattr(self.processor,'uniform_observation',None) is None:
                     put_latest(self.requests, task)
                 else:
                     with self._queue_clock_lock:
@@ -983,6 +1044,12 @@ class LiveWorker:
                         self._request_ready.clear()
                 with self._queue_clock_lock:
                     offered_at = self._queue_clock.pop(id(task), None)
+                if (task is not None and isinstance(self.processor,LiveProcessor)
+                        and self.processor.uniform_observation is not None):
+                    from copy import copy
+                    task = copy(task)
+                    object.__setattr__(task,'assessment_queued_at',offered_at)
+                    object.__setattr__(task,'analysis_started_at',time.monotonic())
                 if task is None or not task.valid():
                     with self._dispatch_lock:
                         self.active_task = None

@@ -26,7 +26,7 @@ class MonitorStartupTests(unittest.TestCase):
         with ThreadPoolExecutor(max_workers=4) as pool:
             bundles = list(pool.map(lambda _: MonitorModels(recognizer, detector, trainer, matcher), range(12)))
         self.assertTrue(all(bundle is bundles[0] for bundle in bundles))
-        self.assertEqual(set(bundles[0].readiness.snapshot()), {"face", "recognition", "body", "uniform", "earring"})
+        self.assertEqual(set(bundles[0].readiness.snapshot()), {"face", "recognition", "body", "uniform"})
 
     def make_bundle(self):
         recognizer = MagicMock()
@@ -52,10 +52,11 @@ class MonitorStartupTests(unittest.TestCase):
         self.assertIs(bundle.uniform_matcher, second.uniform_matcher)
         bundle.start()
         wait_until(lambda: all(bundle.readiness.snapshot()[name].state in ("ready", "failed")
-                               for name in ("face", "recognition", "body", "uniform", "earring")))
+                               for name in ("face", "recognition", "body", "uniform")))
         self.assertTrue(bundle.readiness.ready("body"))
         self.assertTrue(bundle.readiness.ready("uniform"))
-        self.assertEqual(bundle.readiness.snapshot()["earring"].state, "failed")
+        self.assertNotIn("earring", bundle.readiness.snapshot())
+        self.assertTrue(all(c.args[0] != "earring" for c in trainer.is_trained.call_args_list))
         detector.detect_persons.assert_called_once()
         trainer.predict_proba.assert_called_once_with("uniform", unittest.mock.ANY)
         matcher.is_uniform.assert_called_once()
@@ -143,7 +144,7 @@ class MonitorStartupTests(unittest.TestCase):
         bundle.wait(1)
         self.assertEqual(registry.snapshot()["body"].state, "ready")
         self.assertEqual(registry.snapshot()["uniform"].state, "cancelled")
-        self.assertEqual(registry.snapshot()["earring"].state, "cancelled")
+        self.assertNotIn("earring", registry.snapshot())
         trainer.predict_proba.assert_not_called()
 
     def test_retry_queues_every_failure_and_prioritizes_face_when_slot_opens(self):
@@ -186,8 +187,8 @@ class MonitorStartupTests(unittest.TestCase):
     def test_missing_optional_weights_are_explicit_failures(self):
         bundle, _, _, trainer, _ = self.make_bundle()
         trainer.is_trained.side_effect = lambda module: False
-        with self.assertRaisesRegex(RuntimeError, "No trained earring weights"):
-            bundle._load_earring()
+        with self.assertRaisesRegex(RuntimeError, "Train a uniform classifier"):
+            bundle._load_uniform()
 
     def test_shutdown_wait_does_not_start_preparation_after_login_abort(self):
         bundle, recognizer, detector, _, _ = self.make_bundle()

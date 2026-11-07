@@ -8,6 +8,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog
@@ -15,6 +16,7 @@ from typing import Callable
 
 import cv2
 import customtkinter as ctk
+from ui.scrolling import ScrollableFrame
 import numpy as np
 from PIL import Image, ImageOps
 
@@ -34,6 +36,7 @@ if _HEIC_OK:
     _IMAGE_EXTS += (".heic", ".heif")
 
 from core.trainer import MIN_SAMPLES_PER_CLASS, MODULES, ViolationTrainer
+from core.uniform_dataset import CATEGORIES
 from core.uniform_references import KINDS, REFERENCE_DIR, save_reference, list_references
 from ui.background_task import BackgroundTask
 from ui.components import (
@@ -65,30 +68,19 @@ _TILE_RED = "#2A1518"
 
 _MODULE_TABS = [
     ("uniform", "Uniform Check"),
-    ("earring", "Earring Check"),
 ]
 
 _HELP_TEXT = (
-    "Photos you upload or capture build the reference set for each check.\n\n"
-    f"Minimum {MIN_SAMPLES_PER_CLASS} photos per class is recommended. "
-    "More diverse photos (different angles, lighting, people) = better accuracy.\n\n"
-    "UNIFORM: live detection uses a pretrained-image-embedding 'fingerprint' built "
-    "automatically from your CORRECT-uniform photos (no gradient training needed — just add "
-    "good correct photos and it rebuilds), cross-checked by a uniform-colour match.\n"
-    "IMPORTANT: reference photos must look like the LIVE view — a CHEST/TORSO close-up of the "
-    "shirt (like a webcam selfie), NOT full-body shots where the uniform is tiny and the "
-    "background fills the frame. The most reliable way is 'Capture from Camera' here, framed on "
-    "your chest. A few dozen good chest-framed photos beat hundreds of full-body ones. A few "
-    "'wrong uniform' photos help calibrate the threshold.\n\n"
-    "EARRING: trains a YOLOv8 image classifier — provide a BALANCED set (roughly as many "
-    "'with' as 'without' photos). 'Evaluate Model' tests on held-out photos the model never "
-    "trained on, so its accuracy reflects real-world performance. Everything runs on your "
-    "machine."
+    "Uniform Check uses a separate review dataset and isolated candidate training. Uploads do not rebuild "
+    "or replace the active model. Review labels, crops, provenance and quality first.\n\n"
+    "A minimum photo count is "
+    "only a software requirement, not evidence of accuracy. Independent people, "
+    "capture sessions and conditions are needed for meaningful evaluation."
 )
 
 
 def _pretty(label: str) -> str:
-    return label.replace("_", " ").title()
+    return CATEGORIES.get(label, label.replace("_", " ").title())
 
 
 def _gather_images(folder: str) -> list[str]:
@@ -119,8 +111,14 @@ def _load_bgr(path) -> np.ndarray | None:
     return cv2.imread(str(path))
 
 
+class _TrainingTabs(ctk.CTkTabview):
+    def set(self, name):
+        # Old saved section names must land on the supported uniform workspace.
+        return super().set(name if name in self._tab_dict else 'Uniform Check')
+
+
 class TrainingPanel(ctk.CTkFrame):
-    """Two-tab training UI (Uniform / Earring) with dataset builder + trainer."""
+    """Uniform review/candidate training and the separate reference-art library."""
 
     def __init__(
         self,
@@ -128,11 +126,14 @@ class TrainingPanel(ctk.CTkFrame):
         *,
         trainer: ViolationTrainer,
         get_frame: Callable[[], np.ndarray | None],
+        model_actor_provider=None,
         **kwargs,
     ) -> None:
         super().__init__(master, fg_color=COLOR_BG, **kwargs)
         self.trainer = trainer
         self.get_frame = get_frame
+        self.model_actor_provider = model_actor_provider
+        self._uniform_capture_group = "camera-session:" + uuid.uuid4().hex
 
         # Per-module widget references and runtime state
         self._ui: dict[str, dict] = {}
@@ -155,7 +156,7 @@ class TrainingPanel(ctk.CTkFrame):
     # ------------------------------------------------------------------
 
     def _build(self) -> None:
-        tabview = ctk.CTkTabview(
+        tabview = _TrainingTabs(
             self,
             fg_color=COLOR_BG,
             segmented_button_fg_color=COLOR_SURFACE,
@@ -172,8 +173,18 @@ class TrainingPanel(ctk.CTkFrame):
             tab = tabview.add(title)
             self._ui[module] = {}
             self._training[module] = False
-            self._build_module_tab(tab, module)
-            self._refresh_counts(module)
+            if module == "uniform":
+                from ui.uniform_workspace import UniformWorkspace
+                tab.grid_columnconfigure(0, weight=1)
+                tab.grid_rowconfigure(0, weight=1)
+                self._uniform_workspace = UniformWorkspace(tab,
+                    model_actor_provider=self.model_actor_provider,
+                    capture=lambda category: self._open_capture_screen("uniform_stage1", category),
+                    training_busy=lambda: any(self._training.values()) or any(self._evaluating.values()))
+                self._uniform_workspace.grid(row=0, column=0, sticky="nsew")
+            else:
+                self._build_module_tab(tab, module)
+                self._refresh_counts(module)
 
         references = tabview.add('DYCI Logo & Digital Shirts')
         self._reference_task = BackgroundTask(self)
@@ -181,8 +192,9 @@ class TrainingPanel(ctk.CTkFrame):
             font=heading_font()).pack(anchor='w', padx=20, pady=(20, 8))
         ctk.CTkLabel(references, text=(
             'Save approved DYCI logos and digital shirt designs at full resolution.\n'
-            'Artwork is kept separate from camera training photos. Use real chest-framed photos\n'
-            'with visible logos in Uniform Check to train and evaluate detection accuracy.'),
+            'Artwork is kept separate from photographed training examples and is not training evidence.\n'
+            'Review actual white printed crests and their torso association in Uniform Check.\n'
+            'Optional logo verifier: Not trained; disabled. The crest can appear on more than one garment category.'),
             justify='left', wraplength=800, text_color=COLOR_TEXT_MUTED).pack(anchor='w', padx=20, pady=8)
         for kind, title in KINDS.items():
             ctk.CTkButton(references, text=f'Save {title}',
@@ -232,7 +244,7 @@ class TrainingPanel(ctk.CTkFrame):
             self._build_class_column(left, module, label, col)
 
         # RIGHT — training controls (scrollable: results card can be tall)
-        right = ctk.CTkScrollableFrame(tab, fg_color="transparent")
+        right = ScrollableFrame(tab, fg_color="transparent")
         right.grid(row=0, column=1, sticky="nsew", pady=PADDING)
         self._build_training_controls(right, module)
 
@@ -259,7 +271,7 @@ class TrainingPanel(ctk.CTkFrame):
         count_badge.grid(row=0, column=1, sticky="e")
 
         # Thumbnail grid (3 columns)
-        thumbs = ctk.CTkScrollableFrame(
+        thumbs = ScrollableFrame(
             frame, fg_color=COLOR_BG, corner_radius=CORNER_RADIUS, height=170,
         )
         thumbs.grid(row=1, column=0, sticky="nsew", padx=PADDING, pady=(0, 8))
@@ -480,6 +492,9 @@ class TrainingPanel(ctk.CTkFrame):
     # ------------------------------------------------------------------
 
     def _upload(self, module: str, label: str) -> None:
+        if module == "earring":
+            self._tabview.set("Uniform Check")
+            return
         # Per-extension filters + an All-files fallback — the macOS native panel is
         # unreliable with a single space-separated multi-extension pattern.
         filetypes = [
@@ -501,6 +516,9 @@ class TrainingPanel(ctk.CTkFrame):
         self._add_paths_bg(module, label, paths)
 
     def _import_folder(self, module: str, label: str) -> None:
+        if module == "earring":
+            self._tabview.set("Uniform Check")
+            return
         folder = filedialog.askdirectory(title="Select a folder of photos")
         if not folder:
             return
@@ -512,6 +530,9 @@ class TrainingPanel(ctk.CTkFrame):
 
     def _open_save_folder(self, module: str, label: str) -> None:
         """Open this class's on-disk save folder in the OS file manager."""
+        if module == "earring":
+            self._tabview.set("Uniform Check")
+            return
         folder = self.trainer.label_dir(module, label)
         try:
             folder.mkdir(parents=True, exist_ok=True)  # may not exist until first photo
@@ -527,6 +548,9 @@ class TrainingPanel(ctk.CTkFrame):
 
     def _add_paths_bg(self, module: str, label: str, paths: list[str]) -> None:
         """Read + add many image files on a worker thread so the UI stays responsive."""
+        if module == "earring":
+            self._tabview.set("Uniform Check")
+            return
         total = len(paths)
         self._set_buttons_state(module, False)
         show_toast(self, f"Importing {total} photo(s) to {_pretty(label)}…", type="info")
@@ -573,6 +597,9 @@ class TrainingPanel(ctk.CTkFrame):
 
     def _open_capture_screen(self, module: str, label: str) -> None:
         """Take over the panel center with a live camera + capture controls (no modal)."""
+        if module == "earring":
+            self._tabview.set("Uniform Check")
+            return
         if self._capture_screen is not None:
             return  # already capturing
         if self._tabview is not None:
@@ -649,7 +676,7 @@ class TrainingPanel(ctk.CTkFrame):
         ctk.CTkLabel(strip_card, text="Captured photos  ·  not saved yet",
                      font=body_small_font(), text_color=COLOR_TEXT_MUTED).grid(
             row=0, column=0, sticky="w", padx=12, pady=(10, 4))
-        strip = ctk.CTkScrollableFrame(strip_card, fg_color="transparent",
+        strip = ScrollableFrame(strip_card, fg_color="transparent",
                                        orientation="horizontal", height=84)
         strip.grid(row=1, column=0, sticky="ew", padx=8, pady=(0, 10))
         state["strip"] = strip
@@ -973,7 +1000,7 @@ class TrainingPanel(ctk.CTkFrame):
                       hover_color=COLOR_ACCENT_HOVER, font=body_small_font(),
                       command=lambda: self._back_to_camera(state)).grid(row=0, column=1, sticky="e")
 
-        grid = ctk.CTkScrollableFrame(review, fg_color=COLOR_SURFACE, corner_radius=CORNER_RADIUS,
+        grid = ScrollableFrame(review, fg_color=COLOR_SURFACE, corner_radius=CORNER_RADIUS,
                                       border_width=1, border_color=COLOR_BORDER)
         grid.grid(row=1, column=0, sticky="nsew", padx=PADDING)
         cols = 6
@@ -1066,6 +1093,24 @@ class TrainingPanel(ctk.CTkFrame):
 
     def _save_changes(self, state: dict) -> None:
         module, label = state["module"], state["label"]
+        if module == "uniform_stage1":
+            if state.get("saving"):
+                return
+            frames = tuple(state["buffer"])
+            state["saving"] = True
+            def done(_value):
+                state["buffer"] = []
+                state["saving"] = False
+                if self._capture_state is state:
+                    self._close_capture_screen()
+            def error(message):
+                if not self._uniform_workspace.task.busy:
+                    state["saving"] = False
+                show_toast(self, message, type="error")
+            accepted = self._uniform_workspace.import_frames(frames, label, self._uniform_capture_group, done, error)
+            if not accepted:
+                state["saving"] = False
+            return
         n = 0
         for frame in state["buffer"]:
             try:
@@ -1117,12 +1162,14 @@ class TrainingPanel(ctk.CTkFrame):
         self._capture_state = None
         if self._tabview is not None:
             self._tabview.grid()
-        if module is not None:
+        if module == "uniform_stage1":
+            self._uniform_workspace.refresh()
+        elif module is not None:
             self._refresh_thumbnails(module, label)
             self._refresh_counts(module)
 
     def on_show(self) -> None:
-        return
+        self._uniform_workspace.refresh()
 
     def on_hide(self) -> None:
         # Leaving Training mid-capture: stop the camera loop and restore the tabs.
@@ -1130,6 +1177,9 @@ class TrainingPanel(ctk.CTkFrame):
             self._close_capture_screen()
 
     def _clear(self, module: str, label: str) -> None:
+        if module == "earring":
+            self._tabview.set("Uniform Check")
+            return
         dialog = ctk.CTkInputDialog(
             text=f'Type "CLEAR" to delete ALL "{_pretty(label)}" photos.',
             title="Confirm Clear",
@@ -1156,7 +1206,18 @@ class TrainingPanel(ctk.CTkFrame):
         eval_state = "normal" if (enabled and self.trainer.is_trained(module)) else "disabled"
         controls["evaluate_btn"].configure(state=eval_state)
 
+    def _candidate_job_blocks(self) -> bool:
+        if self._uniform_workspace.candidate_busy():
+            show_toast(self, 'Finish or cancel the uniform candidate operation first.', type='warning')
+            return True
+        return False
+
     def _start_training(self, module: str) -> None:
+        if module == "earring":
+            self._tabview.set("Uniform Check")
+            return
+        if self._candidate_job_blocks():
+            return
         if self._training.get(module):
             return
         self._training[module] = True
@@ -1204,6 +1265,11 @@ class TrainingPanel(ctk.CTkFrame):
     # ------------------------------------------------------------------
 
     def _start_evaluation(self, module: str) -> None:
+        if module == "earring":
+            self._tabview.set("Uniform Check")
+            return
+        if self._candidate_job_blocks():
+            return
         if self._training.get(module) or self._evaluating.get(module):
             return
         if not self.trainer.is_trained(module):

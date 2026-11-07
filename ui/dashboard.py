@@ -14,6 +14,7 @@ from datetime import timezone
 
 import cv2
 import customtkinter as ctk
+from ui.scrolling import ScrollableFrame
 import numpy as np
 from PIL import Image
 from io import BytesIO
@@ -31,6 +32,7 @@ from core.performance import PERF, TRACES, measure
 from core.live_pipeline import LiveProcessor, LiveWorker, MonitorTask, MotionProjection, FaceTrackingProcessor
 from core.assessment_candidates import (ClearFrameRouter, OBSERVATION_ONLY,
     CLEAR_FRAME_SELECTION, PRIORITIZED_ASSESSMENT)
+from core.uniform_observation import ObservationUniformSession
 from ui.live_alerts import LiveAlerts
 from ui.live_overlay import draw_assessments
 from core.uniform_matcher import UniformColorMatcher
@@ -191,9 +193,9 @@ class CBVMSDashboard(WorkspaceWindow):
 
         # Real-time notification broker (sound + toast + bell badge + log panel)
         self._notifier = Notifier()
-        # YOLOv8 classification trainer (uniform / earring modules)
+        # YOLOv8 classification trainer (uniform module)
         self._trainer = monitor_models.trainer if monitor_models is not None else ViolationTrainer()
-        # Live violation checker (uniform / earring) backed by the trainer models
+        # Live violation checker (uniform) backed by the trainer models
         self._checker = LiveViolationChecker(self._trainer, notifier=self._notifier)
         # Full-body person detector (YOLOv8n) for reliable torso crops
         if self._injected:
@@ -240,12 +242,14 @@ class CBVMSDashboard(WorkspaceWindow):
         self._notification_out = queue.Queue(maxsize=50)
         self._stats_out = queue.Queue(maxsize=1)
         self._stats_busy = threading.Event()
+        self._uniform_observation = ObservationUniformSession.from_environment(observation_only=OBSERVATION_ONLY)
         self._processor = LiveProcessor(
             self._database, self._recognizer, self._person_detector,
             self._trainer, self._uniform_matcher, self._notifier,
             latest_sample=self._latest_monitor_sample,
             state=LiveState(LiveConfig(violation_min_confidence=UNIFORM_VIOLATION_CONF)),
             observation_only=OBSERVATION_ONLY,
+            uniform_observation=self._uniform_observation,
         )
         self._monitor_session_id = self._processor.security_session
         self._monitor_session_started_at = datetime.now(timezone.utc)
@@ -254,10 +258,12 @@ class CBVMSDashboard(WorkspaceWindow):
             and task.context.generation == self._monitor_generation
             and task.camera_generation == self._camera_generation
             and task.uniform_enabled == self._checker.check_uniform
-            and task.earring_enabled == self._checker.check_earring)
+            and not task.earring_enabled)
         self._processor.readiness = self._readiness
         self._observation_only = OBSERVATION_ONLY
-        self._candidate_router = ClearFrameRouter() if (CLEAR_FRAME_SELECTION or PRIORITIZED_ASSESSMENT) else None
+        self._candidate_router = (ClearFrameRouter(fresh_selection=True,ttl=self._uniform_observation.config.frame_ttl)
+            if self._uniform_observation is not None else
+            ClearFrameRouter() if (CLEAR_FRAME_SELECTION or PRIORITIZED_ASSESSMENT) else None)
         if self._candidate_router is not None:
             self._gallery_listener = self._on_gallery_revision
             self._recognizer.add_gallery_listener(self._gallery_listener)
@@ -400,7 +406,7 @@ class CBVMSDashboard(WorkspaceWindow):
         # Placed/forgotten dynamically in _update_bell_badge().
 
         # Only the menu shrinks/scrolls; reserve the footer even on short displays.
-        navigation = ctk.CTkScrollableFrame(
+        navigation = ScrollableFrame(
             sidebar, height=1, fg_color="transparent", corner_radius=0,
             scrollbar_button_color=COLOR_BORDER,
             scrollbar_button_hover_color=COLOR_ACCENT_HOVER,
@@ -601,6 +607,8 @@ class CBVMSDashboard(WorkspaceWindow):
             self._view_host,
             trainer=self._trainer,
             get_frame=self._get_camera_frame,
+            model_actor_provider=lambda: (None if self._closed.is_set() else
+                self._database.get_staff_session_info(self.staff_session_token)),
         )),
             "settings": ("_settings_panel", lambda: SettingsPanel(
             self._view_host,
@@ -1526,15 +1534,26 @@ class CBVMSDashboard(WorkspaceWindow):
 
     def _prewarm_models(self) -> None:
         self._monitor_models.start()
+        candidate = getattr(self,'_uniform_observation',None)
+        if candidate is not None:
+            try:
+                candidate.prepare()
+            except Exception as exc:
+                event('observation_candidate_unavailable',error=str(exc))
 
     def _retry_models(self):
         self._monitor_models.start(retry=True)
 
     def _on_localized(self, result):
         """Tracking worker submits its original pixels, landmarks and ownership token."""
+        candidate = getattr(self,'_uniform_observation',None)
+        if (candidate is not None and result.task.valid()
+                and result.task.context.generation == self._monitor_generation
+                and result.task.camera_generation == self._camera_generation):
+            result = replace(result,task=candidate.observe(result.task,result.observations))
         candidate_observation_route = (getattr(self, "_observation_only", False)
             and getattr(self, "_candidate_router", None) is not None
-            and (CLEAR_FRAME_SELECTION or PRIORITIZED_ASSESSMENT))
+            and (CLEAR_FRAME_SELECTION or PRIORITIZED_ASSESSMENT or candidate is not None))
         if (not result.task.valid() or not self._readiness.ready('recognition')
                 or result.task.context.generation != self._monitor_generation
                 or result.task.camera_generation != self._camera_generation
@@ -1545,7 +1564,7 @@ class CBVMSDashboard(WorkspaceWindow):
             if getattr(self, "_candidate_router", None) is not None:
                 self._candidate_router.observe(result,
                     prioritize=PRIORITIZED_ASSESSMENT,
-                    select=CLEAR_FRAME_SELECTION)
+                    select=CLEAR_FRAME_SELECTION or candidate is not None)
                 self._dispatch_assessment_candidate()
                 return
             else:
@@ -1576,6 +1595,9 @@ class CBVMSDashboard(WorkspaceWindow):
         router = getattr(self, "_candidate_router", None)
         if router is not None:
             router.reset()
+        candidate = getattr(self,'_uniform_observation',None)
+        if candidate is not None:
+            candidate.invalidate()
 
     def _latest_monitor_sample(self):
         """Worker-safe read; never starts devices or touches Tk."""
@@ -1609,6 +1631,9 @@ class CBVMSDashboard(WorkspaceWindow):
         self._tracking_times.clear()
         if getattr(self, "_candidate_router", None) is not None:
             self._candidate_router.reset()
+        candidate = getattr(self,'_uniform_observation',None)
+        if candidate is not None:
+            candidate.invalidate()
         _drain(self._live_worker.requests)
         _drain(self._live_worker.results)
         if getattr(self, "_alerts_scroll", None) is not None:
@@ -1644,7 +1669,7 @@ class CBVMSDashboard(WorkspaceWindow):
                         assessed.update(face_box=current['face_box'],torso_box=current['torso_box'])
                         if current['torso_box'] is None and assessed.get('state') != 'Enrollment review':
                             assessed.update(state='Uniform not assessed',reason=current['reason'],
-                                            detail=current['reason'],accepted_categories=())
+                                            detail=current['reason'],accepted_categories=(),garment=None)
                         current=assessed
                 combined.append(current)
             return combined
@@ -1669,6 +1694,14 @@ class CBVMSDashboard(WorkspaceWindow):
         for assessment in result.assessments:
             row = asdict(assessment)
             row.update(observed_at=result.task.observed_at, detail=assessment.reason)
+            candidate = getattr(self,'_uniform_observation',None)
+            if candidate is not None and assessment.garment is not None:
+                ticket = next((t for t in result.task.uniform_tickets or ()
+                    if t.key[-2:]==(assessment.track_id,assessment.presence_id)),None)
+                if ticket is None or not candidate.result_valid(assessment.garment,ticket):
+                    row.update(state='Unable to assess',garment=None,
+                        reason='Candidate evidence expired or association changed',
+                        detail='Candidate evidence expired or association changed')
             projection = projections.get(assessment.track_id)
             if sample.frame_id == result.task.context.frame_id:
                 box = assessment.face_box
@@ -1724,6 +1757,9 @@ class CBVMSDashboard(WorkspaceWindow):
                 self._halt_camera()
             if self._active_nav == "live":
                 model_message = self._readiness.message()
+                candidate = getattr(self,'_uniform_observation',None)
+                if candidate is not None:
+                    model_message += ' · '+candidate.status_text()
                 if model_message != getattr(self, '_model_status_text', None):
                     self._status_models.configure(text=model_message)
                     self._model_status_text = model_message
@@ -1762,7 +1798,7 @@ class CBVMSDashboard(WorkspaceWindow):
                         self._tracking_worker.offer(MonitorTask(
                             FrameContext(self._monitor_generation, sample.frame_id, sample.captured_at),
                             sample.frame, sample.captured_wall_time or time.time()-(started-sample.captured_at), self._monitor_cancel,
-                            uniform_enabled=self._checker.check_uniform, earring_enabled=self._checker.check_earring,
+                            uniform_enabled=self._checker.check_uniform, earring_enabled=False,
                             camera_generation=self._camera_generation,
                             source_id=str((self._camera_active_source or {}).get('id', '')),
                             source_label=str((self._camera_active_source or {}).get('label', 'Camera'))))

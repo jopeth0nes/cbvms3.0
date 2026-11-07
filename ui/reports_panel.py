@@ -4,6 +4,7 @@ import json
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import customtkinter as ctk
+from ui.scrolling import ScrollableFrame
 
 from core.report_csv import ROSTER, read_csv, write_csv, import_roster
 from core.report_snapshot import SECTIONS, create_snapshot, export_snapshot_csv, dependent_options, is_current_generation, sort_snapshot
@@ -42,7 +43,7 @@ class ReportsPanel(ctk.CTkFrame):
         self.applied_summary=ctk.CTkLabel(self,text='Applied filters: All',anchor='w',justify='left',width=1,wraplength=900,text_color=COLOR_TEXT_MUTED)
         self.applied_summary.grid(row=1,column=0,sticky='ew',padx=8,pady=(0,5))
         self.bind('<Configure>', self._resize_summaries, add='+')
-        self.filter_box=ctk.CTkScrollableFrame(self,fg_color=COLOR_SURFACE,corner_radius=10,height=255);self.filter_box.grid(row=2,column=0,sticky='ew',pady=(0,8))
+        self.filter_box=ScrollableFrame(self,fg_color=COLOR_SURFACE,corner_radius=10,height=255);self.filter_box.grid(row=2,column=0,sticky='ew',pady=(0,8))
         for col in range(4):self.filter_box.grid_columnconfigure(col,weight=1)
         self.sections={}
         for i,name in enumerate(SECTIONS):

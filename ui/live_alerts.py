@@ -16,6 +16,7 @@ from typing import Iterable, Mapping
 from core.attendance import MANILA
 
 import customtkinter as ctk
+from ui.scrolling import ScrollableFrame
 from PIL import Image, ImageTk
 from core.attendance import MANILA
 
@@ -37,6 +38,11 @@ _STATE_LABELS = {
     "uniform_not_assessed": ("Uniform not assessed", COLOR_TEXT_MUTED),
     "enrollment_review": ("Enrollment review", "#C778DD"),
     "unknown_person": ("Unknown person", COLOR_WARNING),
+    "campus_uniform_recognized": ("Campus Uniform recognized", COLOR_ACCENT),
+    "organizational_shirt_recognized": ("Organizational Shirt recognized", COLOR_ACCENT),
+    "other_clothing_recognized": ("Wrong Uniform recognized", COLOR_ACCENT),
+    "wrong_uniform_recognized": ("Wrong Uniform recognized", COLOR_ACCENT),
+    "unable_to_assess": ("Unable to assess", COLOR_TEXT_MUTED),
 }
 
 
@@ -244,7 +250,7 @@ class _PresenceCard(ctk.CTkFrame):
         self._presentation = values
 
 
-class LiveAlerts(ctk.CTkScrollableFrame):
+class LiveAlerts(ScrollableFrame):
     """Tk-thread-only sidebar: stable widgets, wrapped text, no forced scrolling."""
 
     def __init__(self, master, *, max_cards: int = 50, **kwargs) -> None:

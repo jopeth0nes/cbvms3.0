@@ -86,10 +86,15 @@ class AudioTests(unittest.TestCase):
         wrong = replace(good, accepted_categories=('wrong_uniform',), uniform_assessment=U.WRONG)
         for a, suspended, expected in ((good,False,K.POSITIVE), (wrong,False,K.VIOLATION),
                 (good,True,K.SUSPENSION), (wrong,True,K.SUSPENSION),
-                (replace(good, accepted_categories=('earring',)),False,K.VIOLATION)):
+                (replace(good, accepted_categories=('earring',)),False,None)):
             self.assertEqual(select_sound(a,suspended), expected)
         for a in (replace(good,reliable_identity=False), replace(good,student_id='')):
             self.assertIsNone(select_sound(a,True))
+
+    def test_retired_earring_result_never_queues_audio(self):
+        self.offer(assessment(accepted_categories=('earring',)))
+        self.drain()
+        self.assertEqual(self.backend.calls, [])
 
     def test_display_text_and_no_violation_are_not_positive(self):
         for state in ('Uniform compliant', 'No violation recorded', 'Checking uniform',
@@ -113,7 +118,7 @@ class AudioTests(unittest.TestCase):
 
     def test_each_mapping_plays_local_asset(self):
         for a, expected in ((assessment(), 'positive'),
-            (assessment(accepted_categories=('earring',)), 'violation'),
+            (assessment(accepted_categories=('wrong_uniform',)), 'violation'),
             (assessment(active_suspension=True), 'suspension')):
             self.audio.cancel_detection()
             self.offer(a)

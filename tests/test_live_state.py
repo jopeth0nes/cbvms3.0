@@ -268,10 +268,10 @@ class LiveStateTests(unittest.TestCase):
         with self.assertRaises(FrozenInstanceError):
             result.name = "Wrong Student"
 
-    def test_earrings_independent_of_torso_and_male_eligibility(self):
+    def test_retired_earring_evidence_is_ignored(self):
         state, result = self.settled([row(torso_valid=False, earring_violation=True)])
         self.assertEqual(result[0].state, UNIFORM_NOT_ASSESSED)
-        self.assertEqual(result[0].accepted_categories, ("earring",))
+        self.assertEqual(result[0].accepted_categories, ())
         for changes in (dict(gender="Female"), dict(discipline_eligible=False), dict(earring_violation=None)):
             current = dict(torso_valid=False, earring_violation=True)
             current.update(changes)
@@ -281,7 +281,7 @@ class LiveStateTests(unittest.TestCase):
 
     def test_separate_accepted_categories_are_auditable(self):
         _, result = self.settled([row(uniform="wrong_uniform", earring_violation=True)])
-        self.assertEqual(result[0].accepted_categories, ("wrong_uniform", "earring"))
+        self.assertEqual(result[0].accepted_categories, ("wrong_uniform",))
 
     def test_suspension_metadata_only_exposed_after_reliable_identity(self):
         state = LiveState()

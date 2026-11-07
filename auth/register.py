@@ -17,6 +17,7 @@ import tkinter as tk
 
 import cv2
 import customtkinter as ctk
+from ui.scrolling import ScrollableFrame
 import numpy as np
 from PIL import Image, ImageTk
 
@@ -182,7 +183,7 @@ class StudentRegistrationWindow(ctk.CTkToplevel):
     # ── Left: registration form ─────────────────────────────────────────
 
     def _build_form(self, parent) -> None:
-        card = ctk.CTkScrollableFrame(parent, fg_color=COLOR_SURFACE,
+        card = ScrollableFrame(parent, fg_color=COLOR_SURFACE,
                             corner_radius=CORNER_RADIUS,
                             border_width=1, border_color=COLOR_BORDER)
         card.grid(row=0, column=0, sticky="nsew", padx=(0, 6), pady=(0, 0))

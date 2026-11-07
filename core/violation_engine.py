@@ -1,6 +1,6 @@
 """Lightweight live violation checker for CBVMS.
 
-Wraps the in-app ViolationTrainer classifiers (uniform / earring) and turns a
+Wraps the in-app ViolationTrainer uniform classifier and turns a
 per-person face/torso crop into a list of human-readable violation strings.
 """
 
@@ -24,7 +24,15 @@ class LiveViolationChecker:
         self._notifier = notifier
         # Toggles (match the settings-panel switch semantics).
         self.check_uniform: bool = True
-        self.check_earring: bool = True
+
+    @property
+    def check_earring(self) -> bool:
+        """Compatibility for saved settings; this retired check cannot be enabled."""
+        return False
+
+    @check_earring.setter
+    def check_earring(self, _enabled) -> None:
+        pass
 
     def check(
         self,
@@ -40,19 +48,7 @@ class LiveViolationChecker:
             if label == "wrong_uniform" and conf >= CONF_THRESHOLD:
                 violations.append(f"Wrong uniform ({conf:.0%})")
 
-        if (
-            self.check_earring
-            and face_bgr is not None
-            and face_bgr.size > 0
-            and (gender or "").lower() == "male"
-        ):
-            label, conf = self._trainer.predict("earring", face_bgr)
-            if label == "with_earring" and conf >= CONF_THRESHOLD:
-                violations.append(f"Earring detected ({conf:.0%})")
-
-        # NOTE: check() is currently unused by the live pipeline — ui/dashboard.py
-        # predicts inline in _check_violations and fires the notifier from _log_db
-        # (which is cooldown-gated). This hook is kept for spec fidelity / future use.
+        # Compatibility helper; the live pipeline owns guarded persistence/audio.
         if self._notifier is not None and violations:
             self._notifier.notify(student_name="", violation=", ".join(violations))
 

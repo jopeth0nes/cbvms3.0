@@ -5,6 +5,7 @@ import io
 from concurrent.futures import ThreadPoolExecutor
 from tkinter import messagebox
 import customtkinter as ctk
+from ui.scrolling import ScrollableFrame
 from PIL import Image, ImageOps
 from core.appeal_categories import CATEGORIES, BY_CODE, BY_OPTION, SELECT_CATEGORY, category_display, validate_category
 from core.discipline import display_local_datetime as ts
@@ -302,7 +303,7 @@ class AppealsPanel(ctk.CTkFrame):
 
     def _inbox_loaded(self, result):
         self.subtitle.configure(text=f"{result['total']} appeals in this view  /  {self.filter.get()}" )
-        listing = self.listing = ctk.CTkScrollableFrame(self.body, fg_color=COLOR_BG,
+        listing = self.listing = ScrollableFrame(self.body, fg_color=COLOR_BG,
             scrollbar_button_color=BORDER, scrollbar_button_hover_color='#49677D')
         listing.grid(row=0, column=0, sticky='nsew')
         listing.grid_columnconfigure(0, weight=1)
@@ -416,7 +417,7 @@ class AppealsPanel(ctk.CTkFrame):
         self.subtitle.configure(text='Review the evidence, read the explanation, and record your decision.')
         self.heading.configure(text=f"Appeal #{case['id']} · Violation #{case['violation_id']}")
         # Only the evidence/details area scrolls at small sizes. Decisions stay in a fixed footer.
-        content = ctk.CTkScrollableFrame(self.body, fg_color=CARD, corner_radius=16,
+        content = ScrollableFrame(self.body, fg_color=CARD, corner_radius=16,
             border_width=1, border_color=BORDER)
         content.grid(row=0, column=0, sticky='nsew')
         content.grid_columnconfigure((0,1), weight=1, uniform='evidence')
@@ -628,7 +629,7 @@ class AppealsPanel(ctk.CTkFrame):
         window.title(f'Evidence analysis history · #{evidence_id}')
         window.geometry('520x360')
         self._case_windows.append(window)
-        listing=ctk.CTkScrollableFrame(window,fg_color=COLOR_BG)
+        listing=ScrollableFrame(window,fg_color=COLOR_BG)
         listing.pack(fill='both',expand=True,padx=12,pady=12)
         for index, report in enumerate(runs):
             ctk.CTkButton(listing,text=f"{report['status']} · {report.get('classification','inconclusive')} · {report.get('created_at','date unavailable')}",

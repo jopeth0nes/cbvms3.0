@@ -4,6 +4,11 @@ import customtkinter as ctk
 
 
 class WorkspaceWindow(ctk.CTk):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        from ui.scrolling import install_scrolling
+        install_scrolling(self)
+
     def destroy(self):
         if getattr(self, "_destroying", False):
             return

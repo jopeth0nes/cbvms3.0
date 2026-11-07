@@ -2,6 +2,7 @@
 import tkinter as tk
 from tkinter import ttk
 import customtkinter as ctk
+from ui.scrolling import ScrollableFrame
 
 from ui.academic_fields import AcademicFields
 from ui.background_task import BackgroundTask
@@ -62,7 +63,7 @@ def open_student_details(parent, database, student_id, actor, on_saved):
         term_task=BackgroundTask(term_tab)
         term_task.run(read_terms,lambda result:term_text.insert('end',json.dumps(result,indent=2,default=str,ensure_ascii=False)),
                       lambda error:term_text.insert('end',error))
-        form = ctk.CTkScrollableFrame(details, fg_color=COLOR_SURFACE)
+        form = ScrollableFrame(details, fg_color=COLOR_SURFACE)
         form.pack(fill="both", expand=True)
         ctk.CTkLabel(form, text=f"{student['name']} · {student_id}", font=heading_font(16),
                      text_color=COLOR_TEXT).pack(anchor="w", pady=8)
@@ -102,7 +103,7 @@ def open_student_details(parent, database, student_id, actor, on_saved):
                       corner_radius=CORNER_RADIUS, command=save)
         save_button.pack(fill="x", pady=8)
 
-        log = ctk.CTkScrollableFrame(history, fg_color=COLOR_SURFACE)
+        log = ScrollableFrame(history, fg_color=COLOR_SURFACE)
         log.pack(fill="both", expand=True)
         messages = []
         for item in history_rows:

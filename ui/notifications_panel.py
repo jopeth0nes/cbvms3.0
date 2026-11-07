@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Callable
 
 import customtkinter as ctk
+from ui.scrolling import ScrollableFrame
 from core.discipline import parse_db_datetime
 from core.notifier import Notification
 
@@ -65,7 +66,7 @@ class NotificationsPanel(ctk.CTkFrame):
         self._build_categories()
         self._build_filter()
 
-        self._list = ctk.CTkScrollableFrame(self, fg_color="transparent")
+        self._list = ScrollableFrame(self, fg_color="transparent")
         self._list.grid(row=3, column=0, sticky="nsew", padx=PADDING, pady=(0, PADDING))
         self._list.grid_columnconfigure(0, weight=1)
 

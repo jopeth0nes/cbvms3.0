@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Callable
 
 import cv2
 import customtkinter as ctk
+from ui.scrolling import ScrollableFrame
 import numpy as np
 from PIL import Image, ImageTk
 
@@ -882,7 +883,7 @@ class EnrollmentPanel(ctk.CTkFrame):
         ).grid(row=1, column=0, sticky="w", padx=PADDING_LG, pady=(2, 14))
 
         card.grid_rowconfigure(2, weight=1)
-        form = ctk.CTkScrollableFrame(card, fg_color="transparent", height=310)
+        form = ScrollableFrame(card, fg_color="transparent", height=310)
         form.grid(row=2, column=0, sticky="nsew", padx=PADDING_LG, pady=(0, 4))
         form.grid_columnconfigure(1, weight=1)
 

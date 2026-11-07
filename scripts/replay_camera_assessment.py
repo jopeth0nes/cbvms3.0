@@ -14,6 +14,7 @@ the real installed models and the hard observation-only persistence gate.
 """
 import argparse
 import json
+import hashlib
 import os
 import queue
 import shutil
@@ -37,6 +38,8 @@ os.environ.setdefault("YOLO_CONFIG_DIR", str(Path(tempfile.gettempdir()) / "cbvm
 
 
 def load_annotations(path):
+    if path.stat().st_size > 32 * 1024 * 1024:
+        raise ValueError('Annotation file exceeds 32 MiB; split into complete-passage clips')
     rows = []
     with path.open(encoding="utf-8") as stream:
         for line_no, line in enumerate(stream, 1):
@@ -44,12 +47,20 @@ def load_annotations(path):
                 continue
             try:
                 row = json.loads(line)
-                if not isinstance(row.get("frame_index"), int) or not isinstance(row.get("people"), list):
+                if (not isinstance(row, dict) or type(row.get("frame_index")) is not int
+                        or row["frame_index"] < 0 or not isinstance(row.get("people"), list)):
                     raise ValueError("expected frame_index and people")
+                if len(rows) >= 10000 or len(row['people']) > 48:
+                    raise ValueError('Annotation limit: 10000 frames, 48 people per frame')
+                if any(not isinstance(person, dict) for person in row['people']):
+                    raise ValueError('people must contain objects')
                 rows.append(row)
             except (json.JSONDecodeError, ValueError) as exc:
                 raise ValueError(f"invalid annotation line {line_no}: {exc}") from exc
-    return sorted(rows, key=lambda row: row["frame_index"])
+    rows.sort(key=lambda row: row["frame_index"])
+    if any(rows[index - 1]["frame_index"] == rows[index]["frame_index"] for index in range(1, len(rows))):
+        raise ValueError("duplicate annotation frame_index rows are not allowed")
+    return rows
 
 
 def overlap(a, b):
@@ -58,6 +69,16 @@ def overlap(a, b):
     inter = max(0, x2-x1) * max(0, y2-y1)
     union = max(1, (a[2]-a[0])*(a[3]-a[1]) + (b[2]-b[0])*(b[3]-b[1]) - inter)
     return inter / union
+
+
+def validate_replay_fps(value):
+    try:
+        fps = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("video reports an invalid or missing FPS") from exc
+    if not np.isfinite(fps) or fps <= 0:
+        raise ValueError("video reports an invalid or missing FPS; replay cadence will not be guessed")
+    return fps
 
 
 class ReplayMetrics:
@@ -289,6 +310,11 @@ def main():
                         help="candidate mode: retain/select clearer original frames per passage")
     parser.add_argument("--prioritized-assessment", action="store_true",
                         help="candidate mode: enable fair prioritized candidate scheduling")
+    parser.add_argument('--uniform-observation-config',type=Path,
+                        help='Explicit Stage 4 candidate config; observation-only, no activation')
+    parser.add_argument('--body-backend',choices=('cpu','mps'),default=None)
+    parser.add_argument('--camera-label', default='local video', help='Human-readable source label in the report')
+    parser.add_argument('--camera-mode', choices=('color','infrared','unknown'), default='unknown')
     args = parser.parse_args()
     if not args.video.is_file() or (args.evaluation_db and not args.evaluation_db.is_file()):
         parser.error("video and optional evaluation DB must be local files")
@@ -298,6 +324,12 @@ def main():
         parser.error("identity alias map must be a local JSON file")
     if args.max_frames < 0:
         parser.error("--max-frames cannot be negative")
+    if args.output.exists():
+        parser.error('Output already exists; choose a new report path')
+    if not isinstance(args.camera_label, str) or not args.camera_label.strip():
+        parser.error("--camera-label must be a nonempty label")
+    if args.uniform_observation_config and args.mode!='candidate':
+        parser.error('Uniform observation config requires candidate mode')
     try:
         labels = load_annotations(args.annotations)
     except ValueError as exc:
@@ -310,24 +342,49 @@ def main():
     from core.live_state import FrameContext, LiveState
     from core.person_detector import PersonDetector
     from core.recognizer import FaceRecognizer
-    from core.trainer import ViolationTrainer
+    from core.trainer import ViolationTrainer, MODULES, ROOT as TRAINER_ROOT
     from core.uniform_matcher import UniformColorMatcher
     from core.performance import PERF, TRACES
+    from core.uniform_observation import ObservationConfig,ObservationUniformSession
+    from core.uniform_latency import UniformPassageMetrics
+    from core.uniform_walkthrough import WalkthroughMetrics
+    from core.uniform_model_registry import digest
+    from dataclasses import replace
+
+    # This CLI is explicitly an evaluation tool. Exclude warmup and enable the
+    # existing bounded telemetry for the measured replay regardless of shell flags.
+    PERF.enabled = TRACES.enabled = False
+
+    uniform_session = (ObservationUniformSession(ObservationConfig.load(args.uniform_observation_config))
+                       if args.uniform_observation_config else None)
+    uniform_metrics = UniformPassageMetrics()
 
     capture = cv2.VideoCapture(str(args.video))
     if not capture.isOpened():
         parser.error("could not open local video")
+    reported_fps = float(capture.get(cv2.CAP_PROP_FPS) or 0.0)
+    try:
+        fps = validate_replay_fps(reported_fps)
+    except ValueError as exc:
+        capture.release()
+        parser.error(str(exc))
+    reported_width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+    reported_height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+    expected_frame_count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
     by_frame = {row["frame_index"]: row for row in labels}
+    walkthrough = WalkthroughMetrics()
     metric = None
     decoded_frames = annotated_frames = 0
     selected_count = 0
     assessment_calls = assessment_results = assessment_rows = 0
     compute_ms = deque(maxlen=10_000)
+    decoded_read_times = deque(maxlen=10_000)
     compute_samples_dropped = 0
     skipped_for_lag = 0
     worker = None
     database = None
-    detector = PersonDetector()
+    reached_eof = False
+    detector = PersonDetector(backend=args.body_backend or (uniform_session.config.backend if uniform_session else None))
     trainer = ViolationTrainer()
     started = time.monotonic()
     try:
@@ -350,29 +407,51 @@ def main():
             first_ok, first_frame = capture.read()
             if not first_ok:
                 parser.error("video contains no decodable frames")
+            actual_resolution = [int(first_frame.shape[1]), int(first_frame.shape[0])]
             warm_started = time.monotonic()
-            recognizer._ensure_models()
+            if not recognizer._ensure_models():
+                raise RuntimeError('Installed face models unavailable; no replacement downloaded')
             detector._ensure_model()
-            detector.detect_persons(first_frame)
-            if trainer.is_trained("uniform"):
+            # Warm the same installed face/body stages before starting the replay clock.
+            warmup_face_count = 0
+            for _ in range(3):
+                faces = recognizer.detect_faces(first_frame)
+                warmup_face_count = len(faces)
+                recognizer.recognize_faces(first_frame, detections=faces)
+                detector.detect_persons(first_frame)
+            if uniform_session is not None:
+                uniform_session.prepare()
+                uniform_session.predictor.timed_probabilities(first_frame)
+            elif trainer.is_trained("uniform"):
                 trainer.predict_proba("uniform", first_frame)
             warmup_wall_ms = round((time.monotonic() - warm_started) * 1000, 2)
+            def actual_providers(model):
+                session = getattr(model, "session", None)
+                getter = getattr(session, "get_providers", None)
+                try:
+                    return list(getter()) if getter else []
+                except Exception:
+                    return []
+            face_providers = {
+                "detection": actual_providers(getattr(recognizer, "_detector", None)),
+                "recognition": actual_providers(getattr(recognizer, "_recognition", None)),
+            }
             capture.set(cv2.CAP_PROP_POS_FRAMES, 0)
             tracker = FaceTrackingProcessor(recognizer, detector)
             processor = LiveProcessor(database, recognizer, detector, trainer, matcher,
-                                      SimpleNamespace(), state=LiveState(), observation_only=True)
+                                      SimpleNamespace(), state=LiveState(), observation_only=True,
+                                      uniform_observation=uniform_session)
             candidate_route = args.mode == "candidate" and (
-                args.clear_frame_selection or args.prioritized_assessment)
-            router = ClearFrameRouter() if candidate_route else None
+                args.clear_frame_selection or args.prioritized_assessment or uniform_session is not None)
+            router = (ClearFrameRouter(fresh_selection=True,ttl=uniform_session.config.frame_ttl)
+                      if uniform_session is not None else ClearFrameRouter() if candidate_route else None)
             aliases = {}
             if args.identity_alias_map:
                 aliases = json.loads(args.identity_alias_map.read_text(encoding="utf-8"))
                 if not isinstance(aliases, dict):
                     parser.error("identity alias map must be a JSON object")
             metric = ReplayMetrics({student_id: alias for alias, student_id in aliases.items()})
-            fps = float(capture.get(cv2.CAP_PROP_FPS) or 0.0)
-            if fps <= 0:
-                fps = 30.0
+            PERF.enabled = TRACES.enabled = True
             worker_results = None
             compute_lock = threading.Lock()
             replay_clock_start = time.monotonic()
@@ -402,6 +481,16 @@ def main():
                 assessment_rows += len(result.assessments)
                 metric.record_assessments(selected_index, selected_ms, selected_labels,
                     result.task.observations or (), result.assessments, completion_ms=completion_ms)
+                walkthrough.record_results(selected_index, completion_ms,
+                    result.task.observations or (), result.assessments)
+                if uniform_session is not None:
+                    by_presence = {a.presence_id:a for a in result.assessments}
+                    for li,oi in metric._matches(selected_labels,result.task.observations or ()).items():
+                        observation = result.task.observations[oi]
+                        assessment = by_presence.get(observation.presence_id)
+                        if assessment is not None:
+                            uniform_metrics.record(selected_labels[li]['passage_alias'],
+                                assessment.garment,completion_ms)
             def dispatch_candidate():
                 nonlocal selected_count, assessment_calls
                 if router is None or worker.stop_event.is_set():
@@ -440,6 +529,7 @@ def main():
                 _camera_generation=0, _monitor_offer_time=-1e9,
                 _live_worker=SimpleNamespace(offer=baseline_offer))
             index = 0
+            replay_cancelled = threading.Event()
             next_frame_at = time.monotonic()
             while args.max_frames == 0 or index < args.max_frames:
                 delay = next_frame_at-time.monotonic()
@@ -447,13 +537,23 @@ def main():
                     time.sleep(delay)
                 ok, frame = capture.read()
                 if not ok:
+                    reached_eof = True
                     break
+                decoded_read_times.append(time.monotonic())
                 row = by_frame.get(index)
                 if row is not None:
                     annotated_frames += 1
                 media_ms = index * 1000.0 / fps
                 people = row.get("people", []) if row else []
                 metric.observe_labels(index, media_ms, people)
+                if row is not None:
+                    uniform_metrics.observe_labels(people)
+                    walkthrough_people = [dict(person,
+                        camera=person.get("camera", args.camera_label),
+                        camera_mode=person.get("camera_mode", args.camera_mode))
+                        for person in people]
+                    walkthrough.observe_frame(index, media_ms, walkthrough_people,
+                                              frame_size=(frame.shape[1], frame.shape[0]))
                 captured = time.monotonic()
                 if captured - next_frame_at > 1.0 / fps:
                     # Preserve labels as misses, but never burst overdue image work.
@@ -463,18 +563,22 @@ def main():
                     next_frame_at = replay_clock_start + index / fps
                     continue
                 task = MonitorTask(FrameContext(1, ("replay", index), captured), frame,
-                    time.time(), threading.Event(), source_id="local-replay",
+                    time.time(), replay_cancelled, source_id="local-replay",
                     source_label="Local evaluation replay", observation_only=True)
                 with TRACES.observation(task, 'tracking', captured):
                     tracked = tracker.analyze(task)
                     TRACES.result(tracked)
                 if tracked is not None:
+                    if uniform_session is not None:
+                        tracked = replace(tracked,task=uniform_session.observe(tracked.task,tracked.observations))
                     if people and tracked.observations:
                         metric.record_detections(index, media_ms, people, tracked.observations)
                         metric.record_usable(index, media_ms, people, tracked.observations)
+                    if row is not None and tracked.observations:
+                        walkthrough.record_detections(index, media_ms, tracked.observations)
                     if router is not None:
                         router.observe(tracked, prioritize=args.prioritized_assessment,
-                                       select=args.clear_frame_selection)
+                                       select=args.clear_frame_selection or uniform_session is not None)
                         dispatch_candidate()
                     else:
                         CBVMSDashboard._on_localized(baseline_owner, tracked)
@@ -519,6 +623,23 @@ def main():
 
     elapsed = time.monotonic() - started
     metrics = metric.report() if metric is not None else {}
+    processed_interval_ms = decoded_frames * 1000.0 / fps
+    input_complete = (reached_eof if expected_frame_count <= 0 else decoded_frames >= expected_frame_count)
+    if args.max_frames and decoded_frames >= args.max_frames and expected_frame_count > args.max_frames:
+        input_complete = False
+    walkthrough_report = walkthrough.report(interval_end_ms=processed_interval_ms,
+                                           input_complete=input_complete)
+    face_detection_path = recognizer.model_dir / "det_10g.onnx"
+    face_recognition_path = recognizer.model_dir / "w600k_r50.onnx"
+    uniform_legacy_path = TRAINER_ROOT / MODULES["uniform"]["model_out"]
+    model_hashes = {
+        "body_yolo": digest(detector._MODEL_PATH) if Path(detector._MODEL_PATH).is_file() else None,
+        "face_detection_onnx": digest(face_detection_path) if face_detection_path.is_file() else None,
+        "face_recognition_onnx": digest(face_recognition_path) if face_recognition_path.is_file() else None,
+        "legacy_uniform_classifier": digest(uniform_legacy_path) if uniform_legacy_path.is_file() else None,
+        "candidate_uniform_classifier": (uniform_session.config.candidate_sha256
+            if uniform_session is not None else None),
+    }
     compute_latency = {"n": len(compute_ms),
         "p50_ms": round(float(np.percentile(compute_ms, 50)), 2) if compute_ms else None,
         "p95_ms": round(float(np.percentile(compute_ms, 95)), 2) if compute_ms else None,
@@ -528,27 +649,69 @@ def main():
         "selected_assessment_frames": selected_count, "passages": metrics.get("passage_count", 0),
         "live_processor_calls": assessment_calls, "live_processor_results": assessment_results,
         "assessment_rows": assessment_rows, "passage_metrics": metrics,
+        "walkthrough_metrics": walkthrough_report,
         "compute_wall_latency": compute_latency,
         "stage_timings": PERF.snapshot(), "observation_traces": TRACES.snapshot(),
+        "telemetry_enabled": True, "telemetry_excludes_warmup": True,
         "compute_latency_samples_dropped": compute_samples_dropped,
         "frames_skipped_for_lag": skipped_for_lag,
-        "passage_latency_verified": skipped_for_lag == 0,
+        "passage_latency_verified": skipped_for_lag == 0 and metrics.get('passage_count',0)>0,
         "latency_clock": "paced video playback monotonic completion time; capture evidence uses video frame timeline; timing unverified if frames skipped",
         "elapsed_wall_ms": round(elapsed*1000, 2),
         "warmup_wall_ms": warmup_wall_ms,
+        "face_body_warmup_frames": 3, "faces_on_warmup_frame": warmup_face_count,
+        "source_metadata": {"camera_label": args.camera_label, "camera_mode": args.camera_mode,
+            "physical_capture_fps": None, "video_reported_fps": reported_fps,
+            "video_reported_resolution": [reported_width, reported_height],
+            "decoded_raster_resolution": actual_resolution,
+            "measured_paced_decode_cadence_fps": ((len(decoded_read_times)-1) /
+                (decoded_read_times[-1]-decoded_read_times[0]) if len(decoded_read_times) > 1 and
+                decoded_read_times[-1] > decoded_read_times[0] else None),
+            "decode_cadence_note": "Measured source-frame read cadence during paced replay; not physical camera capture FPS."},
         "identity_scoring_enabled": bool(args.evaluation_db and args.identity_alias_map),
-        "model_backends": {"body_yolo": detector.backend_status(), "face": "ONNX CPUExecutionProvider"},
+        "model_backends": {"body_yolo": detector.backend_status(), "face": {
+            "detection_providers": face_providers["detection"],
+            "recognition_providers": face_providers["recognition"]}},
+        "model_hashes": model_hashes,
+        "input_hashes": {"video": digest(args.video), "annotations": digest(args.annotations)},
+        "configuration_sha256": hashlib.sha256(json.dumps({
+            "mode": args.mode, "max_frames": args.max_frames, "camera_label": args.camera_label,
+            "camera_mode": args.camera_mode, "clear_frame_selection": args.clear_frame_selection,
+            "prioritized_assessment": args.prioritized_assessment,
+            "body_backend": args.body_backend,
+            "uniform_observation_config_sha256": digest(args.uniform_observation_config)
+                if args.uniform_observation_config else None,
+        }, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
+        "logo_verification": {"enabled": False, "executor_available": False, "calls": 0,
+            "reason": "No Stage 5 logo-verification executor is available in the replay path."},
+        "passage_metrics_scope": "Legacy ReplayMetrics aggregate; independently annotated all-passage scoring is in walkthrough_metrics.",
         "uniform_model_loaded": trainer.is_trained("uniform"),
         "observation_only": True, "database_writes": 0,
         "candidate_flags": {"clear_frame_selection": args.clear_frame_selection,
                              "fresh_selection": router.fresh_selection if router else False,
                              "prioritized_assessment": args.prioritized_assessment},
         "evaluation_database_copied_to_private_temp_and_discarded": bool(args.evaluation_db),
-        "passage_details_written": False,
+        "passage_details_written": True,
         "comparison_requires_same_video_annotations_evaluation_db_and_flags": True}
+    if uniform_session is not None:
+        uniform_report = uniform_metrics.report()
+        report.update(uniform_passage_metrics=uniform_report,
+            uniform_candidate={'sha256':uniform_session.config.candidate_sha256,
+                'config_version':uniform_session.config.version,
+                'descriptor':{k:uniform_session.descriptor.get(k) for k in
+                    ('id','dataset_version','preprocessing_version','synthetic')},
+                'backend':uniform_session.predictor.backend_status()},
+            input_hashes={'video':digest(args.video),'annotations':digest(args.annotations)},
+            physical_camera_measurement=False,
+            passage_latency_verified=(skipped_for_lag==0 and
+                uniform_report['annotated_zone_entry_to_first_decision']['count']>0 and
+                uniform_report['annotated_first_usable_to_first_decision']['count']>0))
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(report, sort_keys=True) + "\n", encoding="utf-8")
-    print(json.dumps(report, sort_keys=True))
+    with args.output.open('x', encoding='utf-8') as stream:
+        stream.write(json.dumps(report, sort_keys=True) + "\n")
+    print(json.dumps({'output':str(args.output),'observation_only':True,
+        'labeled_passages':walkthrough_report['passage_count'],
+        'accuracy_status':walkthrough_report['garment_accuracy_status']}))
 
 
 if __name__ == "__main__":

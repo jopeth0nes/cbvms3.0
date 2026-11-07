@@ -3,6 +3,7 @@ import tkinter as tk
 from tkinter import ttk
 
 import customtkinter as ctk
+from ui.scrolling import install_scrolling
 
 
 class PortalScrollFrame(ctk.CTkFrame):
@@ -22,8 +23,8 @@ class PortalScrollFrame(ctk.CTkFrame):
         self._layout_job = None
         self._parent_canvas.bind("<Configure>", self._resize)
         self.body.bind("<Configure>", self._schedule_region)
-        self._wheel_root = self.winfo_toplevel()
-        self._wheel_binding = self._wheel_root.bind("<MouseWheel>", self._wheel, add="+")
+        install_scrolling(self)
+        self._parent_canvas.configure(yscrollincrement=1)
 
     def _resize(self, event):
         if int(float(self._parent_canvas.itemcget(self._window, "width"))) != event.width:
@@ -44,19 +45,8 @@ class PortalScrollFrame(ctk.CTkFrame):
         if region:
             self._parent_canvas.configure(scrollregion=region)
 
-    def _wheel(self, event):
-        widget = event.widget
-        while widget is not None:
-            if widget is self:
-                delta = event.delta
-                units = -int(delta / 120) if abs(delta) >= 120 else -int(delta)
-                self._parent_canvas.yview_scroll(units, "units")
-                return "break"
-            widget = getattr(widget, "master", None)
-
     def destroy(self):
         if self._layout_job is not None:
             self.after_cancel(self._layout_job)
             self._layout_job = None
-        self._wheel_root.unbind("<MouseWheel>", self._wheel_binding)
         super().destroy()

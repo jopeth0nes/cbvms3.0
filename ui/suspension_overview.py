@@ -4,6 +4,7 @@ import tkinter as tk
 from tkinter import ttk
 
 import customtkinter as ctk
+from ui.scrolling import ScrollableFrame
 
 from core.academics import COLLEGES, YEAR_LEVELS, NEEDS_REVIEW, courses_for, COURSES
 from core.discipline import parse_db_datetime, violation_display_name
@@ -161,7 +162,7 @@ class SuspensionsWorkspace(ctk.CTkFrame):
         self.nav.set('Overview')
         self.host=ctk.CTkFrame(self,fg_color='transparent')
         self.host.grid(row=2,column=0,sticky='nsew'); self.host.grid_columnconfigure(0,weight=1); self.host.grid_rowconfigure(0,weight=1)
-        self.overview=ctk.CTkScrollableFrame(self.host,fg_color=COLOR_BG)
+        self.overview=ScrollableFrame(self.host,fg_color=COLOR_BG)
         self.overview.grid(row=0,column=0,sticky='nsew'); self.overview.grid_columnconfigure(0,weight=1)
         enable_trackpad_scroll(self.overview)
         self._build_overview()

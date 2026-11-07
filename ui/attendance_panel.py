@@ -7,6 +7,7 @@ from database.security_events import UNKNOWN_COLUMNS
 import tkinter as tk
 from tkinter import ttk, filedialog
 import customtkinter as ctk
+from ui.scrolling import ScrollableFrame
 
 from core.academics import COLLEGES, COURSES, YEAR_LEVELS, NEEDS_REVIEW, courses_for
 from core.attendance import TITLE, MANILA, SUMMARY_COLUMNS, EVENT_COLUMNS, display_time, validate_filters, export_csv
@@ -41,7 +42,7 @@ class AttendancePanel(ctk.CTkFrame):
             wraplength=950,justify='left',anchor='w',text_color=COLOR_TEXT_MUTED,font=body_small_font())
         self.description.grid(row=1,column=0,sticky='ew',pady=6)
         self.known_description = self.description.cget('text')
-        form=self.form=ctk.CTkScrollableFrame(self,height=145,fg_color='transparent')
+        form=self.form=ScrollableFrame(self,height=145,fg_color='transparent')
         form.grid(row=2,column=0,sticky='ew')
         for col in range(3):
             form.columnconfigure(col,weight=1,uniform='attendance_filters')

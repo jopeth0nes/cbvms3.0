@@ -15,6 +15,7 @@ from datetime import datetime
 from tkinter import filedialog, ttk, messagebox
 
 import customtkinter as ctk
+from ui.scrolling import ScrollableFrame
 from PIL import Image, ImageTk
 
 from database.db_manager import CBVMSDatabase
@@ -263,7 +264,7 @@ class RecordsPanel(ctk.CTkFrame):
         self._viol_split.add(right, minsize=int(self._apply_widget_scaling(280)), stretch="never")
         self._viol_split.bind("<Configure>", self._initialize_violation_split)
         self._viol_split.bind("<ButtonRelease-1>", self._remember_violation_split, add="+")
-        self._viol_detail = ctk.CTkScrollableFrame(
+        self._viol_detail = ScrollableFrame(
             right, fg_color=COLOR_SURFACE,
             corner_radius=CORNER_RADIUS,
             border_width=1, border_color=COLOR_BORDER)

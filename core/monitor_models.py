@@ -30,7 +30,7 @@ class MonitorModels(metaclass=_SharedBundle):
 
     Two native loaders may run at once. Face detection and recognition have the
     highest queue priority, so optional model work cannot occupy either slot first.
-    Once those are launched, body, uniform, and earring preparation use the slots.
+    Once those are launched, body and uniform preparation use the slots.
     """
     def __init__(self, recognizer, person_detector, trainer=None, uniform_matcher=None):
         self.recognizer = recognizer
@@ -53,7 +53,6 @@ class MonitorModels(metaclass=_SharedBundle):
     def _bind_optional_loaders(self):
         self.readiness.add("body", self._load_body, priority=10)
         self.readiness.add("uniform", self._load_uniform, priority=11)
-        self.readiness.add("earring", self._load_earring, priority=12)
 
     def _load_body(self):
         if self.person_detector is None:
@@ -67,6 +66,13 @@ class MonitorModels(metaclass=_SharedBundle):
         return True
 
     def _load_uniform(self):
+        if callable(getattr(type(self.trainer), 'uniform_version', None)):
+            token = self.trainer.uniform_version()
+            if token != 'legacy-default':
+                self.trainer.uniform_decision(np.zeros((224,224,3),np.uint8),self.uniform_matcher,token)
+                if not self.trainer.uniform_version_matches(token):
+                    raise RuntimeError('Uniform model changed during warmup; retry')
+                return True
         # The colour matcher is supplementary; the trained classifier remains
         # useful on its own when no colour reference has been calibrated.
         if not self.uniform_matcher.is_loaded():
@@ -79,15 +85,6 @@ class MonitorModels(metaclass=_SharedBundle):
             raise RuntimeError("Uniform classifier inference failed; restore compatible weights and retry")
         if self.uniform_matcher.is_loaded():
             self.uniform_matcher.is_uniform(np.zeros((224, 224, 3), np.uint8))
-        return True
-
-    def _load_earring(self):
-        if not self.trainer.is_trained("earring"):
-            raise RuntimeError("No trained earring weights")
-        if self.trainer._get_model("earring") is None:
-            raise RuntimeError(self.trainer.last_error.get("earring") or "Earring classifier failed")
-        if self.trainer.predict_proba("earring", np.zeros((224, 224, 3), np.uint8)) is None:
-            raise RuntimeError("Earring classifier inference failed; restore compatible weights and retry")
         return True
 
     def start(self, *, retry=False):

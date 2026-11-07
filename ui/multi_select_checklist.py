@@ -1,6 +1,7 @@
 """Compact keyboard-friendly multi-select checklist for report filters."""
 import tkinter as tk
 import customtkinter as ctk
+from ui.scrolling import ScrollableFrame
 
 
 def selection_after_toggle(values, selected, value, checked):
@@ -43,7 +44,7 @@ class MultiSelectChecklist(ctk.CTkFrame):
         win.bind('<Escape>',lambda _e:win.destroy())
         search=tk.StringVar(); entry=ctk.CTkEntry(win,textvariable=search,placeholder_text='Search options'); entry.pack(fill='x',padx=10,pady=8)
         controls=ctk.CTkFrame(win,fg_color='transparent'); controls.pack(fill='x',padx=8)
-        scroll=ctk.CTkScrollableFrame(win); scroll.pack(fill='both',expand=True,padx=8,pady=8)
+        scroll=ScrollableFrame(win); scroll.pack(fill='both',expand=True,padx=8,pady=8)
         checks={}
         initial=set(self.values if self.selected is None else self.selected)
         all_mode=self.selected is None

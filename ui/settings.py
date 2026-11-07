@@ -10,6 +10,7 @@ from typing import Callable
 from typing import TYPE_CHECKING
 
 import customtkinter as ctk
+from ui.scrolling import ScrollableFrame
 
 from core.trainer import MODULES
 from core.detection_audio import LABELS
@@ -87,7 +88,7 @@ class SettingsPanel(ctk.CTkFrame):
         self._refresh_model_status()
 
     def _build(self) -> None:
-        scroll = ctk.CTkScrollableFrame(self, fg_color="transparent")
+        scroll = ScrollableFrame(self, fg_color="transparent")
         scroll.grid(row=0, column=0, sticky="nsew")
         scroll.grid_columnconfigure(0, weight=1)
 
@@ -377,11 +378,9 @@ class SettingsPanel(ctk.CTkFrame):
 
         # Initialise from the live checker so the switches reflect the real state.
         self._enable_uniform = ctk.BooleanVar(value=bool(getattr(self.checker, "check_uniform", True)))
-        self._enable_earring = ctk.BooleanVar(value=bool(getattr(self.checker, "check_earring", True)))
 
         items = [
             ("Enable Uniform Check", self._enable_uniform, "uniform"),
-            ("Enable Earring Check", self._enable_earring, "earring"),
         ]
         for i, (label, var, key) in enumerate(items):
             sw = ctk.CTkSwitch(
@@ -398,10 +397,9 @@ class SettingsPanel(ctk.CTkFrame):
         return row + 1
 
     def _apply_violation_toggles(self, _changed: str | None) -> None:
-        # Uniform / earring map to the live checker (the trained classifiers).
+        # Uniform maps to the live checker.
         for attr, var in [
             ("check_uniform", self._enable_uniform),
-            ("check_earring", self._enable_earring),
         ]:
             try:
                 setattr(self.checker, attr, bool(var.get()))
@@ -491,7 +489,7 @@ class SettingsPanel(ctk.CTkFrame):
             except Exception:
                 pass
 
-    _CLASSIFIER_TITLES = {"uniform": "Uniform Check", "earring": "Earring Check"}
+    _CLASSIFIER_TITLES = {"uniform": "Uniform Check"}
 
     def _model_status_section(self, master, *, row: int) -> int:
         card = self._section_card(master, "Model Status")
@@ -510,9 +508,9 @@ class SettingsPanel(ctk.CTkFrame):
         )
         self._detector_status_label.pack(side="right")
 
-        # Trainable classifiers (uniform / earring)
+        # Active uniform classifier
         self._cls_status: dict[str, dict] = {}
-        for module in ("uniform", "earring"):
+        for module in ("uniform",):
             title = self._CLASSIFIER_TITLES[module]
             model_file = Path(MODULES[module]["model_out"]).name
 
@@ -621,23 +619,16 @@ class SettingsPanel(ctk.CTkFrame):
         ).pack(anchor="w", padx=PADDING, pady=(PADDING, 8))
 
         text = (
-            "Train classifiers directly inside CBVMS — no scripts or manual files needed.\n\n"
-            "1) Open the Training tab\n"
-            "   - Click 🎓 Training in the left sidebar.\n"
-            "   - Choose a tab: Uniform Check or Earring Check.\n\n"
-            "2) Build the dataset (per class)\n"
-            "   - UNIFORM: correct_uniform vs wrong_uniform.\n"
-            "   - EARRING: no_earring vs with_earring.\n"
-            "   - Use 'Upload Photos' or 'Capture from Camera' for each class.\n"
-            "   - Minimum 10 photos per class (more = better accuracy).\n\n"
-            "3) Train\n"
-            "   - Click 'Train Now'. A YOLOv8 classifier trains on your photos.\n"
-            "   - The model is saved automatically to the models/ folder\n"
-            "     (uniform_cls.pt / earring_cls.pt).\n\n"
-            "4) Check status\n"
-            "   - Return here and click 'Refresh Status'.\n"
-            "   - A trained model shows 'Trained ✓' with its sample counts\n"
-            "     and last-trained time.\n"
+            "1) Open Training → Uniform Check.\n\n"
+            "2) Choose Campus Uniform, Organizational Shirt, or Wrong Uniform.\n"
+            "   Upload Photos, Import Folder, Import ZIP, or Capture from Camera.\n"
+            "   Review the garment label and torso crop, then explicitly approve.\n"
+            "   Unclear examples stay pending or excluded. Label the clothing, not the day’s policy.\n\n"
+            "3) Click ‘Train candidate with approved datasets’.\n"
+            "   Check approved counts and resolve the displayed prerequisites.\n"
+            "   The minimum count permits an experiment; it does not establish accuracy.\n\n"
+            "4) Evaluate the candidate in Evaluation & Models.\n"
+            "   Training leaves the active model in place. Activation requires authorized review.\n"
         )
         box = ctk.CTkTextbox(
             win,

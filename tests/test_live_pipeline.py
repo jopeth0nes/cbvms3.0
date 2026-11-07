@@ -345,17 +345,34 @@ class LivePipelineTests(unittest.TestCase):
         self.assertEqual(fx.notifier.notify.call_args.args, ("Student S-1", "Suspended until 2027-01-01 UTC"))
         self.assertTrue(callable(fx.notifier.notify.call_args.kwargs["valid_if"]))
 
-    def test_earring_category_independent_of_torso_and_gender(self):
+    def test_retired_earring_check_never_predicts_even_if_old_task_enables_it(self):
         fx = PipelineFixture()
         fx.trainer.is_trained.side_effect = lambda module: module == "earring"
         fx.trainer.predict.return_value = ("with_earring", .9)
-        result = fx.confirmed()
+        for seq in range(1, 5):
+            result = fx.analyze(seq, earring_enabled=True)
         self.assertEqual(result.assessments[0].state, UNIFORM_NOT_ASSESSED)
-        self.assertEqual(result.assessments[0].accepted_categories, ("earring",))
+        self.assertEqual(result.assessments[0].accepted_categories, ())
+        fx.trainer.predict.assert_not_called()
+        self.assertTrue(all(c.args[0] != "earring" for c in fx.trainer.is_trained.call_args_list))
         fx.persist(result)
-        self.assertEqual(fx.database.log_violation.call_args.kwargs["violation_code"], "earring")
-        fx.recognizer.recognize_faces.return_value = [detection(gender="Female")]
-        self.assertFalse(fx.analyze(5).assessments[0].accepted_categories)
+        fx.database.log_violation.assert_not_called()
+        # A queued result from an older producer must not create a new alert either.
+        stale_assessment = replace(result.assessments[0], accepted_categories=("earring",))
+        fx.persist(replace(result, assessments=(stale_assessment,)))
+        fx.database.log_violation.assert_not_called()
+        fx.notifier.notify.assert_not_called()
+
+    def test_legacy_checker_ignores_saved_earring_toggle(self):
+        from core.violation_engine import LiveViolationChecker
+        trainer = MagicMock()
+        trainer.predict.return_value = ("correct_uniform", .9)
+        checker = LiveViolationChecker(trainer)
+        checker.check_earring = True
+        self.assertFalse(checker.check_earring)
+        image = np.zeros((50, 50, 3), np.uint8)
+        self.assertEqual(checker.check(image, image, "Male"), [])
+        trainer.predict.assert_called_once_with("uniform", image)
 
     def test_cancelled_old_session_disconnected_and_expired_results_have_no_side_effect(self):
         for cause in ("cancelled", "source", "stale", "disconnected", "camera_late"):

@@ -213,6 +213,7 @@ class LiveAssessment:
     active_suspension: bool = False
     enrollment_status: str = ""
     lifecycle_version: int = 0
+    garment: object | None = None  # Observation-only, separate from policy/discipline evidence.
 
     @property
     def matched(self) -> bool:
@@ -294,6 +295,11 @@ class LiveState:
         self._seen_frames.clear()
         self._last_at = -math.inf
         self._next_id = 1
+
+    def clear_uniform_evidence(self):
+        """A model version change does not reset identity, earrings or cooldowns."""
+        for track in self._tracks:
+            track.clear_uniform()
 
     def _pair_cost(self, track, box, emb, captured_at):
         dt = max(0., captured_at - track.last_at)
@@ -504,17 +510,9 @@ class LiveState:
                 if label == "wrong_uniform" and raw_label == label and raw_conf >= cfg.violation_min_confidence:
                     accepted.append("wrong_uniform")
 
-        # Earring evidence has its own eligibility, crop, and category; torso
-        # unavailability must not disable the existing male-only face-crop check.
-        earring = row.get("earring_violation")
-        earring_eligible = eligible and str(row.get("gender") or "").lower() == "male"
-        if not earring_eligible or earring is None:
-            track.earrings.clear()
-        else:
-            track.earrings = deque((e for e in track.earrings if e[0] >= context.captured_at - cfg.evidence_ttl), maxlen=cfg.evidence_window)
-            track.earrings.append((context.captured_at, context.frame_id, bool(earring)))
-            if earring and sum(e[2] for e in track.earrings) >= cfg.earring_confirm_frames:
-                accepted.append("earring")
+        # Ignore retired earring evidence even from an older producer/session.
+        # Historical database records and datasets are unaffected.
+        track.earrings.clear()
         return LiveAssessment(
             context=context, track_id=track.id,
             presence_id=f"person:{context.generation}:{track.id}",

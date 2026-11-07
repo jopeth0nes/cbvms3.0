@@ -8,6 +8,7 @@ from collections.abc import Callable
 from typing import Any
 
 import customtkinter as ctk
+from ui.scrolling import ScrollableFrame
 
 from api.camera_manager import probe_ip_camera, scan_usb_cameras, test_ip_camera
 from api.camera_store import (
@@ -163,7 +164,7 @@ class CameraConfigurationSection(ctk.CTkFrame):
 
     self._add_modal: ctk.CTkToplevel | None = None
 
-    self._list_host = ctk.CTkScrollableFrame(self, fg_color="transparent", height=220)
+    self._list_host = ScrollableFrame(self, fg_color="transparent", height=220)
     self._list_host.pack(fill="both", expand=True, padx=PADDING, pady=(0, 8))
 
     stream = ctk.CTkFrame(self, fg_color="transparent")

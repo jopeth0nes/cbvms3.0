@@ -45,7 +45,7 @@ def select_sound(assessment, active_suspension: bool) -> SoundKind | None:
         return SoundKind.ENROLLMENT
     if active_suspension:
         return SoundKind.SUSPENSION
-    if any(code in ('wrong_uniform', 'earring') for code in assessment.accepted_categories):
+    if 'wrong_uniform' in assessment.accepted_categories:
         return SoundKind.VIOLATION
     if (not assessment.accepted_categories
             and assessment.uniform_assessment is UniformAssessment.CORRECT):
