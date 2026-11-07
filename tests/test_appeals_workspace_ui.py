@@ -81,6 +81,21 @@ class AppealsWorkspaceTests(unittest.TestCase):
         self.panel.refresh();self.until(lambda:self.panel.case.get('id')==self.ids[0])
         self.assertEqual(self.panel.category.get(),BY_CODE['approval.valid_exemption'].option)
 
+    def test_visible_inbox_refreshes_but_open_case_draft_is_preserved(self):
+        self.panel.show_inbox()
+        self.until(lambda:self.panel.listing is not None and self.panel.status.cget('text')=='')
+        with patch.object(self.panel,'show_inbox',wraps=self.panel.show_inbox) as refresh:
+            self.panel._last_inbox_refresh=time.monotonic()-6
+            self.until(lambda:refresh.call_count==1)
+        self.open(self.ids[0])
+        self.panel.reason.insert('1.0','Keep this review draft')
+        with patch.object(self.panel,'show_inbox') as refresh:
+            self.panel._last_inbox_refresh=time.monotonic()-6
+            end=time.monotonic()+.15
+            while time.monotonic()<end:self.root.update();time.sleep(.01)
+            refresh.assert_not_called()
+        self.assertEqual(self.panel.reason.get('1.0','end-1c'),'Keep this review draft')
+
     def test_back_restores_inbox_scroll_position(self):
         self.root.geometry('800x480')
         self.panel.show_inbox()

@@ -132,6 +132,7 @@ class EnrollmentPanel(ctk.CTkFrame):
         self._list_refresh_pending = False
         self._delete_task = BackgroundTask(self)
         self._restore_task = BackgroundTask(self)
+        self._purge_task = BackgroundTask(self)
         self.recognizer = recognizer
         self.get_frame = get_frame
         self.get_frame_sample = get_frame_sample
@@ -192,7 +193,7 @@ class EnrollmentPanel(ctk.CTkFrame):
         ctk.CTkLabel(
             header, text="Student Management", font=heading_font(16), text_color=COLOR_TEXT,
         ).grid(row=0, column=0, sticky="w")
-        ctk.CTkButton(
+        self._enroll_btn = ctk.CTkButton(
             header,
             text="+ Enroll New Student",
             height=32,
@@ -200,7 +201,9 @@ class EnrollmentPanel(ctk.CTkFrame):
             fg_color=COLOR_ACCENT,
             hover_color=COLOR_ACCENT_HOVER,
             command=self._open_enroll_flow,
-        ).grid(row=0, column=1, sticky="e")
+        )
+        self._enroll_btn.grid(row=0, column=1, sticky="e")
+        self._enroll_btn.grid_remove()  # Show only after the staff role is verified.
 
         self._build_summary_card(left)
 
@@ -412,6 +415,8 @@ class EnrollmentPanel(ctk.CTkFrame):
             command=self._restore_selected, state='disabled')
         self._restore_btn.pack(fill='x', pady=(6, 0))
         self._restore_btn.pack_forget()
+        self._purge_btn = ctk.CTkButton(actions, text='Delete Permanently', width=185, height=30,
+            corner_radius=8, fg_color=COLOR_DANGER, command=self._purge_selected, state='disabled')
 
     def _configure_tree_style(self) -> None:
         style = ttk.Style()
@@ -481,7 +486,11 @@ class EnrollmentPanel(ctk.CTkFrame):
             else:
                 rows = self.database.get_all_students(include_archived=False)
             students = [dict(row) for row in rows]
+            from core.registration_sync import statuses as website_statuses
+            website = website_statuses(self.database)
             for student in students:
+                if website is not None:
+                    student['_website_registration'] = website.get(student['id'], 'pending')
                 student['_active_suspension'] = self.database.get_active_suspension(student['student_id'])
                 if role == 'superadmin' and not student.get('is_archived'):
                     student['_lifecycle'] = self.database.get_student_archive_operation(
@@ -496,9 +505,11 @@ class EnrollmentPanel(ctk.CTkFrame):
             self._actor_role = role
             self._bin_total = total or 0
             if role == 'superadmin':
+                self._enroll_btn.grid()
                 self._archive_view_btn.grid()
                 self._delete_btn.pack(fill='x')
             else:
+                self._enroll_btn.grid_remove()
                 self._archive_view_btn.grid_remove()
                 self._delete_btn.pack_forget()
             self._students = students
@@ -597,6 +608,12 @@ class EnrollmentPanel(ctk.CTkFrame):
         can_recycle = bool(student and not archived and self._actor_role == 'superadmin')
         self._delete_btn.configure(state="normal" if can_recycle else "disabled")
         if archived and self._actor_role == 'superadmin':
+            self._purge_btn.pack(fill='x', pady=(6, 0))
+            self._purge_btn.configure(state='normal' if not self._purge_task.busy else 'disabled')
+        else:
+            self._purge_btn.pack_forget()
+            self._purge_btn.configure(state='disabled')
+        if archived and self._actor_role == 'superadmin':
             self._restore_btn.pack(fill='x', pady=(6, 0))
             self._restore_btn.configure(state='normal')
         else:
@@ -643,6 +660,12 @@ class EnrollmentPanel(ctk.CTkFrame):
                 self._summary_identity.configure(text=self._summary_identity.cget('text') +
                     f" · {label} · {operation.get('actor') or 'unknown'} · {operation.get('reason') or ''}")
         standing = standing_label(student)
+        website_state = student.get('_website_registration')
+        if website_state:
+            website_label = {'registered': 'Website account ready',
+                'existing_account': 'Existing website account — use its existing password',
+                'pending': 'Website registration pending', 'not_published': 'Website account not published'}.get(website_state, 'Website registration pending')
+            self._summary_identity.configure(text=self._summary_identity.cget('text') + ' · ' + website_label)
         self._summary_standing.configure(
             text=f"Status: {standing}",
             text_color=COLOR_SAFE if standing == "Enrolled" else COLOR_WARNING,
@@ -1695,8 +1718,10 @@ class EnrollmentPanel(ctk.CTkFrame):
             if is_new and values.get('email') and username:
                 def email():
                     from core.email_sender import send_credentials
+                    from core.registration_sync import email_note
                     send_credentials(to_email=values['email'],student_name=values['name'],
-                                     student_id=sid,username=username,password=password)
+                                     student_id=sid,username=username,password=password,
+                                     website_note=email_note(database, sid))
                 threading.Thread(target=email,daemon=True,name='enrollment-credentials').start()
         self._save_capture_async(state,save,completed)
 
@@ -1835,6 +1860,42 @@ class EnrollmentPanel(ctk.CTkFrame):
             self._set_status(f'Restore failed; the student remains in the Recycle Bin. {error}', error=True)
             self._on_row_select()
         self._restore_task.run(restore, completed, failed)
+
+    def _purge_selected(self):
+        student = self._resolve_selected_student()
+        if not student or not student.get('is_archived') or self._actor_role != 'superadmin':
+            self._set_status('Select a Recycle Bin entry as superadmin.', error=True)
+            return
+        if self._purge_task.busy or self._restore_task.busy:
+            return
+        sid = str(student['student_id'])
+        confirmation = simpledialog.askstring('Delete Permanently',
+            f'This removes the student account, photos, face data and local student history. '
+            f'This cannot be undone. Type student ID {sid} to confirm:', parent=self.winfo_toplevel())
+        if confirmation != sid:
+            return
+        reason = simpledialog.askstring('Delete Permanently', 'Reason for permanent deletion:', parent=self.winfo_toplevel())
+        if not reason or not reason.strip():
+            return
+        self._purge_btn.configure(state='disabled')
+        self._restore_btn.configure(state='disabled')
+        def remove():
+            self.database.permanently_delete_student(int(student['id']), sid, self.actor_token,
+                int(student['archive_version']), reason)
+            if self.recognizer is not None:
+                try:
+                    self.recognizer.load_known_faces()
+                except Exception:
+                    return False
+            return True
+        def completed(refreshed):
+            self._set_status('Student permanently deleted. The student ID and username can be registered again.'
+                + ('' if refreshed else ' Restart monitoring to refresh the face gallery.'), success=True)
+            self._reload_students()
+        def failed(error):
+            self._set_status(f'Permanent deletion failed: {error}', error=True)
+            self._on_row_select()
+        self._purge_task.run(remove, completed, failed)
 
     # ------------------------------------------------------------------
     # View photo (enlarge) modal

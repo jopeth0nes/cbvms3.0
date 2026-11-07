@@ -43,6 +43,18 @@ class AppealCategoryTests(unittest.TestCase):
                 ('appeals','decision_history','violations','strikes','strike_events','student_suspensions',
                  'student_notifications','evidence_files','students')}
 
+    def test_student_violation_card_receives_the_saved_decision_details(self):
+        from core.cloud_sync import student_snapshot
+        for code in ('rejection.other','approval.detection_error'):
+            sid,vid,aid=self.pending()
+            self.assertTrue(self.decide(aid,code,reason='Individual review <reason>'))
+            data=student_snapshot(self.db,self.db.get_student_by_student_id(sid))['snapshot']
+            row=next(v for v in data['violations'] if v['id']==vid)
+            self.assertEqual(row['appeal_decision_category_label'],BY_CODE[code].label)
+            self.assertEqual(row['appeal_admin_notes'],'Individual review <reason>')
+            self.assertEqual(row['appeal_decided_by'],'admin')
+            self.assertTrue(row['appeal_decided_at'])
+
     def test_exact_catalog_and_all_24_category_action_combinations(self):
         self.assertEqual(len(CATEGORIES),12)
         self.assertEqual(sum(c.decision=='approved' for c in CATEGORIES),7)

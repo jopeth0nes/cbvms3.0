@@ -127,6 +127,7 @@ class TrainingPanel(ctk.CTkFrame):
         trainer: ViolationTrainer,
         get_frame: Callable[[], np.ndarray | None],
         model_actor_provider=None,
+        on_model_trained: Callable[[str], None] | None = None,
         **kwargs,
     ) -> None:
         super().__init__(master, fg_color=COLOR_BG, **kwargs)
@@ -134,6 +135,7 @@ class TrainingPanel(ctk.CTkFrame):
         self.get_frame = get_frame
         self.model_actor_provider = model_actor_provider
         self._uniform_capture_group = "camera-session:" + uuid.uuid4().hex
+        self.on_model_trained = on_model_trained
 
         # Per-module widget references and runtime state
         self._ui: dict[str, dict] = {}
@@ -1258,6 +1260,8 @@ class TrainingPanel(ctk.CTkFrame):
         )
         self._set_buttons_state(module, True)
         self._refresh_counts(module)
+        if ok and self.on_model_trained is not None:
+            self.on_model_trained(module)
         show_toast(self, message, type="success" if ok else "error", duration=5000)
 
     # ------------------------------------------------------------------

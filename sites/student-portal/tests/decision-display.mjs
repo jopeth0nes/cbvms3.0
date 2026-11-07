@@ -1,0 +1,55 @@
+/** Execute the served violation renderer, including HTML escaping. */
+import {readFile} from 'node:fs/promises';
+import {createRequire} from 'node:module';
+import vm from 'node:vm';
+import assert from 'node:assert/strict';
+const require=createRequire(new URL('../../../.runtime/cloud-tools/package.json',import.meta.url));
+const {transform}=require('esbuild');
+const compiled=await transform(await readFile('lib/portal-decision-display.ts','utf8'),{loader:'ts',format:'esm'});
+const {patchPortalScript}=await import('data:text/javascript;base64,'+Buffer.from(compiled.code).toString('base64'));
+const source=process.argv[2]?await readFile(process.argv[2],'utf8'):await readFile('public/app.js','utf8');
+const patched=patchPortalScript(source);
+assert.equal(patchPortalScript(patched),patched);
+const context={document:{querySelector:()=>null,addEventListener:()=>{}},window:{addEventListener:()=>{}},setInterval:()=>{}};
+vm.createContext(context);
+vm.runInContext(patched.replace('\nstart();','\n'),context);
+for(const status of ['rejected','approved']) {
+ const row={id:5,appeal_status:status,appeal_eligibility_reason:'already_submitted',appeal_decision_category_label:'Category <unsafe>',
+  appeal_admin_notes:'Reason <script>alert(1)</script>',appeal_decided_by:'Admin <one>',appeal_decided_at:'2026-11-06 00:21:00'};
+ const html=vm.runInContext('violations('+JSON.stringify([row])+')',context);
+ assert.ok(html.includes('Category &lt;unsafe&gt;'));
+ assert.ok(html.includes('Reason &lt;script&gt;alert(1)&lt;/script&gt;'));
+ assert.ok(html.includes('Admin &lt;one&gt;'));
+ assert.ok(html.includes('Appeal '+status));
+ assert.ok(!html.includes('already_submitted'));
+ assert.ok(!html.includes('<script>'));
+}
+const pending=vm.runInContext('violations([{id:6,appeal_status:"pending",appeal_eligibility_reason:"already_submitted"}])',context);
+assert.ok(pending.includes('Your appeal has already been submitted'));
+assert.ok(!pending.includes('Decision category:'));
+let badge=null;const button={label:'',querySelector:()=>badge,setAttribute:(key,value)=>{if(key==='aria-label')button.label=value;},appendChild:element=>{badge=element;}};
+context.document.querySelector=selector=>selector==='[data-page="notifications"]'?button:null;
+context.document.createElement=()=>({style:{},setAttribute:()=>{},remove:()=>{badge=null;}});
+vm.runInContext('updateNotificationBadge(3)',context);
+assert.equal(badge.textContent,'3');assert.ok(badge.style.cssText.includes('background:#dc2626'));assert.equal(button.label,'Notifications, 3 unread');
+vm.runInContext('updateNotificationBadge(120)',context);assert.equal(badge.textContent,'99+');
+vm.runInContext('updateNotificationBadge(0)',context);assert.equal(badge,null);assert.equal(button.label,'Notifications');
+vm.runInContext('updateNotificationBadge(undefined)',context);assert.equal(badge,null);
+vm.runInContext("me={synced_at:'2026-11-06T00:00:00Z'};var rendered=0;var sample={_unread_count:1,_violations:[]};render=(d)=>{rendered++;rememberPortalPage(d);};api=async()=>sample;",context);
+await vm.runInContext('pollPortalLive()',context);
+assert.equal(context.rendered,1);
+vm.runInContext("sample._synced_at='2026-11-06T00:00:05Z'",context);
+await vm.runInContext('pollPortalLive()',context);assert.equal(context.rendered,1);
+vm.runInContext('sample._unread_count=2',context);
+await vm.runInContext('pollPortalLive()',context);assert.equal(context.rendered,2);assert.equal(badge.textContent,'2');
+context.document.querySelector=selector=>selector==='form'?{}:selector==='[data-page="notifications"]'?button:null;
+vm.runInContext('sample._unread_count=3',context);
+await vm.runInContext('pollPortalLive()',context);assert.equal(context.rendered,2);assert.equal(badge.textContent,'3');
+vm.runInContext('var calls=0;var release;api=()=>{calls++;return new Promise(resolve=>release=resolve);}',context);
+const inflight=vm.runInContext('pollPortalLive()',context);
+await vm.runInContext('pollPortalLive()',context);assert.equal(context.calls,1);
+vm.runInContext('generation++;release({_unread_count:90});',context);await inflight;
+assert.equal(badge.textContent,'3');
+console.log('PASS: approved/rejected category, reason, actor/date, pending copy, escaping, and idempotent asset patch.');
+console.log('PASS: red unread badge, accessible count, 99+ cap, and cleared read state.');
+console.log('PASS: quiet changed-only polling, form preservation, no overlapping requests, stale navigation response discarded.');

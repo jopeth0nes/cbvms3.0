@@ -609,6 +609,7 @@ class CBVMSDashboard(WorkspaceWindow):
             get_frame=self._get_camera_frame,
             model_actor_provider=lambda: (None if self._closed.is_set() else
                 self._database.get_staff_session_info(self.staff_session_token)),
+            on_model_trained=lambda _module: self._retry_models(),
         )),
             "settings": ("_settings_panel", lambda: SettingsPanel(
             self._view_host,

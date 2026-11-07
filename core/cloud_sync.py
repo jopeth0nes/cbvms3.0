@@ -78,7 +78,7 @@ def student_snapshot(database, row):
     return result
 
 
-def apply_action(database, action):
+def apply_action(database, action, *, expected_owner=None):
     """One transaction commits both the mutation and receipt, making replay safe.
 
     Submission time comes only from the authenticated Site's server-owned queue.
@@ -96,6 +96,17 @@ def apply_action(database, action):
         conn.execute('BEGIN IMMEDIATE')
         from database.cloud_sync_migration import migrate
         migrate(conn)
+        if expected_owner is not None:
+            # Scoped registration imports must still own this exact active local
+            # identity when the mutation transaction starts, including on replay.
+            owner = conn.execute('''SELECT 1 FROM students s JOIN student_accounts a ON a.student_id=s.student_id
+                JOIN website_registrations w ON w.student_pk=s.id AND w.account_id=a.id
+                WHERE s.student_id=? AND s.id=? AND a.id=? AND a.username=? AND s.archive_version=?
+                AND s.is_archived=0 AND s.registration_pending=0 AND a.is_disabled=0
+                AND w.status='registered' AND w.lifecycle_version=s.archive_version''',
+                (sid, expected_owner['id'], expected_owner['account_id'], expected_owner['username'], expected_owner['archive_version'])).fetchone()
+            if not owner or kind != 'appeals' or not re.fullmatch(r'[0-9a-f]{64}', str(payload.get('violation_identity', ''))):
+                raise ValueError('Scoped appeal ownership changed; retry after reconciliation')
         fingerprint = action_digest(action)
         old = conn.execute('SELECT status,result,digest FROM cloud_portal_receipts WHERE id=?', (aid,)).fetchone()
         if old:

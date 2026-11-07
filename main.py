@@ -32,6 +32,8 @@ def main() -> None:
     database.initialize()
     from core.cloud_sync import start_cloud_sync
     start_cloud_sync(database)
+    from core.registration_sync import start as start_registration_sync
+    start_registration_sync(database)
 
     # Prepare reusable models in bounded background workers while login is open.
     # Fast logins can still reach the dashboard before preparation finishes.

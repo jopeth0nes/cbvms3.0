@@ -27,6 +27,13 @@ def standing_label(student):
     return "Pending verification" if student.get("registration_pending") else student.get("student_status", "Enrolled")
 
 
+def uniform_monitor_eligible(student):
+    """Uniform monitoring follows verified standing, independently of term setup."""
+    student = dict(student) if student is not None else {}
+    return (student.get('student_status') == 'Enrolled'
+            and not student.get('registration_pending') and not student.get('is_archived'))
+
+
 def suspension_label(suspension):
     if not suspension:
         return "No active suspension"

@@ -1,6 +1,7 @@
 import hashlib
 import json
 import sqlite3
+import gc
 import tempfile
 import time
 import unittest
@@ -17,6 +18,7 @@ from database.term_migration import migrate, preview
 class TermEnrollmentTests(unittest.TestCase):
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
+        self.addCleanup(gc.collect)  # Release sqlite connection cycles before Windows directory cleanup.
         self.path=Path(self.tmp.name)/'campus.db';self.db=CBVMSDatabase(self.path)
         self.db.initialize(process_deadlines=False)
         self.clock=patch('core.academic_calendar.utc_now',return_value=instant('2026-08-01T00:00:00Z'))
@@ -128,8 +130,10 @@ class TermEnrollmentTests(unittest.TestCase):
             self.assertEqual([r[0] for r in conn.execute('SELECT snapshot FROM enrollment_review_events ORDER BY id')],
                              [b'first',b'second'])
 
-    def test_legacy_review_no_strike_and_actual_evidence(self):
+    def test_pending_registration_review_no_strike_and_actual_evidence(self):
         self.assertEqual(self.db.enrollment_context('S1')['status'],UNVERIFIED)
+        with self.db.connect() as conn:
+            conn.execute("UPDATE students SET registration_pending=1 WHERE student_id='S1'")
         image=b'incident-image'
         self.assertIsNone(self.db.log_violation('S1','Student One','wrong_uniform',image,detected_at='2026-08-02T00:00:00Z'))
         with self.db.connect() as conn:

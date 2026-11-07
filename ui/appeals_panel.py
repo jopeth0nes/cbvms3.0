@@ -2,6 +2,7 @@
 import queue
 import json
 import io
+import time
 from concurrent.futures import ThreadPoolExecutor
 from tkinter import messagebox
 import customtkinter as ctk
@@ -213,6 +214,15 @@ class AppealsPanel(ctk.CTkFrame):
     def _poll(self):
         if self.closed:
             return
+        # Refresh only the visible inbox; never replace an open review/draft.
+        now = time.monotonic()
+        if (self.case_id is None and not self.busy and self.winfo_ismapped()
+                and now - getattr(self, '_last_inbox_refresh', now) >= 5
+                and (self._read_future is None or self._read_future.done())):
+            self._last_inbox_refresh = now
+            self.show_inbox()
+        if not hasattr(self, '_last_inbox_refresh'):
+            self._last_inbox_refresh = now
         try:
             while True:
                 generation, callback, value, error, action = self.results.get_nowait()

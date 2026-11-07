@@ -20,7 +20,7 @@ from core.attendance import Sighting, utc_stamp, snapshot_fields
 import json
 from core.live_state import FrameContext, LiveState, associate_faces_to_bodies, validate_torso
 from core.person_detector import MAX_TORSO_SKIN_FRACTION, skin_fraction
-from core.student_status import standing_label, suspension_label
+from core.student_status import standing_label, suspension_label, uniform_monitor_eligible
 from core.uniform_matcher import fuse_uniform_prob
 from core.diagnostics import event
 from core.performance import PERF, TRACES, measure
@@ -348,7 +348,8 @@ class LiveProcessor:
                 row['gender'] = student.get('gender') or row.get('gender', '')
                 row['student_status']=standing_label(student)
                 row['enrollment_status']=context['status']
-                row['discipline_eligible']=context['eligible']
+                row['term_discipline_eligible'] = context['eligible']
+                row['discipline_eligible'] = context['eligible'] or uniform_monitor_eligible(student)
                 suspension=read_database.get_active_suspension(student['student_id'])
                 row['active_suspension'] = bool(suspension)
                 row['suspension_tag']=suspension_label(suspension) if suspension else ''
