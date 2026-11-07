@@ -1,0 +1,10 @@
+{
+  "core/live_pipeline.py": "ab16f11be148a7dd66394efae1a516073e1d50482c0fe4883a6c581202bdb41f",
+  "core/live_state.py": "281b8a9e869eaa883b318d5b85d09bb74fa3c8439d259e320a7fe6a6bd8e5f64",
+  "core/uniform_model_registry.py": "38a16e4bbf062ff7351d614a9791a4b4eb8b0c6d369ca712cc8478254a124c1f",
+  "ui/dashboard.py": "1403fb12dfbde5f465f4b30ef4298d0cf435d571e9e49e9bdc2b580d1f5e8644",
+  "core/assessment_candidates.py": "264d8bb40b40734a006f6a56e5458504ae55e8601ae92448d5b354f0ce4be5ea",
+  "ui/monitor_workspace.py": "38225cc882a81b5270e41cbb4d57fb9c4d21b6a0b42d4fb114c65771ed84d4b6",
+  "ui/live_alerts.py": "134066efe364a25a896665d9bc0dd3cac530ea6ab125c44a9a595d6adcffddbc",
+  "scripts/replay_camera_assessment.py": "7b3adbfcc4ce401211875bd9fbcc6102e02222c28676645b2ef7a8a4f86e1cbb"
+}

@@ -1,0 +1,11 @@
+test_timed_path_keeps_rgb_float_letterbox_mapping_and_no_flip (tests.test_uniform_predictor_backends.UniformPredictorBackendTests.test_timed_path_keeps_rgb_float_letterbox_mapping_and_no_flip) ... ok
+test_unsupported_or_unavailable_backend_fails_before_weights (tests.test_uniform_predictor_backends.UniformPredictorBackendTests.test_unsupported_or_unavailable_backend_fails_before_weights) ... /Users/jopethones/.matplotlib is not a writable directory
+Matplotlib created a temporary cache directory at /var/folders/q9/8tgzldpx1dl7qg075j18g03w0000gn/T/matplotlib-exqb7oam because there was an issue with the default path (/Users/jopethones/.matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.
+Matplotlib is building the font cache; this may take a moment.
+WARNING ⚠️ user config directory '/Users/jopethones/Library/Application Support/Ultralytics' is not writeable, defaulting to '/tmp' or CWD.Alternatively you can define a YOLO_CONFIG_DIR environment variable for this path.
+ok
+
+----------------------------------------------------------------------
+Ran 2 tests in 8.912s
+
+OK

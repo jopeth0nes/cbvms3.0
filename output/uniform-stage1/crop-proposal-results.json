@@ -1,0 +1,326 @@
+[
+  {
+    "image_id": "b2f96f79599ca6f94f41042ecb4b33a0ef3c489602d07a0862563e34f5c16373",
+    "proposed_box": [
+      392,
+      802,
+      1029,
+      1675
+    ]
+  },
+  {
+    "image_id": "72935fd6bcceaf6eb9a7201502be271855751cc227fd2427995b3bd75331bd56",
+    "proposed_box": [
+      477,
+      822,
+      975,
+      1708
+    ]
+  },
+  {
+    "image_id": "ccc6e8de24367c10ce8d974a073933712a809d7a4664f7df6c6074ad5d7c2d3a",
+    "proposed_box": [
+      667,
+      828,
+      1105,
+      1746
+    ]
+  },
+  {
+    "image_id": "1d9a4a50d46255c2f4572713aa12f2ab6316b0a084452271971158ea9e5ce397",
+    "proposed_box": [
+      404,
+      797,
+      942,
+      1702
+    ]
+  },
+  {
+    "image_id": "29e61c229e535b751e612365b0f48f6f1c0ef5ee518e5c54307079956ce45d86",
+    "proposed_box": [
+      463,
+      804,
+      868,
+      1720
+    ]
+  },
+  {
+    "image_id": "c7288da551a192462a1c17c8af929cbb829c988621e8472e837be47e6edb7e27",
+    "proposed_box": [
+      537,
+      821,
+      989,
+      1698
+    ]
+  },
+  {
+    "image_id": "4e9e1a80b1ff411698fec4426ac79ce7b83b185d5bde989ec46ef3cf135160f5",
+    "proposed_box": [
+      409,
+      731,
+      952,
+      1610
+    ]
+  },
+  {
+    "image_id": "920059a4c593d00d139f00087a9f95aa8b7d75004f5f58e2dfeaa84b8165718f",
+    "proposed_box": [
+      385,
+      832,
+      1167,
+      1730
+    ]
+  },
+  {
+    "image_id": "82886c69dcb885c8afca75669e2580f291ae45ead5b730a34119c64b078c251c",
+    "proposed_box": [
+      521,
+      786,
+      1150,
+      1666
+    ]
+  },
+  {
+    "image_id": "d7a33526d6442b0db97396abff350eb47289cc41e49bcfee4656cfdc377cfabd",
+    "proposed_box": [
+      497,
+      802,
+      893,
+      1661
+    ]
+  },
+  {
+    "image_id": "1efd2dbecfb1312cc8657d1f34c0d2c09fd3404e677bd1ddeb4c0d02d7f77a21",
+    "proposed_box": [
+      493,
+      774,
+      1127,
+      1660
+    ]
+  },
+  {
+    "image_id": "a7d5a828fdbc0cde085db3f106d24fbccd2ea9058ac76e48fde58679287e1a5b",
+    "proposed_box": [
+      466,
+      838,
+      1146,
+      1689
+    ]
+  },
+  {
+    "image_id": "1cd5d9a5f844678ccb58bfee18f8ef887910642243104fee741a0ae93d1c0c2e",
+    "proposed_box": [
+      543,
+      782,
+      922,
+      1682
+    ]
+  },
+  {
+    "image_id": "7790f44038a538e92c665400413bd58b86a52c559f69d42f82b4b54a39afc357",
+    "proposed_box": [
+      561,
+      789,
+      980,
+      1709
+    ]
+  },
+  {
+    "image_id": "421d23f199a802ca9fa8712ffa7fe37e68c48154b6d14775f3b838100b79ce4d",
+    "proposed_box": [
+      488,
+      714,
+      952,
+      1627
+    ]
+  },
+  {
+    "image_id": "7a80fdbe39a894c5b4a86ac4a5bc48005c546889f1b34015093f1450fed9972a",
+    "proposed_box": [
+      647,
+      798,
+      1132,
+      1731
+    ]
+  },
+  {
+    "image_id": "dedec1d9e60ab91581062d4a1c0c3b0a9f7226e3eddb88b83b8591328f00e3bf",
+    "proposed_box": [
+      467,
+      818,
+      990,
+      1707
+    ]
+  },
+  {
+    "image_id": "367201fb5c54fc416e7bbd2a38fffdb50333f1cbf779ec81453c15dccc1aadb0",
+    "proposed_box": [
+      501,
+      798,
+      1092,
+      1733
+    ]
+  },
+  {
+    "image_id": "1a3e6e472a49c37464e57b601e42b4827a6fc672137d7de52d47cdf29e314690",
+    "proposed_box": [
+      448,
+      790,
+      1048,
+      1653
+    ]
+  },
+  {
+    "image_id": "4d2394ec194c9d0d01957fbd5e12c63d86ecd47eee2b512571a20bdff2238091",
+    "proposed_box": [
+      638,
+      841,
+      1069,
+      1740
+    ]
+  },
+  {
+    "image_id": "aa67a0131e7ffed810740d0f2ab786debd18ce7bbac665288e6b626848699bae",
+    "proposed_box": [
+      504,
+      703,
+      1120,
+      1554
+    ]
+  },
+  {
+    "image_id": "a629a48ca1db3e46a055179a8c1516b1afa729850065e84597d1c2b9f3849293",
+    "proposed_box": [
+      478,
+      802,
+      1249,
+      1672
+    ]
+  },
+  {
+    "image_id": "b247e6db86c66710ab981129e176d59d9008ff78eba9ed04bf607f1d643bc865",
+    "proposed_box": [
+      419,
+      779,
+      1030,
+      1652
+    ]
+  },
+  {
+    "image_id": "93b51296dad6e42aa0b3eeb21bd325c170de9d2bae82f655bf671faf15450e7a",
+    "proposed_box": [
+      478,
+      790,
+      970,
+      1667
+    ]
+  },
+  {
+    "image_id": "cc7a333dfb24ce5e13986c82fb719abc86fad53623c556d17e283b3948c43056",
+    "proposed_box": [
+      595,
+      798,
+      985,
+      1684
+    ]
+  },
+  {
+    "image_id": "17dcd800b8109fa65879b9b0fcb7cd73d99a4e5a068908775c3015631c5c1fa0",
+    "proposed_box": [
+      426,
+      819,
+      1022,
+      1658
+    ]
+  },
+  {
+    "image_id": "656811cb668192f979779a4262d82edbf6bcde907094f8ba6a0b7541a17d78af",
+    "proposed_box": [
+      429,
+      787,
+      879,
+      1677
+    ]
+  },
+  {
+    "image_id": "ae3d86c518907d2707529a775f9bd288ced3a33a8dfc8f9aa8dd08d606a25b00",
+    "proposed_box": [
+      457,
+      812,
+      1077,
+      1687
+    ]
+  },
+  {
+    "image_id": "5b6e196cde50da126511ad4b658536f6c91cb819c019ca80402e06a72204fa9b",
+    "proposed_box": [
+      470,
+      806,
+      1081,
+      1672
+    ]
+  },
+  {
+    "image_id": "7ba34472c54f73a27b3f030269230220af91cc120b7c06acf2061ba453f73775",
+    "proposed_box": [
+      351,
+      799,
+      935,
+      1740
+    ]
+  },
+  {
+    "image_id": "2680204d9f0cd175e58be0de66aec28ca52a072575d248be4051bea39bbc8f77",
+    "proposed_box": [
+      424,
+      813,
+      1031,
+      1676
+    ]
+  },
+  {
+    "image_id": "6e8bf40dbda4d4db35a9da3e66473a921b5d596715980b83e635eb49f72a43b3",
+    "proposed_box": [
+      553,
+      821,
+      973,
+      1731
+    ]
+  },
+  {
+    "image_id": "c4239d4387d39076a9f221bce00a2fb3a07aa6f4fb9928d02935f08d95e9e48a",
+    "proposed_box": [
+      423,
+      791,
+      1057,
+      1668
+    ]
+  },
+  {
+    "image_id": "92e81d5d260ade65ad4c3bd646de9ea21f8c8ebe170757af04d5b526928f3c2d",
+    "proposed_box": [
+      559,
+      792,
+      930,
+      1665
+    ]
+  },
+  {
+    "image_id": "9b491f37a8e6fda0cdfd020e88666c4c87cc7973a20e7ac682d5bc123f45e418",
+    "proposed_box": [
+      504,
+      786,
+      1011,
+      1691
+    ]
+  },
+  {
+    "image_id": "bee00baf82771570c8d9f25cc04b07bf2ea9cc1f3cb3d746af98b576273993eb",
+    "proposed_box": [
+      529,
+      833,
+      1003,
+      1685
+    ]
+  }
+]

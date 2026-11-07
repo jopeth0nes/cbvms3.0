@@ -1,0 +1,17 @@
+{
+  "passed": true,
+  "separate_process_reopen": true,
+  "class_id": 2,
+  "category": "other_clothing",
+  "split": "train",
+  "approved_id": "71a747a22d906e92f1e2c6fc5c6c83d46f578377b99552e6196855d7f9b45387",
+  "pending_excluded_absent": true,
+  "unique_wrong": 12,
+  "approved_wrong": 10,
+  "pending_wrong": 1,
+  "excluded_wrong": 1,
+  "total_manifest_entries": 30,
+  "training_started": false,
+  "manifest": "/private/var/folders/q9/8tgzldpx1dl7qg075j18g03w0000gn/T/cbvms-wrong-uniform-restart-ty3itq_f/candidates/ffffffffffffffffffffffffffffffff/dataset_manifest.json",
+  "synthetic_fixture_only": true
+}

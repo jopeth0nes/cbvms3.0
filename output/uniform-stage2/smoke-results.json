@@ -1,0 +1,182 @@
+{
+  "bundle": "/Users/jopethones/Documents/GitHub/cbvms3.0/data/uniform_candidate_smoke/645a629ef7034ed8ae06d3a4743ba75d/candidates/ffe234076d3d428eb28c332838b9e5fd",
+  "created_at": 1793463315.1966982,
+  "failure": null,
+  "finished_at": 1793463327.460845,
+  "last_status": {
+    "epoch": 10,
+    "epochs": 10,
+    "manifest_sha256": "a5e0c745116acf2bb714053f52ab7efa92263c000b90c6908e7adf077ef7b228",
+    "message": "Candidate training completed; no validation/evaluation or activation was performed.",
+    "nondeployable": true,
+    "process_id": 11123,
+    "resumable": false,
+    "run_id": "ffe234076d3d428eb28c332838b9e5fd",
+    "run_uuid": "ffe234076d3d428eb28c332838b9e5fd",
+    "started_at": "2026-10-31T16:15:15.227353Z",
+    "status": "completed",
+    "train_loss": 0.04472263560940822,
+    "worker_started_at": "2026-10-31T16:15:25.206693Z"
+  },
+  "process_metadata": {
+    "process_id": 11123,
+    "run_uuid": "ffe234076d3d428eb28c332838b9e5fd",
+    "started_at": "2026-10-31T16:15:15.227353Z",
+    "worker_started_at": "2026-10-31T16:15:25.206693Z"
+  },
+  "protected_artifact_sha256_after": {
+    "models/uniform_cls.pt": "8fba6e1da0c11c97873b16049b940ce21d5699838cc2040f069d5d5249a15680",
+    "models/uniform_color_ref.json": "ad031db790ce11bc3e8e85a726a2b65fcf238d919388bd1844980a0e6ca497e4",
+    "models/uniform_embed_ref.npz": "b6b9c197fa7b0a81d334e08557658cb84424a4ca25e4c314ca12bc5cf2037fbc",
+    "models/yolov8n.pt": "31e20dde3def09e2cf938c7be6fe23d9150bbbe503982af13345706515f2ef95",
+    "yolov8n-cls.pt": "11fa19f2aea79bc960d680a13f82f22105982b325eb9e17a4a5e1a9f8245980a",
+    "yolov8n-pose.pt": "c6fa93dd1ee4a2c18c900a45c1d864a1c6f7aba75d84f91648a30b7fb641d212",
+    "yolov8n.pt": "f59b3d833e2ff32e194b5bb8e08d211dc7c5bdf144b90d2c8412c47ccfc83b36"
+  },
+  "protected_artifact_sha256_before": {
+    "models/uniform_cls.pt": "8fba6e1da0c11c97873b16049b940ce21d5699838cc2040f069d5d5249a15680",
+    "models/uniform_color_ref.json": "ad031db790ce11bc3e8e85a726a2b65fcf238d919388bd1844980a0e6ca497e4",
+    "models/uniform_embed_ref.npz": "b6b9c197fa7b0a81d334e08557658cb84424a4ca25e4c314ca12bc5cf2037fbc",
+    "models/yolov8n.pt": "31e20dde3def09e2cf938c7be6fe23d9150bbbe503982af13345706515f2ef95",
+    "yolov8n-cls.pt": "11fa19f2aea79bc960d680a13f82f22105982b325eb9e17a4a5e1a9f8245980a",
+    "yolov8n-pose.pt": "c6fa93dd1ee4a2c18c900a45c1d864a1c6f7aba75d84f91648a30b7fb641d212",
+    "yolov8n.pt": "f59b3d833e2ff32e194b5bb8e08d211dc7c5bdf144b90d2c8412c47ccfc83b36"
+  },
+  "run_id": "ffe234076d3d428eb28c332838b9e5fd",
+  "smoke_root": "/Users/jopethones/Documents/GitHub/cbvms3.0/data/uniform_candidate_smoke/645a629ef7034ed8ae06d3a4743ba75d",
+  "stages": [
+    {
+      "at": 1793463315.226378,
+      "name": "synthetic_dataset_ready",
+      "records": 6
+    },
+    {
+      "at": 1793463324.950135,
+      "name": "first_epoch_complete",
+      "status": {
+        "epoch": 1,
+        "epochs": 10,
+        "manifest_sha256": "a5e0c745116acf2bb714053f52ab7efa92263c000b90c6908e7adf077ef7b228",
+        "message": "Completed epoch 1/10; no validation metrics are produced.",
+        "nondeployable": true,
+        "process_id": 11062,
+        "resumable": true,
+        "run_id": "ffe234076d3d428eb28c332838b9e5fd",
+        "run_uuid": "ffe234076d3d428eb28c332838b9e5fd",
+        "started_at": "2026-10-31T16:15:15.227353Z",
+        "status": "running",
+        "train_loss": 1.328104575475057,
+        "worker_started_at": "2026-10-31T16:15:15.318471Z"
+      }
+    },
+    {
+      "at": 1793463324.9510841,
+      "name": "cancel_requested",
+      "status": {
+        "epoch": 1,
+        "epochs": 10,
+        "manifest_sha256": "a5e0c745116acf2bb714053f52ab7efa92263c000b90c6908e7adf077ef7b228",
+        "message": "Cancellation requested; waiting for the worker to preserve the last complete epoch.",
+        "nondeployable": true,
+        "process_id": 11062,
+        "resumable": true,
+        "run_id": "ffe234076d3d428eb28c332838b9e5fd",
+        "run_uuid": "ffe234076d3d428eb28c332838b9e5fd",
+        "started_at": "2026-10-31T16:15:15.227353Z",
+        "status": "cancel_requested",
+        "train_loss": 1.328104575475057,
+        "worker_started_at": "2026-10-31T16:15:15.318471Z"
+      }
+    },
+    {
+      "at": 1793463324.976361,
+      "name": "cancelled_at_checkpoint",
+      "status": {
+        "epoch": 1,
+        "epochs": 10,
+        "manifest_sha256": "a5e0c745116acf2bb714053f52ab7efa92263c000b90c6908e7adf077ef7b228",
+        "message": "Cancelled during epoch; the partial epoch will be retrained from the last complete checkpoint.",
+        "nondeployable": true,
+        "process_id": 11062,
+        "resumable": true,
+        "run_id": "ffe234076d3d428eb28c332838b9e5fd",
+        "run_uuid": "ffe234076d3d428eb28c332838b9e5fd",
+        "started_at": "2026-10-31T16:15:15.227353Z",
+        "status": "cancelled",
+        "train_loss": 1.328104575475057,
+        "worker_started_at": "2026-10-31T16:15:15.318471Z"
+      }
+    },
+    {
+      "at": 1793463325.154902,
+      "name": "resumed",
+      "status": {
+        "epoch": 1,
+        "epochs": 10,
+        "manifest_sha256": "a5e0c745116acf2bb714053f52ab7efa92263c000b90c6908e7adf077ef7b228",
+        "message": "Resuming from last complete epoch.",
+        "nondeployable": true,
+        "process_id": 11062,
+        "resumable": true,
+        "run_id": "ffe234076d3d428eb28c332838b9e5fd",
+        "run_uuid": "ffe234076d3d428eb28c332838b9e5fd",
+        "started_at": "2026-10-31T16:15:15.227353Z",
+        "status": "running",
+        "train_loss": 1.328104575475057,
+        "worker_started_at": "2026-10-31T16:15:15.318471Z"
+      }
+    },
+    {
+      "at": 1793463327.460848,
+      "name": "smoke_complete",
+      "result_status": "completed"
+    }
+  ],
+  "status": "completed",
+  "verification": {
+    "architecture": {
+      "architecture": "ultralytics-yolov8n-classification",
+      "class_indices": {
+        "0": "campus_uniform",
+        "1": "organizational_shirt",
+        "2": "other_clothing"
+      },
+      "mapping_version": "uniform-garments-v1",
+      "scale": "n",
+      "trainable_backbone_parameter_count": 1108048,
+      "trainable_head_parameter_count": 334083,
+      "trainable_parameter_count": 1442131,
+      "yaml_file": "yolov8n-cls.yaml"
+    },
+    "bundle_files_verified": 37,
+    "candidate_sha256": "4eda5fd372adbd80749553f849bc155a3fc4873fa2b660774d413a26bdaaf65a",
+    "checkpoint_sha256": "8fa24331fef715ec5e24d015aa301d2f265cd20d794cf6287286eb0f045db986",
+    "class_map": {
+      "classes": [
+        {
+          "category": "campus_uniform",
+          "index": 0
+        },
+        {
+          "category": "organizational_shirt",
+          "index": 1
+        },
+        {
+          "category": "other_clothing",
+          "index": 2
+        }
+      ],
+      "mapping_version": "uniform-garments-v1"
+    },
+    "preprocessing": {
+      "augmentation": "none",
+      "color": "RGB",
+      "range": [
+        0.0,
+        1.0
+      ],
+      "size": 224,
+      "version": "trainer-letterbox-rgb-0-1-v1"
+    }
+  }
+}

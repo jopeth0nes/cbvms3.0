@@ -1,0 +1,1034 @@
+{
+  "kind": "real_models_on_public_stills_not_walkthroughs",
+  "environment": {
+    "platform": "macOS-26.5-arm64-arm-64bit",
+    "machine": "arm64",
+    "processor": "arm",
+    "cpu_count": 10,
+    "macos_version": "26.5",
+    "hardware_model": "Mac16,12",
+    "cpu_model": "Apple M4",
+    "python_version": "3.12.13",
+    "numpy_version": "1.26.4",
+    "opencv_version": "4.10.0",
+    "torch_version": "2.2.2",
+    "mps_available": true,
+    "ultralytics_version": "8.3.27"
+  },
+  "inputs": [
+    {
+      "sha256": "c02019c4979c191eb739ddd944445ef408dad5679acab6fd520ef9d434bfbc63",
+      "width": 810,
+      "height": 1080
+    },
+    {
+      "sha256": "16d73869e3267a7d4ed00de8e860833bd1657c1b252e94c0c348277adc7b6edb",
+      "width": 1280,
+      "height": 720
+    }
+  ],
+  "model_hashes": {
+    "det_10g.onnx": "5838f7fe053675b1c7a08b633df49e7af5495cee0493c7dcf6697200b85b5b91",
+    "w600k_r50.onnx": "4c06341c33c2ca1f86781dab0e829f88ad5b64be9fba56e56bc9ebdefc619e43",
+    "body": "f59b3d833e2ff32e194b5bb8e08d211dc7c5bdf144b90d2c8412c47ccfc83b36",
+    "candidate": "4eda5fd372adbd80749553f849bc155a3fc4873fa2b660774d413a26bdaaf65a"
+  },
+  "candidate_synthetic": true,
+  "candidate_config": {
+    "candidate_bundle": "/Users/jopethones/Documents/GitHub/cbvms3.0/data/uniform_candidate_smoke/645a629ef7034ed8ae06d3a4743ba75d/candidates/ffe234076d3d428eb28c332838b9e5fd",
+    "candidate_sha256": "4eda5fd372adbd80749553f849bc155a3fc4873fa2b660774d413a26bdaaf65a",
+    "recognition_confidence": 0.8,
+    "backend": "cpu",
+    "assessment_zone": null,
+    "policy": null,
+    "minimum_torso_px": 160,
+    "minimum_sharpness": 25.0,
+    "evidence_ttl": 1.0,
+    "refresh_interval": 0.5,
+    "frame_ttl": 1.0,
+    "max_passages": 48,
+    "logo_verification": {
+      "enabled": false
+    }
+  },
+  "configuration": {
+    "warmup_frames_per_backend": 4,
+    "measured_frames_per_backend": 20,
+    "face_input": [
+      320,
+      320
+    ],
+    "body_input": "existing predictor default (640)",
+    "garment_input": 224,
+    "recognition_distance": 0.5,
+    "identity_margin": 0.05,
+    "recognition_confidence": 0.8,
+    "camera_workload": 0,
+    "earrings": false,
+    "pose": false,
+    "independent_still_frames": true,
+    "logo_enabled": false,
+    "torch_threads_requested": 2
+  },
+  "results": [
+    {
+      "body_requested": "cpu",
+      "status": "completed",
+      "body_backend": {
+        "requested": "cpu",
+        "active": "cpu",
+        "model_parameter_device": "cpu",
+        "warm": true,
+        "fallback_reason": null
+      },
+      "face_providers": {
+        "detection": [
+          "CPUExecutionProvider"
+        ],
+        "recognition": [
+          "CPUExecutionProvider"
+        ]
+      },
+      "candidate_backend": {
+        "requested": "cpu",
+        "active": "cpu",
+        "model_parameter_device": "cpu",
+        "fallback_reason": null
+      },
+      "threads": {
+        "requested": 2,
+        "torch": 2,
+        "opencv": 10
+      },
+      "samples": [
+        {
+          "image_index": 0,
+          "frame_copy_ms": 0.06929191295057535,
+          "tracking_ms": 63.13429109286517,
+          "usable_evidence_gate_ms": 0.06404193118214607,
+          "publication_to_consumer_ms": 0.05324999801814556,
+          "frame_to_result_ms": 347.96533291228116,
+          "frame_to_consumer_ms": 348.0185829102993,
+          "faces": 2,
+          "associated_torsos": 2,
+          "garment_results": 0,
+          "garment_inferences": 0,
+          "recognized": 0,
+          "unassessed_reasons": []
+        },
+        {
+          "image_index": 1,
+          "frame_copy_ms": 0.07029203698039055,
+          "tracking_ms": 57.67320794984698,
+          "usable_evidence_gate_ms": 0.3267499851062894,
+          "publication_to_consumer_ms": 0.05804095417261124,
+          "frame_to_result_ms": 343.03679200820625,
+          "frame_to_consumer_ms": 343.09483296237886,
+          "faces": 2,
+          "associated_torsos": 1,
+          "garment_results": 0,
+          "garment_inferences": 0,
+          "recognized": 0,
+          "unassessed_reasons": []
+        },
+        {
+          "image_index": 0,
+          "frame_copy_ms": 0.07016595918685198,
+          "tracking_ms": 63.06704203598201,
+          "usable_evidence_gate_ms": 0.07075001485645771,
+          "publication_to_consumer_ms": 0.05320797208696604,
+          "frame_to_result_ms": 348.1512500438839,
+          "frame_to_consumer_ms": 348.2044580159709,
+          "faces": 2,
+          "associated_torsos": 2,
+          "garment_results": 0,
+          "garment_inferences": 0,
+          "recognized": 0,
+          "unassessed_reasons": []
+        },
+        {
+          "image_index": 1,
+          "frame_copy_ms": 0.06954197306185961,
+          "tracking_ms": 57.69845796748996,
+          "usable_evidence_gate_ms": 0.32837502658367157,
+          "publication_to_consumer_ms": 0.051999930292367935,
+          "frame_to_result_ms": 342.69887499976903,
+          "frame_to_consumer_ms": 342.7508749300614,
+          "faces": 2,
+          "associated_torsos": 1,
+          "garment_results": 0,
+          "garment_inferences": 0,
+          "recognized": 0,
+          "unassessed_reasons": []
+        },
+        {
+          "image_index": 0,
+          "frame_copy_ms": 0.0665830448269844,
+          "tracking_ms": 62.974208034574986,
+          "usable_evidence_gate_ms": 0.06187497638165951,
+          "publication_to_consumer_ms": 0.05508307367563248,
+          "frame_to_result_ms": 348.1652080081403,
+          "frame_to_consumer_ms": 348.22029108181596,
+          "faces": 2,
+          "associated_torsos": 2,
+          "garment_results": 0,
+          "garment_inferences": 0,
+          "recognized": 0,
+          "unassessed_reasons": []
+        },
+        {
+          "image_index": 1,
+          "frame_copy_ms": 0.07183302659541368,
+          "tracking_ms": 57.8316249884665,
+          "usable_evidence_gate_ms": 0.32650004141032696,
+          "publication_to_consumer_ms": 0.05404104012995958,
+          "frame_to_result_ms": 344.1847920184955,
+          "frame_to_consumer_ms": 344.23883305862546,
+          "faces": 2,
+          "associated_torsos": 1,
+          "garment_results": 0,
+          "garment_inferences": 0,
+          "recognized": 0,
+          "unassessed_reasons": []
+        },
+        {
+          "image_index": 0,
+          "frame_copy_ms": 0.07304106839001179,
+          "tracking_ms": 63.6986669851467,
+          "usable_evidence_gate_ms": 0.06579200271517038,
+          "publication_to_consumer_ms": 0.055916025303304195,
+          "frame_to_result_ms": 349.28612504154444,
+          "frame_to_consumer_ms": 349.34204106684774,
+          "faces": 2,
+          "associated_torsos": 2,
+          "garment_results": 0,
+          "garment_inferences": 0,
+          "recognized": 0,
+          "unassessed_reasons": []
+        },
+        {
+          "image_index": 1,
+          "frame_copy_ms": 0.07395795546472073,
+          "tracking_ms": 57.87812499329448,
+          "usable_evidence_gate_ms": 0.34250004682689905,
+          "publication_to_consumer_ms": 0.05208409857004881,
+          "frame_to_result_ms": 343.391582951881,
+          "frame_to_consumer_ms": 343.44366705045104,
+          "faces": 2,
+          "associated_torsos": 1,
+          "garment_results": 0,
+          "garment_inferences": 0,
+          "recognized": 0,
+          "unassessed_reasons": []
+        },
+        {
+          "image_index": 0,
+          "frame_copy_ms": 0.0678749056532979,
+          "tracking_ms": 63.272959087044,
+          "usable_evidence_gate_ms": 0.06258301436901093,
+          "publication_to_consumer_ms": 0.06016693077981472,
+          "frame_to_result_ms": 348.6448749899864,
+          "frame_to_consumer_ms": 348.70504192076623,
+          "faces": 2,
+          "associated_torsos": 2,
+          "garment_results": 0,
+          "garment_inferences": 0,
+          "recognized": 0,
+          "unassessed_reasons": []
+        },
+        {
+          "image_index": 1,
+          "frame_copy_ms": 0.07137504871934652,
+          "tracking_ms": 58.0583339324221,
+          "usable_evidence_gate_ms": 0.328624970279634,
+          "publication_to_consumer_ms": 0.055875047110021114,
+          "frame_to_result_ms": 343.1175840087235,
+          "frame_to_consumer_ms": 343.1734590558335,
+          "faces": 2,
+          "associated_torsos": 1,
+          "garment_results": 0,
+          "garment_inferences": 0,
+          "recognized": 0,
+          "unassessed_reasons": []
+        },
+        {
+          "image_index": 0,
+          "frame_copy_ms": 0.06795907393097878,
+          "tracking_ms": 62.97445797827095,
+          "usable_evidence_gate_ms": 0.061542028561234474,
+          "publication_to_consumer_ms": 0.05062494892627001,
+          "frame_to_result_ms": 348.1560420477763,
+          "frame_to_consumer_ms": 348.20666699670255,
+          "faces": 2,
+          "associated_torsos": 2,
+          "garment_results": 0,
+          "garment_inferences": 0,
+          "recognized": 0,
+          "unassessed_reasons": []
+        },
+        {
+          "image_index": 1,
+          "frame_copy_ms": 0.07408298552036285,
+          "tracking_ms": 59.67033398337662,
+          "usable_evidence_gate_ms": 0.34816598054021597,
+          "publication_to_consumer_ms": 0.05691696424037218,
+          "frame_to_result_ms": 345.20445798989385,
+          "frame_to_consumer_ms": 345.2613749541342,
+          "faces": 2,
+          "associated_torsos": 1,
+          "garment_results": 0,
+          "garment_inferences": 0,
+          "recognized": 0,
+          "unassessed_reasons": []
+        },
+        {
+          "image_index": 0,
+          "frame_copy_ms": 0.06920797750353813,
+          "tracking_ms": 63.07058408856392,
+          "usable_evidence_gate_ms": 0.06295798812061548,
+          "publication_to_consumer_ms": 0.055709038861095905,
+          "frame_to_result_ms": 347.97108301427215,
+          "frame_to_consumer_ms": 348.02679205313325,
+          "faces": 2,
+          "associated_torsos": 2,
+          "garment_results": 0,
+          "garment_inferences": 0,
+          "recognized": 0,
+          "unassessed_reasons": []
+        },
+        {
+          "image_index": 1,
+          "frame_copy_ms": 0.07287494372576475,
+          "tracking_ms": 57.874917052686214,
+          "usable_evidence_gate_ms": 0.32295798882842064,
+          "publication_to_consumer_ms": 0.05541706923395395,
+          "frame_to_result_ms": 343.6739998869598,
+          "frame_to_consumer_ms": 343.72941695619375,
+          "faces": 2,
+          "associated_torsos": 1,
+          "garment_results": 0,
+          "garment_inferences": 0,
+          "recognized": 0,
+          "unassessed_reasons": []
+        },
+        {
+          "image_index": 0,
+          "frame_copy_ms": 0.06695801857858896,
+          "tracking_ms": 64.09091700334102,
+          "usable_evidence_gate_ms": 0.06700004450976849,
+          "publication_to_consumer_ms": 0.0576250022277236,
+          "frame_to_result_ms": 349.2444170406088,
+          "frame_to_consumer_ms": 349.30204204283655,
+          "faces": 2,
+          "associated_torsos": 2,
+          "garment_results": 0,
+          "garment_inferences": 0,
+          "recognized": 0,
+          "unassessed_reasons": []
+        },
+        {
+          "image_index": 1,
+          "frame_copy_ms": 0.06975000724196434,
+          "tracking_ms": 58.00274992361665,
+          "usable_evidence_gate_ms": 0.3235840704292059,
+          "publication_to_consumer_ms": 0.05645793862640858,
+          "frame_to_result_ms": 343.10741699300706,
+          "frame_to_consumer_ms": 343.1638749316335,
+          "faces": 2,
+          "associated_torsos": 1,
+          "garment_results": 0,
+          "garment_inferences": 0,
+          "recognized": 0,
+          "unassessed_reasons": []
+        },
+        {
+          "image_index": 0,
+          "frame_copy_ms": 0.06795802619308233,
+          "tracking_ms": 62.76795896701515,
+          "usable_evidence_gate_ms": 0.06766605656594038,
+          "publication_to_consumer_ms": 0.05458306986838579,
+          "frame_to_result_ms": 348.2181669678539,
+          "frame_to_consumer_ms": 348.2727500377223,
+          "faces": 2,
+          "associated_torsos": 2,
+          "garment_results": 0,
+          "garment_inferences": 0,
+          "recognized": 0,
+          "unassessed_reasons": []
+        },
+        {
+          "image_index": 1,
+          "frame_copy_ms": 0.07066596299409866,
+          "tracking_ms": 58.55679209344089,
+          "usable_evidence_gate_ms": 0.32320793252438307,
+          "publication_to_consumer_ms": 0.05704199429601431,
+          "frame_to_result_ms": 344.55516596790403,
+          "frame_to_consumer_ms": 344.61220796220005,
+          "faces": 2,
+          "associated_torsos": 1,
+          "garment_results": 0,
+          "garment_inferences": 0,
+          "recognized": 0,
+          "unassessed_reasons": []
+        },
+        {
+          "image_index": 0,
+          "frame_copy_ms": 0.0693340552970767,
+          "tracking_ms": 63.551625004038215,
+          "usable_evidence_gate_ms": 0.06441597361117601,
+          "publication_to_consumer_ms": 0.05600007716566324,
+          "frame_to_result_ms": 348.6114169936627,
+          "frame_to_consumer_ms": 348.6674170708284,
+          "faces": 2,
+          "associated_torsos": 2,
+          "garment_results": 0,
+          "garment_inferences": 0,
+          "recognized": 0,
+          "unassessed_reasons": []
+        },
+        {
+          "image_index": 1,
+          "frame_copy_ms": 0.07158308289945126,
+          "tracking_ms": 59.267374919727445,
+          "usable_evidence_gate_ms": 0.32950006425380707,
+          "publication_to_consumer_ms": 0.056999968364834785,
+          "frame_to_result_ms": 366.195333073847,
+          "frame_to_consumer_ms": 366.25233304221183,
+          "faces": 2,
+          "associated_torsos": 1,
+          "garment_results": 0,
+          "garment_inferences": 0,
+          "recognized": 0,
+          "unassessed_reasons": []
+        }
+      ],
+      "logo_schedule_calls": 0,
+      "logo_inference_calls": 0,
+      "logo_backend_present": false,
+      "stage_metrics": {
+        "frame_copy": {
+          "count": 20,
+          "retained": 20,
+          "p50_ms": 0.06,
+          "p95_ms": 0.063,
+          "p99_ms": 0.064
+        },
+        "lock_detector": {
+          "count": 40,
+          "retained": 40,
+          "p50_ms": 0.0,
+          "p95_ms": 0.0,
+          "p99_ms": 0.0
+        },
+        "face_inference": {
+          "count": 20,
+          "retained": 20,
+          "p50_ms": 37.692,
+          "p95_ms": 38.753,
+          "p99_ms": 39.063
+        },
+        "lock_person": {
+          "count": 40,
+          "retained": 40,
+          "p50_ms": 0.0,
+          "p95_ms": 0.001,
+          "p99_ms": 0.001
+        },
+        "body_inference": {
+          "count": 20,
+          "retained": 20,
+          "p50_ms": 22.278,
+          "p95_ms": 25.332,
+          "p99_ms": 25.699
+        },
+        "tracking": {
+          "count": 20,
+          "retained": 20,
+          "p50_ms": 61.206,
+          "p95_ms": 63.705,
+          "p99_ms": 63.997
+        },
+        "queue_assessment": {
+          "count": 20,
+          "retained": 20,
+          "p50_ms": 0.033,
+          "p95_ms": 0.046,
+          "p99_ms": 0.048
+        },
+        "gallery_matching": {
+          "count": 20,
+          "retained": 20,
+          "p50_ms": 0.017,
+          "p95_ms": 0.018,
+          "p99_ms": 0.019
+        },
+        "recognition": {
+          "count": 20,
+          "retained": 20,
+          "p50_ms": 284.213,
+          "p95_ms": 286.175,
+          "p99_ms": 301.764
+        },
+        "database_read": {
+          "count": 20,
+          "retained": 20,
+          "p50_ms": 0.619,
+          "p95_ms": 0.662,
+          "p99_ms": 0.667
+        },
+        "body": {
+          "count": 20,
+          "retained": 20,
+          "p50_ms": 0.0,
+          "p95_ms": 0.0,
+          "p99_ms": 0.0
+        },
+        "confirmation": {
+          "count": 20,
+          "retained": 20,
+          "p50_ms": 0.102,
+          "p95_ms": 0.118,
+          "p99_ms": 0.13
+        },
+        "capture_to_assessment": {
+          "count": 20,
+          "retained": 20,
+          "p50_ms": 347.999,
+          "p95_ms": 350.164,
+          "p99_ms": 363.016
+        }
+      },
+      "components": {
+        "association_ms": {
+          "count": 40,
+          "median_ms": 0.01612497726455331,
+          "p95_ms": 0.026391592109575868
+        },
+        "torso_localization_ms": {
+          "count": 40,
+          "median_ms": 0.005520530976355076,
+          "p95_ms": 0.007541081868112087
+        }
+      },
+      "frame_timings": {
+        "frame_copy_ms": {
+          "count": 20,
+          "median_ms": 0.06995798321440816,
+          "p95_ms": 0.07396420696750283
+        },
+        "tracking_ms": {
+          "count": 20,
+          "median_ms": 61.219146475195885,
+          "p95_ms": 63.71827948605642
+        },
+        "usable_evidence_gate_ms": {
+          "count": 20,
+          "median_ms": 0.19685400184243917,
+          "p95_ms": 0.3427833435125649
+        },
+        "publication_to_consumer_ms": {
+          "count": 20,
+          "median_ms": 0.05579204298555851,
+          "p95_ms": 0.05814725300297141
+        },
+        "frame_to_result_ms": {
+          "count": 20,
+          "median_ms": 347.96820796327665,
+          "p95_ms": 350.13158544315957
+        },
+        "frame_to_consumer_ms": {
+          "count": 20,
+          "median_ms": 348.0226874817163,
+          "p95_ms": 350.18755566561595
+        }
+      },
+      "gallery_size": 0,
+      "identity_accuracy": null,
+      "worker_stopped": true
+    },
+    {
+      "body_requested": "mps",
+      "status": "completed",
+      "body_backend": {
+        "requested": "mps",
+        "active": "mps",
+        "model_parameter_device": "mps:0",
+        "warm": true,
+        "fallback_reason": null
+      },
+      "face_providers": {
+        "detection": [
+          "CPUExecutionProvider"
+        ],
+        "recognition": [
+          "CPUExecutionProvider"
+        ]
+      },
+      "candidate_backend": {
+        "requested": "cpu",
+        "active": "cpu",
+        "model_parameter_device": "cpu",
+        "fallback_reason": null
+      },
+      "threads": {
+        "requested": 2,
+        "torch": 2,
+        "opencv": 10
+      },
+      "samples": [
+        {
+          "image_index": 0,
+          "frame_copy_ms": 0.06800005212426186,
+          "tracking_ms": 68.97737504914403,
+          "usable_evidence_gate_ms": 0.06329093594104052,
+          "publication_to_consumer_ms": 0.05620799493044615,
+          "frame_to_result_ms": 351.83487506583333,
+          "frame_to_consumer_ms": 351.8910830607638,
+          "faces": 2,
+          "associated_torsos": 2,
+          "garment_results": 0,
+          "garment_inferences": 0,
+          "recognized": 0,
+          "unassessed_reasons": []
+        },
+        {
+          "image_index": 1,
+          "frame_copy_ms": 0.07325003389269114,
+          "tracking_ms": 64.33574995025992,
+          "usable_evidence_gate_ms": 0.32187497708946466,
+          "publication_to_consumer_ms": 0.05662499461323023,
+          "frame_to_result_ms": 348.18049997556955,
+          "frame_to_consumer_ms": 348.2371249701828,
+          "faces": 2,
+          "associated_torsos": 1,
+          "garment_results": 0,
+          "garment_inferences": 0,
+          "recognized": 0,
+          "unassessed_reasons": []
+        },
+        {
+          "image_index": 0,
+          "frame_copy_ms": 0.06975000724196434,
+          "tracking_ms": 68.70216690003872,
+          "usable_evidence_gate_ms": 0.061166007071733475,
+          "publication_to_consumer_ms": 0.056875054724514484,
+          "frame_to_result_ms": 352.2985829040408,
+          "frame_to_consumer_ms": 352.3554579587653,
+          "faces": 2,
+          "associated_torsos": 2,
+          "garment_results": 0,
+          "garment_inferences": 0,
+          "recognized": 0,
+          "unassessed_reasons": []
+        },
+        {
+          "image_index": 1,
+          "frame_copy_ms": 0.07079204078763723,
+          "tracking_ms": 63.76862502656877,
+          "usable_evidence_gate_ms": 0.3222909290343523,
+          "publication_to_consumer_ms": 0.05495804361999035,
+          "frame_to_result_ms": 346.7179170111194,
+          "frame_to_consumer_ms": 346.7728750547394,
+          "faces": 2,
+          "associated_torsos": 1,
+          "garment_results": 0,
+          "garment_inferences": 0,
+          "recognized": 0,
+          "unassessed_reasons": []
+        },
+        {
+          "image_index": 0,
+          "frame_copy_ms": 0.06749993190169334,
+          "tracking_ms": 69.01295809075236,
+          "usable_evidence_gate_ms": 0.0564999645575881,
+          "publication_to_consumer_ms": 0.05749997217208147,
+          "frame_to_result_ms": 352.015541982837,
+          "frame_to_consumer_ms": 352.0730419550091,
+          "faces": 2,
+          "associated_torsos": 2,
+          "garment_results": 0,
+          "garment_inferences": 0,
+          "recognized": 0,
+          "unassessed_reasons": []
+        },
+        {
+          "image_index": 1,
+          "frame_copy_ms": 0.0714160269126296,
+          "tracking_ms": 64.47058403864503,
+          "usable_evidence_gate_ms": 0.32070791348814964,
+          "publication_to_consumer_ms": 0.05162495654076338,
+          "frame_to_result_ms": 347.0852910540998,
+          "frame_to_consumer_ms": 347.13691601064056,
+          "faces": 2,
+          "associated_torsos": 1,
+          "garment_results": 0,
+          "garment_inferences": 0,
+          "recognized": 0,
+          "unassessed_reasons": []
+        },
+        {
+          "image_index": 0,
+          "frame_copy_ms": 0.06958399899303913,
+          "tracking_ms": 69.36533295083791,
+          "usable_evidence_gate_ms": 0.058542005717754364,
+          "publication_to_consumer_ms": 0.05662499461323023,
+          "frame_to_result_ms": 351.7797919921577,
+          "frame_to_consumer_ms": 351.8364169867709,
+          "faces": 2,
+          "associated_torsos": 2,
+          "garment_results": 0,
+          "garment_inferences": 0,
+          "recognized": 0,
+          "unassessed_reasons": []
+        },
+        {
+          "image_index": 1,
+          "frame_copy_ms": 0.0701668905094266,
+          "tracking_ms": 65.1170420460403,
+          "usable_evidence_gate_ms": 0.32358302269130945,
+          "publication_to_consumer_ms": 0.05704199429601431,
+          "frame_to_result_ms": 350.9589999448508,
+          "frame_to_consumer_ms": 351.0160419391468,
+          "faces": 2,
+          "associated_torsos": 1,
+          "garment_results": 0,
+          "garment_inferences": 0,
+          "recognized": 0,
+          "unassessed_reasons": []
+        },
+        {
+          "image_index": 0,
+          "frame_copy_ms": 0.07104105316102505,
+          "tracking_ms": 69.46995900943875,
+          "usable_evidence_gate_ms": 0.06174994632601738,
+          "publication_to_consumer_ms": 0.06162503268569708,
+          "frame_to_result_ms": 352.89733298122883,
+          "frame_to_consumer_ms": 352.9589580139145,
+          "faces": 2,
+          "associated_torsos": 2,
+          "garment_results": 0,
+          "garment_inferences": 0,
+          "recognized": 0,
+          "unassessed_reasons": []
+        },
+        {
+          "image_index": 1,
+          "frame_copy_ms": 0.07187505252659321,
+          "tracking_ms": 64.58395801018924,
+          "usable_evidence_gate_ms": 0.3161249915137887,
+          "publication_to_consumer_ms": 0.05766598042100668,
+          "frame_to_result_ms": 348.1784170726314,
+          "frame_to_consumer_ms": 348.2360830530524,
+          "faces": 2,
+          "associated_torsos": 1,
+          "garment_results": 0,
+          "garment_inferences": 0,
+          "recognized": 0,
+          "unassessed_reasons": []
+        },
+        {
+          "image_index": 0,
+          "frame_copy_ms": 0.0688750296831131,
+          "tracking_ms": 68.17504204809666,
+          "usable_evidence_gate_ms": 0.06195798050612211,
+          "publication_to_consumer_ms": 0.05604198668152094,
+          "frame_to_result_ms": 351.10675008036196,
+          "frame_to_consumer_ms": 351.1627920670435,
+          "faces": 2,
+          "associated_torsos": 2,
+          "garment_results": 0,
+          "garment_inferences": 0,
+          "recognized": 0,
+          "unassessed_reasons": []
+        },
+        {
+          "image_index": 1,
+          "frame_copy_ms": 0.0729589955881238,
+          "tracking_ms": 64.65091602876782,
+          "usable_evidence_gate_ms": 0.3141670022159815,
+          "publication_to_consumer_ms": 0.05425000563263893,
+          "frame_to_result_ms": 347.02274994924664,
+          "frame_to_consumer_ms": 347.0769999548793,
+          "faces": 2,
+          "associated_torsos": 1,
+          "garment_results": 0,
+          "garment_inferences": 0,
+          "recognized": 0,
+          "unassessed_reasons": []
+        },
+        {
+          "image_index": 0,
+          "frame_copy_ms": 0.06979203317314386,
+          "tracking_ms": 68.01466597244143,
+          "usable_evidence_gate_ms": 0.060416990891098976,
+          "publication_to_consumer_ms": 0.05683302879333496,
+          "frame_to_result_ms": 352.05566696822643,
+          "frame_to_consumer_ms": 352.11249999701977,
+          "faces": 2,
+          "associated_torsos": 2,
+          "garment_results": 0,
+          "garment_inferences": 0,
+          "recognized": 0,
+          "unassessed_reasons": []
+        },
+        {
+          "image_index": 1,
+          "frame_copy_ms": 0.0762079143896699,
+          "tracking_ms": 74.18712507933378,
+          "usable_evidence_gate_ms": 0.3268748987466097,
+          "publication_to_consumer_ms": 0.059249927289783955,
+          "frame_to_result_ms": 361.043291981332,
+          "frame_to_consumer_ms": 361.1025419086218,
+          "faces": 2,
+          "associated_torsos": 1,
+          "garment_results": 0,
+          "garment_inferences": 0,
+          "recognized": 0,
+          "unassessed_reasons": []
+        },
+        {
+          "image_index": 0,
+          "frame_copy_ms": 0.07329205982387066,
+          "tracking_ms": 70.14787499792874,
+          "usable_evidence_gate_ms": 0.060249934904277325,
+          "publication_to_consumer_ms": 0.0577080063521862,
+          "frame_to_result_ms": 354.06074998900294,
+          "frame_to_consumer_ms": 354.11845799535513,
+          "faces": 2,
+          "associated_torsos": 2,
+          "garment_results": 0,
+          "garment_inferences": 0,
+          "recognized": 0,
+          "unassessed_reasons": []
+        },
+        {
+          "image_index": 1,
+          "frame_copy_ms": 0.0718339579179883,
+          "tracking_ms": 64.39687497913837,
+          "usable_evidence_gate_ms": 0.3209580900147557,
+          "publication_to_consumer_ms": 0.05429098382592201,
+          "frame_to_result_ms": 349.8195839347318,
+          "frame_to_consumer_ms": 349.8738749185577,
+          "faces": 2,
+          "associated_torsos": 1,
+          "garment_results": 0,
+          "garment_inferences": 0,
+          "recognized": 0,
+          "unassessed_reasons": []
+        },
+        {
+          "image_index": 0,
+          "frame_copy_ms": 0.06966700311750174,
+          "tracking_ms": 66.94149994291365,
+          "usable_evidence_gate_ms": 0.05829101428389549,
+          "publication_to_consumer_ms": 0.05625002086162567,
+          "frame_to_result_ms": 349.7998329112306,
+          "frame_to_consumer_ms": 349.85608293209225,
+          "faces": 2,
+          "associated_torsos": 2,
+          "garment_results": 0,
+          "garment_inferences": 0,
+          "recognized": 0,
+          "unassessed_reasons": []
+        },
+        {
+          "image_index": 1,
+          "frame_copy_ms": 0.07116701453924179,
+          "tracking_ms": 65.51429093815386,
+          "usable_evidence_gate_ms": 0.32812508288770914,
+          "publication_to_consumer_ms": 0.05449994932860136,
+          "frame_to_result_ms": 348.1255420483649,
+          "frame_to_consumer_ms": 348.1800419976935,
+          "faces": 2,
+          "associated_torsos": 1,
+          "garment_results": 0,
+          "garment_inferences": 0,
+          "recognized": 0,
+          "unassessed_reasons": []
+        },
+        {
+          "image_index": 0,
+          "frame_copy_ms": 0.07008400280028582,
+          "tracking_ms": 68.47279099747539,
+          "usable_evidence_gate_ms": 0.06204203236848116,
+          "publication_to_consumer_ms": 0.05329109262675047,
+          "frame_to_result_ms": 351.6470839967951,
+          "frame_to_consumer_ms": 351.70037508942187,
+          "faces": 2,
+          "associated_torsos": 2,
+          "garment_results": 0,
+          "garment_inferences": 0,
+          "recognized": 0,
+          "unassessed_reasons": []
+        },
+        {
+          "image_index": 1,
+          "frame_copy_ms": 0.07149996235966682,
+          "tracking_ms": 64.53762506134808,
+          "usable_evidence_gate_ms": 0.3136249724775553,
+          "publication_to_consumer_ms": 0.05308398976922035,
+          "frame_to_result_ms": 346.9132910249755,
+          "frame_to_consumer_ms": 346.9663750147447,
+          "faces": 2,
+          "associated_torsos": 1,
+          "garment_results": 0,
+          "garment_inferences": 0,
+          "recognized": 0,
+          "unassessed_reasons": []
+        }
+      ],
+      "logo_schedule_calls": 0,
+      "logo_inference_calls": 0,
+      "logo_backend_present": false,
+      "stage_metrics": {
+        "frame_copy": {
+          "count": 20,
+          "retained": 20,
+          "p50_ms": 0.06,
+          "p95_ms": 0.063,
+          "p99_ms": 0.063
+        },
+        "lock_detector": {
+          "count": 40,
+          "retained": 40,
+          "p50_ms": 0.0,
+          "p95_ms": 0.0,
+          "p99_ms": 0.0
+        },
+        "face_inference": {
+          "count": 20,
+          "retained": 20,
+          "p50_ms": 37.705,
+          "p95_ms": 38.269,
+          "p99_ms": 38.831
+        },
+        "lock_person": {
+          "count": 40,
+          "retained": 40,
+          "p50_ms": 0.0,
+          "p95_ms": 0.001,
+          "p99_ms": 0.001
+        },
+        "body_inference": {
+          "count": 20,
+          "retained": 20,
+          "p50_ms": 27.86,
+          "p95_ms": 30.481,
+          "p99_ms": 33.073
+        },
+        "tracking": {
+          "count": 20,
+          "retained": 20,
+          "p50_ms": 67.466,
+          "p95_ms": 70.338,
+          "p99_ms": 73.407
+        },
+        "queue_assessment": {
+          "count": 20,
+          "retained": 20,
+          "p50_ms": 0.032,
+          "p95_ms": 0.034,
+          "p99_ms": 0.034
+        },
+        "gallery_matching": {
+          "count": 20,
+          "retained": 20,
+          "p50_ms": 0.018,
+          "p95_ms": 0.02,
+          "p99_ms": 0.024
+        },
+        "recognition": {
+          "count": 20,
+          "retained": 20,
+          "p50_ms": 282.131,
+          "p95_ms": 284.64,
+          "p99_ms": 285.387
+        },
+        "database_read": {
+          "count": 20,
+          "retained": 20,
+          "p50_ms": 0.623,
+          "p95_ms": 0.641,
+          "p99_ms": 0.648
+        },
+        "body": {
+          "count": 20,
+          "retained": 20,
+          "p50_ms": 0.0,
+          "p95_ms": 0.0,
+          "p99_ms": 0.0
+        },
+        "confirmation": {
+          "count": 20,
+          "retained": 20,
+          "p50_ms": 0.103,
+          "p95_ms": 0.11,
+          "p99_ms": 0.111
+        },
+        "capture_to_assessment": {
+          "count": 20,
+          "retained": 20,
+          "p50_ms": 351.065,
+          "p95_ms": 354.442,
+          "p99_ms": 359.75
+        }
+      },
+      "components": {
+        "association_ms": {
+          "count": 40,
+          "median_ms": 0.015604484360665083,
+          "p95_ms": 0.02651037066243589
+        },
+        "torso_localization_ms": {
+          "count": 40,
+          "median_ms": 0.005145499017089605,
+          "p95_ms": 0.0069231376983225346
+        }
+      },
+      "frame_timings": {
+        "frame_copy_ms": {
+          "count": 20,
+          "median_ms": 0.07091654697433114,
+          "p95_ms": 0.07343785255216062
+        },
+        "tracking_ms": {
+          "count": 20,
+          "median_ms": 67.47808295767754,
+          "p95_ms": 70.34983750199899
+        },
+        "usable_evidence_gate_ms": {
+          "count": 20,
+          "median_ms": 0.1884579542092979,
+          "p95_ms": 0.32693740795366466
+        },
+        "publication_to_consumer_ms": {
+          "count": 20,
+          "median_ms": 0.05643750773742795,
+          "p95_ms": 0.05936868255957961
+        },
+        "frame_to_result_ms": {
+          "count": 20,
+          "median_ms": 351.0328750126064,
+          "p95_ms": 354.4098770886194
+        },
+        "frame_to_consumer_ms": {
+          "count": 20,
+          "median_ms": 351.08941700309515,
+          "p95_ms": 354.46766219101846
+        }
+      },
+      "gallery_size": 0,
+      "identity_accuracy": null,
+      "worker_stopped": true
+    }
+  ],
+  "real_labeled_passages": 0,
+  "physical_camera_measurement": false,
+  "limitations": [
+    "No entry/exit, human associations, independent garment/policy labels or authorized identity gallery.",
+    "Still-image completion timings are not walking-speed, capture-FPS, rendering or before-exit results.",
+    "Serial fresh still frames intentionally do not test evidence reuse, concurrent preview or camera queues.",
+    "Recognition uses actual ArcFace with an empty gallery; no identity correctness is measured.",
+    "No smaller input, threshold change, model activation or training."
+  ]
+}

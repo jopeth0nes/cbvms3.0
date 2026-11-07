@@ -1,0 +1,64 @@
+ M auth/register.py
+ M core/live_pipeline.py
+ M core/live_state.py
+ M core/monitor_models.py
+ M core/trainer.py
+ M scripts/replay_camera_assessment.py
+ M ui/appeals_panel.py
+ M ui/attendance_panel.py
+ M ui/camera_configuration.py
+ M ui/components.py
+ M ui/dashboard.py
+ M ui/enrollment.py
+ M ui/live_alerts.py
+ M ui/multi_select_checklist.py
+ M ui/notifications_panel.py
+ M ui/portal_scroll.py
+ M ui/records_panel.py
+ M ui/reports_panel.py
+ M ui/settings.py
+ M ui/student_management.py
+ M ui/suspension_overview.py
+ M ui/suspensions_panel.py
+ M ui/training_panel.py
+ M ui/window_lifecycle.py
+?? core/uniform_candidate.py
+?? core/uniform_candidate_worker.py
+?? core/uniform_dataset.py
+?? core/uniform_evaluation.py
+?? core/uniform_latency.py
+?? core/uniform_model_registry.py
+?? core/uniform_models_service.py
+?? core/uniform_observation.py
+?? docs/TRACKPAD_SCROLLING_CHECKPOINT_2026-10-29.md
+?? docs/UNIFORM_EVALUATION_MANIFEST.md
+?? docs/UNIFORM_MODELS_WORKFLOW.md
+?? docs/UNIFORM_OBSERVATION_WORKFLOW.md
+?? docs/UNIFORM_UPGRADE_CHECKPOINT.md
+?? output/scrolling/
+?? output/uniform-stage1/
+?? output/uniform-stage2/
+?? output/uniform-stage3/
+?? output/uniform-stage4/
+?? output/uniform-stage5/
+?? scripts/benchmark_uniform_backends.py
+?? scripts/smoke_uniform_candidate.py
+?? scripts/smoke_uniform_observation.py
+?? tests/test_scrolling.py
+?? tests/test_uniform_backend_benchmark.py
+?? tests/test_uniform_candidate.py
+?? tests/test_uniform_candidate_ui.py
+?? tests/test_uniform_dataset.py
+?? tests/test_uniform_evaluation.py
+?? tests/test_uniform_latency.py
+?? tests/test_uniform_model_registry.py
+?? tests/test_uniform_models_integration.py
+?? tests/test_uniform_models_ui.py
+?? tests/test_uniform_observation.py
+?? tests/test_uniform_observation_ui.py
+?? tests/test_uniform_predictor_backends.py
+?? tests/test_uniform_workspace.py
+?? ui/scrolling.py
+?? ui/uniform_candidate_panel.py
+?? ui/uniform_models_panel.py
+?? ui/uniform_workspace.py

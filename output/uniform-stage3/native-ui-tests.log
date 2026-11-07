@@ -1,0 +1,78 @@
+test_close_during_worker_cancels_and_has_no_late_tk_callbacks (tests.test_uniform_models_ui.ModelsWindowTests.test_close_during_worker_cancels_and_has_no_late_tk_callbacks) ... ok
+test_evaluation_progress_cancellation_and_recovered_report (tests.test_uniform_models_ui.ModelsWindowTests.test_evaluation_progress_cancellation_and_recovered_report) ... ok
+test_no_candidate_metrics_or_deployment_enabled_without_prerequisites (tests.test_uniform_models_ui.ModelsWindowTests.test_no_candidate_metrics_or_deployment_enabled_without_prerequisites) ... ok
+test_report_nulls_and_legacy_limitations_are_explicit (tests.test_uniform_models_ui.ModelsWindowTests.test_report_nulls_and_legacy_limitations_are_explicit) ... ok
+test_review_requires_confirmation_and_correct_session_and_candidate (tests.test_uniform_models_ui.ModelsWindowTests.test_review_requires_confirmation_and_correct_session_and_candidate) ... ok
+test_capture_uses_supplied_frame_and_shared_group_without_flip (tests.test_uniform_workspace.UniformWorkspaceTests.test_capture_uses_supplied_frame_and_shared_group_without_flip) ... ok
+test_crop_proposal_does_not_approve_and_remains_editable (tests.test_uniform_workspace.UniformWorkspaceTests.test_crop_proposal_does_not_approve_and_remains_editable) ... ok
+test_destroy_during_background_work_has_no_tk_callback (tests.test_uniform_workspace.UniformWorkspaceTests.test_destroy_during_background_work_has_no_tk_callback) ... ok
+test_import_and_decode_stay_off_tk_thread (tests.test_uniform_workspace.UniformWorkspaceTests.test_import_and_decode_stay_off_tk_thread) ... ok
+test_named_categories_and_models_entry (tests.test_uniform_workspace.UniformWorkspaceTests.test_named_categories_and_models_entry) ... ok
+test_shared_action_opens_real_readiness_from_organizational_shirt (tests.test_uniform_workspace.UniformWorkspaceTests.test_shared_action_opens_real_readiness_from_organizational_shirt) ... FAIL
+test_training_panel_keeps_sections_and_routes_camera_saves (tests.test_uniform_workspace.UniformWorkspaceTests.test_training_panel_keeps_sections_and_routes_camera_saves) ... ERROR
+test_upload_gallery_review_approval_and_label_correction (tests.test_uniform_workspace.UniformWorkspaceTests.test_upload_gallery_review_approval_and_label_correction) ... FAIL
+test_cancel_progress_and_recover_resume (tests.test_uniform_candidate_ui.CandidateUITests.test_cancel_progress_and_recover_resume) ... ok
+test_failure_report_and_close_during_operation (tests.test_uniform_candidate_ui.CandidateUITests.test_failure_report_and_close_during_operation) ... ok
+test_missing_approvals_block_and_show_counts (tests.test_uniform_candidate_ui.CandidateUITests.test_missing_approvals_block_and_show_counts) ... ok
+test_other_training_blocks_start_and_resume (tests.test_uniform_candidate_ui.CandidateUITests.test_other_training_blocks_start_and_resume) ... ok
+test_recover_selected_older_candidate (tests.test_uniform_candidate_ui.CandidateUITests.test_recover_selected_older_candidate) ... ok
+test_start_off_tk_with_resource_ack_and_bounded_config (tests.test_uniform_candidate_ui.CandidateUITests.test_start_off_tk_with_resource_ack_and_bounded_config) ... ok
+test_terminal_status_waits_for_worker_lock_release (tests.test_uniform_candidate_ui.CandidateUITests.test_terminal_status_waits_for_worker_lock_release) ... ok
+
+======================================================================
+ERROR: test_training_panel_keeps_sections_and_routes_camera_saves (tests.test_uniform_workspace.UniformWorkspaceTests.test_training_panel_keeps_sections_and_routes_camera_saves)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/jopethones/Documents/GitHub/cbvms3.0/tests/test_uniform_workspace.py", line 169, in test_training_panel_keeps_sections_and_routes_camera_saves
+    panel._open_capture_screen('uniform_stage1', 'organizational_shirt')
+  File "/Users/jopethones/Documents/GitHub/cbvms3.0/ui/training_panel.py", line 673, in _open_capture_screen
+    self._capture_tick(state)
+  File "/Users/jopethones/Documents/GitHub/cbvms3.0/ui/training_panel.py", line 801, in _capture_tick
+    self._render_preview(state, frame)
+  File "/Users/jopethones/Documents/GitHub/cbvms3.0/ui/training_panel.py", line 758, in _render_preview
+    state["preview"].configure(image=img, text="")
+  File "/Users/jopethones/Documents/GitHub/cbvms3.0/.venv/lib/python3.12/site-packages/customtkinter/windows/widgets/ctk_label.py", line 222, in configure
+    self._update_image()
+  File "/Users/jopethones/Documents/GitHub/cbvms3.0/.venv/lib/python3.12/site-packages/customtkinter/windows/widgets/ctk_label.py", line 141, in _update_image
+    self._label.configure(image=self._image.create_scaled_photo_image(self._get_widget_scaling(),
+  File "/opt/homebrew/Cellar/python@3.12/3.12.13_2/Frameworks/Python.framework/Versions/3.12/lib/python3.12/tkinter/__init__.py", line 1722, in configure
+    return self._configure('configure', cnf, kw)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.12/3.12.13_2/Frameworks/Python.framework/Versions/3.12/lib/python3.12/tkinter/__init__.py", line 1712, in _configure
+    self.tk.call(_flatten((self._w, cmd)) + self._options(cnf))
+_tkinter.TclError: image "pyimage5" does not exist
+
+======================================================================
+FAIL: test_shared_action_opens_real_readiness_from_organizational_shirt (tests.test_uniform_workspace.UniformWorkspaceTests.test_shared_action_opens_real_readiness_from_organizational_shirt)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/jopethones/Documents/GitHub/cbvms3.0/tests/test_uniform_workspace.py", line 35, in setUp
+    self.wait()
+  File "/Users/jopethones/Documents/GitHub/cbvms3.0/tests/test_uniform_workspace.py", line 51, in wait
+    self.assertFalse(task.busy)
+AssertionError: True is not false
+
+======================================================================
+FAIL: test_upload_gallery_review_approval_and_label_correction (tests.test_uniform_workspace.UniformWorkspaceTests.test_upload_gallery_review_approval_and_label_correction)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/jopethones/Documents/GitHub/cbvms3.0/tests/test_uniform_workspace.py", line 40, in tearDown
+    self.assertEqual(self.errors, [])
+AssertionError: Lists differ: [(<class '_tkinter.TclError'>, TclError('i[175 chars]80>)] != []
+
+First list contains 2 additional elements.
+First extra element 0:
+(<class '_tkinter.TclError'>, TclError('image "pyimage6" does not exist'), <traceback object at 0x1392104c0>)
+
++ []
+- [(<class '_tkinter.TclError'>,
+-   TclError('image "pyimage6" does not exist'),
+-   <traceback object at 0x1392104c0>),
+-  (<class '_tkinter.TclError'>,
+-   TclError('image "pyimage8" does not exist'),
+-   <traceback object at 0x13915b680>)]
+
+----------------------------------------------------------------------
+Ran 20 tests in 21.969s
+
+FAILED (failures=2, errors=1)

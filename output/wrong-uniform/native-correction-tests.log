@@ -1,0 +1,7 @@
+test_limit_failure_shows_progress_and_refreshes_partial_gallery (tests.test_uniform_workspace.UniformWorkspaceTests.test_limit_failure_shows_progress_and_refreshes_partial_gallery) ... ok
+test_four_outcomes_update_same_widget_and_never_imply_policy_violation (tests.test_uniform_observation_ui.UniformObservationUITests.test_four_outcomes_update_same_widget_and_never_imply_policy_violation) ... ok
+
+----------------------------------------------------------------------
+Ran 2 tests in 1.130s
+
+OK

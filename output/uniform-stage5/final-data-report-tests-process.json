@@ -1,0 +1,9 @@
+{
+  "wrapper_pid": 49456,
+  "wrapper_command": "output/uniform-stage5/run_owned_check.py final-data-report-tests .venv/bin/python -m unittest tests.test_uniform_logo_annotations tests.test_uniform_dataset tests.test_uniform_logo_evaluation -v",
+  "started_at_utc": "2026-11-05T06:26:27.641850+00:00",
+  "command": ".venv/bin/python -m unittest tests.test_uniform_logo_annotations tests.test_uniform_dataset tests.test_uniform_logo_evaluation -v",
+  "pid": 49457,
+  "returncode": 0,
+  "finished_at_utc": "2026-11-05T06:26:28.075004+00:00"
+}

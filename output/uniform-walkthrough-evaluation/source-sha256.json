@@ -1,0 +1,9 @@
+{
+  "core/uniform_walkthrough.py": "28613a5ad4879e53afa2326ef63bd89b8fd0eef2b8bccdc01c131330dd4864cf",
+  "scripts/replay_camera_assessment.py": "0eaa09ffa05274343d4b66df011204f43b1e2c2da76eaa195556154252ae019a",
+  "scripts/profile_uniform_pipeline.py": "f63355c5ecb15e552f2cce52ed5da5fede2b7df3962daa36019e8eccaa9e83e1",
+  "scripts/launch_uniform_observation.py": "4a1f8d21dec33a56b7d23cb6e86ae0bcebfbc740b45e16799cd4be988d037ea8",
+  "tests/test_uniform_walkthrough.py": "c3e5aadb16b8ea8366ef6884670873ca3dcdcac3c27e617831b5122438725bff",
+  "tests/test_uniform_pipeline_profile.py": "97d01d06397e002a3cdacff1b922e2125b3fdf017e254ddf496b54f08ce94135",
+  "tests/test_uniform_observation_launcher.py": "e85b3ece4d61add4758bd9b3c4158e0d4a7484193bb8f323136c852f8ff58bfb"
+}

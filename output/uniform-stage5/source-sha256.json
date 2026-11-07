@@ -1,0 +1,16 @@
+{
+  "core/uniform_dataset.py": "0f9512efd87d27c4db1f25cba90169b5c7fef04dd947c25b5210b948090f2af4",
+  "core/uniform_logo_annotations.py": "88b606b4260bb5da2d066f4d2d92efa0dcf179d672ebab48345a986c44c1ca92",
+  "core/uniform_logo.py": "7e37a1673ed997805da98693b9516f7e0eb951f64aa7f74391ac7c81dcfd2997",
+  "core/uniform_logo_evaluation.py": "0e5e56a7d0c511d32c9ce99e735a7ff03c0c345ab9984b9944086289efc127a3",
+  "core/uniform_observation.py": "b32e2a3daf97320d47e7c8e32b4a5a870e1c9855acc1ce5e0b897efeb5441be4",
+  "ui/uniform_workspace.py": "0419eee6c592b472d87370782a38069c38eb5df2937547dfa149b668093c7a73",
+  "ui/uniform_models_panel.py": "f8b6350703e4a7873736de5578ad26c7797ad3710c34d3893fe5f37f5400dd95",
+  "ui/training_panel.py": "111e867c35c0196e2fece4cd6477ec0d4c29b194bc9ce9272b2b2cf1b35d6550",
+  "scripts/compare_uniform_logo.py": "d9e2aeac6923c059ea3fb08882dd2f20a30b164cb0446d8d6d60a753f2fa5dfb",
+  "tests/test_uniform_logo.py": "3a4a874dcf55e726bf8a608bdbd24e87b11b4e569a26fc9dca6f260cb758cfde",
+  "tests/test_uniform_logo_annotations.py": "040e3da5b0fca9d306b998b22ff19c3b05926de82f354ebcbe9fa5f25246b444",
+  "tests/test_uniform_logo_evaluation.py": "6740b7fc2d42e6c03dc1a6d7c8f15bc0e6f1f7866099a0640186781ce889d02f",
+  "tests/test_uniform_logo_ui.py": "4ba72ac3fcae62522a3230bc850bd454593f30b516a4ba4ec7b6b38d2649f659",
+  "docs/UNIFORM_LOGO_WORKFLOW.md": "9f9b1a65c580901e7654674a695743e6d43879578a338f02eaa7ac881a32fa7f"
+}

@@ -1,0 +1,18 @@
+test_both_endpoints_and_later_resolution_one_passage (tests.test_uniform_latency.UniformLatencyTests.test_both_endpoints_and_later_resolution_one_passage) ... ok
+test_conflicting_labels_and_negative_timestamps_rejected (tests.test_uniform_latency.UniformLatencyTests.test_conflicting_labels_and_negative_timestamps_rejected) ... ok
+test_missing_and_unassessed_not_hidden_and_metrics_require_ground_truth (tests.test_uniform_latency.UniformLatencyTests.test_missing_and_unassessed_not_hidden_and_metrics_require_ground_truth) ... ok
+test_summary_percentiles_are_actual_samples (tests.test_uniform_latency.UniformLatencyTests.test_summary_percentiles_are_actual_samples) ... ok
+test_detection_miss_is_counted_even_without_assessment (tests.test_camera_replay.CameraReplayMetricsTests.test_detection_miss_is_counted_even_without_assessment) ... ok
+test_failed_worker_result_does_not_count_as_completed_assessment (tests.test_camera_replay.CameraReplayMetricsTests.test_failed_worker_result_does_not_count_as_completed_assessment) ... ok
+test_gallery_listener_can_be_removed_when_monitor_closes (tests.test_camera_replay.CameraReplayMetricsTests.test_gallery_listener_can_be_removed_when_monitor_closes) ... ok
+test_gallery_reload_advances_revision_and_notifies_candidate_invalidator (tests.test_camera_replay.CameraReplayMetricsTests.test_gallery_reload_advances_revision_and_notifies_candidate_invalidator) ... ok
+test_missing_authorized_identity_labels_produce_null_accuracy (tests.test_camera_replay.CameraReplayMetricsTests.test_missing_authorized_identity_labels_produce_null_accuracy) ... ok
+test_prior_frame_labels_are_joined_to_selected_frame_and_first_confirmation_sticks (tests.test_camera_replay.CameraReplayMetricsTests.test_prior_frame_labels_are_joined_to_selected_frame_and_first_confirmation_sticks) ... ok
+test_torso_mismatch_requires_annotated_geometry (tests.test_camera_replay.CameraReplayMetricsTests.test_torso_mismatch_requires_annotated_geometry) ... ok
+test_unknown_false_accept_and_missing_assessment_are_separate (tests.test_camera_replay.CameraReplayMetricsTests.test_unknown_false_accept_and_missing_assessment_are_separate) ... ok
+test_wrong_uniform_is_not_erased_by_later_correct_and_requires_correct_identity (tests.test_camera_replay.CameraReplayMetricsTests.test_wrong_uniform_is_not_erased_by_later_correct_and_requires_correct_identity) ... ok
+
+----------------------------------------------------------------------
+Ran 13 tests in 0.001s
+
+OK

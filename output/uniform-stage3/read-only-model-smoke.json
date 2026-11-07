@@ -1,0 +1,22 @@
+{
+  "status": "passed",
+  "synthetic_candidate": "data/uniform_candidate_smoke/645a629ef7034ed8ae06d3a4743ba75d/candidates/ffe234076d3d428eb28c332838b9e5fd",
+  "candidate_sha256": "4eda5fd372adbd80749553f849bc155a3fc4873fa2b660774d413a26bdaaf65a",
+  "checks": [
+    "complete retained bundle",
+    "state-dict architecture/class mapping/preprocessing",
+    "finite probability outputs",
+    "legacy loader and color fusion",
+    "active/base hashes unchanged",
+    "production pointer unchanged"
+  ],
+  "limitations": [
+    "One synthetic raster; no accuracy, speed, physical-camera or independent evaluation claim.",
+    "No training or activation."
+  ],
+  "protected_sha256": {
+    "models/uniform_cls.pt": "8fba6e1da0c11c97873b16049b940ce21d5699838cc2040f069d5d5249a15680",
+    "models/uniform_color_ref.json": "ad031db790ce11bc3e8e85a726a2b65fcf238d919388bd1844980a0e6ca497e4",
+    "yolov8n-cls.pt": "11fa19f2aea79bc960d680a13f82f22105982b325eb9e17a4a5e1a9f8245980a"
+  }
+}

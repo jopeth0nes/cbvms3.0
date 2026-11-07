@@ -1,0 +1,9 @@
+test_close_during_logo_decode_has_no_late_tk_access (tests.test_uniform_logo_ui.LogoReviewUITests.test_close_during_logo_decode_has_no_late_tk_access) ... ok
+test_hidden_state_saves_without_logo_box_or_negative_label (tests.test_uniform_logo_ui.LogoReviewUITests.test_hidden_state_saves_without_logo_box_or_negative_label) ... ok
+test_logo_drag_inside_torso_and_change_invalidates_confirmation (tests.test_uniform_logo_ui.LogoReviewUITests.test_logo_drag_inside_torso_and_change_invalidates_confirmation) ... ok
+test_original_preview_independent_review_and_readiness (tests.test_uniform_logo_ui.LogoReviewUITests.test_original_preview_independent_review_and_readiness) ... ok
+
+----------------------------------------------------------------------
+Ran 4 tests in 3.522s
+
+OK

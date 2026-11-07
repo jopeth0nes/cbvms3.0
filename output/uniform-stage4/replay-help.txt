@@ -1,0 +1,47 @@
+usage: replay_camera_assessment.py [-h] --video VIDEO --annotations
+                                   ANNOTATIONS --mode {baseline,candidate}
+                                   --output OUTPUT
+                                   [--evaluation-db EVALUATION_DB]
+                                   [--identity-alias-map IDENTITY_ALIAS_MAP]
+                                   [--max-frames MAX_FRAMES]
+                                   [--clear-frame-selection]
+                                   [--prioritized-assessment]
+                                   [--uniform-observation-config UNIFORM_OBSERVATION_CONFIG]
+                                   [--body-backend {cpu,mps}]
+
+Sequential model-backed replay through the CBVMS tracking/assessment path. Use
+a disposable evaluation database (`--evaluation-db`) containing only the
+authorized evaluation gallery and eligible synthetic/evaluation students. The
+database is SQLite-backed into a temporary copy before initialization. With no
+database, an empty temporary roster exercises real detection/assessment
+plumbing but identity/uniform metrics are unavailable. Nothing writes to
+production DB. Run `--mode baseline` and `--mode candidate` sequentially with
+the same video, annotations, evaluation DB, flags, and model settings.
+Candidate mode uses ClearFrameRouter; both modes use FaceTrackingProcessor and
+LiveProcessor with the real installed models and the hard observation-only
+persistence gate.
+
+options:
+  -h, --help            show this help message and exit
+  --video VIDEO
+  --annotations ANNOTATIONS
+  --mode {baseline,candidate}
+  --output OUTPUT
+  --evaluation-db EVALUATION_DB
+                        authorized disposable SQLite evaluation gallery;
+                        original is never opened for writes
+  --identity-alias-map IDENTITY_ALIAS_MAP
+                        JSON alias->student_id map for authorized identity
+                        scoring; IDs are never output
+  --max-frames MAX_FRAMES
+                        0 means the full video
+  --clear-frame-selection
+                        candidate mode: retain/select clearer original frames
+                        per passage
+  --prioritized-assessment
+                        candidate mode: enable fair prioritized candidate
+                        scheduling
+  --uniform-observation-config UNIFORM_OBSERVATION_CONFIG
+                        Explicit Stage 4 candidate config; observation-only,
+                        no activation
+  --body-backend {cpu,mps}

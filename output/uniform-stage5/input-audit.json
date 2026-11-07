@@ -1,0 +1,45 @@
+{
+  "catalog_path": "/Users/jopethones/Documents/GitHub/cbvms3.0/data/uniform_stage1/catalog.json",
+  "catalog_sha256": "1e96842d40ab26b65d84650672ae1cb93c6512a2864d745d0e27f0055d205d8d",
+  "by_category": {
+    "organizational_shirt": 36,
+    "unassigned": 927
+  },
+  "by_status": {
+    "pending_review": 963
+  },
+  "legacy_logo_fields": {
+    "unknown": 963
+  },
+  "existing_logo_boxes": 0,
+  "logo_readiness": {
+    "status": "Not trained",
+    "enabled": false,
+    "counts": {
+      "total": 963,
+      "reviewed": 0,
+      "reviewed_visible": 0,
+      "known_capture_groups": 0,
+      "eligible_visible_unknown_provenance": 0,
+      "per_visibility": {
+        "visible": 0,
+        "obscured": 0,
+        "too_small": 0,
+        "back_view": 0,
+        "uncertain": 0
+      }
+    },
+    "by_category": {},
+    "known_capture_groups": 0,
+    "eligible_visible_unknown_provenance": 0,
+    "limitations": [
+      "Logo annotations are an independent human review record; no logo model has been trained.",
+      "Only explicitly reviewed, current photographed-print annotations with confirmed association count as visible examples.",
+      "Obscured, too-small, back-view, uncertain, and reference-artwork examples are not treated as logo absence.",
+      "Counts do not establish accuracy, coverage sufficiency, or deployment readiness."
+    ]
+  },
+  "reference_files": [],
+  "physical_camera_tested": false,
+  "real_logo_model_evaluated": false
+}

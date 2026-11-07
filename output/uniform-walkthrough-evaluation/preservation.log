@@ -1,0 +1,1 @@
+{"protected_files_verified": 1772, "active_artifacts_verified": 7, "catalog_unchanged": true, "archive_unchanged": true, "source_changes": ["scripts/replay_camera_assessment.py"], "prior_stage_matching_counts": {"1": 0, "2": 5, "3": 12, "4": 14, "5": 14}, "real_candidates": 0, "pending_examples": 963, "production_active_pointer_absent": true}

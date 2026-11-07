@@ -1,0 +1,32 @@
+{
+  "checked": 3624,
+  "unchanged": 3611,
+  "changed": [
+    "core/detection_audio.py",
+    "core/live_pipeline.py",
+    "core/live_state.py",
+    "core/monitor_models.py",
+    "core/violation_engine.py",
+    "tests/test_detection_audio.py",
+    "tests/test_live_pipeline.py",
+    "tests/test_live_state.py",
+    "tests/test_monitor_startup.py",
+    "ui/dashboard.py",
+    "ui/live_alerts.py",
+    "ui/settings.py",
+    "ui/training_panel.py"
+  ],
+  "missing": [],
+  "protected_count": 2751,
+  "protected_changes": [],
+  "unrelated_changes": [],
+  "real_status_counts": {
+    "pending_review": 976
+  },
+  "real_categories": {
+    "organizational_shirt": 43,
+    "unassigned": 927,
+    "campus_uniform": 6
+  },
+  "catalog_sha256": "60bb8ddfe53173f8ef0b1756fc60c6d23b35385c5efdc24764545e8426c4744f"
+}

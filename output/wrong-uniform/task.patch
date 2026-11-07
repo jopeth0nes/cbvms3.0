@@ -1,0 +1,1307 @@
+--- a/core/detection_audio.py
++++ b/core/detection_audio.py
+@@ -45,7 +45,7 @@
+         return SoundKind.ENROLLMENT
+     if active_suspension:
+         return SoundKind.SUSPENSION
+-    if any(code in ('wrong_uniform', 'earring') for code in assessment.accepted_categories):
++    if 'wrong_uniform' in assessment.accepted_categories:
+         return SoundKind.VIOLATION
+     if (not assessment.accepted_categories
+             and assessment.uniform_assessment is UniformAssessment.CORRECT):
+--- a/core/live_pipeline.py
++++ b/core/live_pipeline.py
+@@ -60,7 +60,7 @@
+     observed_at: float
+     cancelled: threading.Event
+     uniform_enabled: bool = True
+-    earring_enabled: bool = True
++    earring_enabled: bool = False  # Retained for old callers; earring checks are retired.
+     camera_generation: int = 0
+     observations: tuple[TrackedFace, ...] | None = None
+     source_id: str = "unspecified-camera"
+@@ -444,19 +444,6 @@
+                     except Exception as exc:
+                         row['reason']='Uniform assessment unavailable'
+                         event("uniform_assessment_failed", error=str(exc))
+-            # Existing earring rule: male and eligible, independent category.
+-            row['earring_violation']=False
+-            if (task.earring_enabled and (self.readiness is None or self.readiness.ready('earring'))
+-                    and row.get('gender','').lower()=='male' and self.trainer.is_trained('earring')):
+-                try:
+-                    x1,y1,x2,y2=map(int,row['box'])
+-                    h,w=frame.shape[:2]
+-                    crop=frame[max(0,y1):min(h,y2),max(0,x1):min(w,x2)]
+-                    label,conf=self.trainer.predict('earring',crop) if crop.size else (None,0)
+-                    row['earring_violation']=label=='with_earring' and conf>=.65
+-                    row['earring_confidence']=float(conf)
+-                except Exception:
+-                    row['earring_violation']=False
+             event("stage_complete", stage="uniform", face_index=index,
+                   elapsed=time.monotonic()-crop_started, reason=row['reason'])
+         if not task.valid():
+@@ -785,9 +772,9 @@
+                 key=(sid if assessment.reliable_identity else assessment.presence_id,code)
+                 if now-self.cooldowns.get(key,-300)<300:
+                     continue
+-                if code not in ('wrong_uniform', 'earring') or not (assessment.reliable_identity and assessment.discipline_eligible):
++                if code != 'wrong_uniform' or not (assessment.reliable_identity and assessment.discipline_eligible):
+                     continue
+-                box=assessment.body_box if code=='wrong_uniform' else assessment.face_box
++                box=assessment.body_box
+                 x1,y1,x2,y2=map(int,box or assessment.face_box)
+                 h,w=task.frame.shape[:2]
+                 crop=task.frame[max(0,y1):min(h,y2),max(0,x1):min(w,x2)]
+@@ -796,8 +783,7 @@
+                 ok,jpeg=cv2.imencode('.jpg',crop,[cv2.IMWRITE_JPEG_QUALITY,85])
+                 if not ok:
+                     continue
+-                display=('Suspected uniform violation' if code=='wrong_uniform' else
+-                         'Earring detected')
++                display='Suspected uniform violation'
+                 try:
+                     written=self.database.log_violation(student_id=sid,student_name=assessment.name,
+                         violation_type=display,violation_code=code,snapshot_jpeg=jpeg.tobytes(),
+--- a/core/live_state.py
++++ b/core/live_state.py
+@@ -510,17 +510,9 @@
+                 if label == "wrong_uniform" and raw_label == label and raw_conf >= cfg.violation_min_confidence:
+                     accepted.append("wrong_uniform")
+ 
+-        # Earring evidence has its own eligibility, crop, and category; torso
+-        # unavailability must not disable the existing male-only face-crop check.
+-        earring = row.get("earring_violation")
+-        earring_eligible = eligible and str(row.get("gender") or "").lower() == "male"
+-        if not earring_eligible or earring is None:
+-            track.earrings.clear()
+-        else:
+-            track.earrings = deque((e for e in track.earrings if e[0] >= context.captured_at - cfg.evidence_ttl), maxlen=cfg.evidence_window)
+-            track.earrings.append((context.captured_at, context.frame_id, bool(earring)))
+-            if earring and sum(e[2] for e in track.earrings) >= cfg.earring_confirm_frames:
+-                accepted.append("earring")
++        # Ignore retired earring evidence even from an older producer/session.
++        # Historical database records and datasets are unaffected.
++        track.earrings.clear()
+         return LiveAssessment(
+             context=context, track_id=track.id,
+             presence_id=f"person:{context.generation}:{track.id}",
+--- a/core/monitor_models.py
++++ b/core/monitor_models.py
+@@ -30,7 +30,7 @@
+ 
+     Two native loaders may run at once. Face detection and recognition have the
+     highest queue priority, so optional model work cannot occupy either slot first.
+-    Once those are launched, body, uniform, and earring preparation use the slots.
++    Once those are launched, body and uniform preparation use the slots.
+     """
+     def __init__(self, recognizer, person_detector, trainer=None, uniform_matcher=None):
+         self.recognizer = recognizer
+@@ -53,7 +53,6 @@
+     def _bind_optional_loaders(self):
+         self.readiness.add("body", self._load_body, priority=10)
+         self.readiness.add("uniform", self._load_uniform, priority=11)
+-        self.readiness.add("earring", self._load_earring, priority=12)
+ 
+     def _load_body(self):
+         if self.person_detector is None:
+@@ -88,15 +87,6 @@
+             self.uniform_matcher.is_uniform(np.zeros((224, 224, 3), np.uint8))
+         return True
+ 
+-    def _load_earring(self):
+-        if not self.trainer.is_trained("earring"):
+-            raise RuntimeError("No trained earring weights")
+-        if self.trainer._get_model("earring") is None:
+-            raise RuntimeError(self.trainer.last_error.get("earring") or "Earring classifier failed")
+-        if self.trainer.predict_proba("earring", np.zeros((224, 224, 3), np.uint8)) is None:
+-            raise RuntimeError("Earring classifier inference failed; restore compatible weights and retry")
+-        return True
+-
+     def start(self, *, retry=False):
+         self.readiness.start(retry=retry)
+ 
+--- a/core/uniform_candidate.py
++++ b/core/uniform_candidate.py
+@@ -21,7 +21,7 @@
+ from pathlib import Path
+ from typing import Any
+ 
+-from core.uniform_dataset import PREPROCESS_VERSION as DATASET_PREPROCESS_VERSION
++from core.uniform_dataset import CATEGORIES, PREPROCESS_VERSION as DATASET_PREPROCESS_VERSION
+ 
+ MAPPING_VERSION = "uniform-garments-v1"
+ CLASS_MAP = {0: "campus_uniform", 1: "organizational_shirt", 2: "other_clothing"}
+@@ -140,7 +140,7 @@
+     missing = {category: count for category, count in included.items() if count < min_per_class}
+     eligible = not missing
+     if missing:
+-        reasons.extend(f"{category} has {count} eligible approved examples; requires {min_per_class}."
++        reasons.extend(f"{CATEGORIES[category]} has {count} eligible approved examples; requires {min_per_class}."
+                        for category, count in missing.items())
+     if quality_blocked:
+         reasons.append(f"{quality_blocked} approved record(s) have unresolved flags or invalid crops and are excluded.")
+@@ -248,7 +248,17 @@
+         return self.dataset
+ 
+     def summary(self, min_per_class: int = 10) -> dict:
+-        return candidate_summary(self._dataset_obj(), min_per_class=min_per_class)
++        summary = candidate_summary(self._dataset_obj(), min_per_class=min_per_class)
++        reason = None
++        if not self.base_weights.is_file() or self.base_weights.is_symlink():
++            reason = f"Trusted local classifier weights are unavailable: {self.base_weights}"
++        elif not 0 < self.base_weights.stat().st_size <= 256 * 1024 * 1024:
++            reason = "Trusted local classifier weights must be nonempty and at most 256 MiB."
++        if reason:
++            summary['eligible'] = summary['experimental_training_eligible'] = False
++            summary['reasons'].append(reason)
++            summary['readiness_reasons'].append(reason)
++        return summary
+ 
+     def is_busy(self) -> bool:
+         """Nonblocking candidate lock probe; does not read the catalog or weights."""
+--- a/core/uniform_dataset.py
++++ b/core/uniform_dataset.py
+@@ -33,7 +33,8 @@
+ CATEGORIES = {
+     "campus_uniform": "Campus Uniform",
+     "organizational_shirt": "Organizational Shirt",
+-    "other_clothing": "Other Clothing",
++    # Stable persisted key/class ID; only the user-facing term changes.
++    "other_clothing": "Wrong Uniform",
+     "unassigned": "Unassigned (Legacy Review)",
+ }
+ MAX_FILE_BYTES = 20 * 1024 * 1024
+@@ -46,6 +47,45 @@
+ ALLOWED_FORMATS = {"JPEG", "PNG", "WEBP", "BMP", "TIFF"}
+ _PROCESS_LOCKS: dict[str, threading.RLock] = {}
+ _LOCKS_GUARD = threading.Lock()
++
++
++class ImportLimitError(ValueError):
++    """A bounded import stopped with actionable, retry-safe progress counts."""
++
++    def __init__(self, limit_name: str, configured_limit: int, *, imported: int,
++                 duplicates: int, unprocessed: int | None, measured_value: int | float | None = None,
++                 unit: str = "files"):
++        self.limit_name = limit_name
++        self.configured_limit = configured_limit
++        self.imported = imported
++        self.duplicates = duplicates
++        self.unprocessed = unprocessed
++        self.measured_value = measured_value
++        remaining = unprocessed if unprocessed is not None else "all (count unavailable; archive rejected before opening)"
++        observed = f"; observed {measured_value} {unit}" if measured_value is not None else ""
++        super().__init__(f"Import exceeded {limit_name} limit ({configured_limit} {unit}{observed}). "
++                         f"Imported: {imported}; skipped as duplicates: {duplicates}; "
++                         f"left unprocessed: {remaining}. Retry the remaining files in smaller batches.")
++
++
++class ImportSummary(list):
++    """List-compatible result carrying counts for the UI without changing callers."""
++
++    def __init__(self, ids=(), *, imported=0, duplicates=0, unprocessed=0):
++        super().__init__(ids)
++        self.imported = imported
++        self.duplicates = duplicates
++        self.unprocessed = unprocessed
++
++    def message(self):
++        return (f"Imported: {self.imported}; skipped as duplicates: {self.duplicates}; "
++                f"left unprocessed: {self.unprocessed}.")
++
++
++def _is_supported_zip_image(info) -> bool:
++    return (not info.is_dir() and "__MACOSX" not in PurePosixPath(info.filename).parts
++            and Path(info.filename).suffix.lower() in
++            {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"})
+ 
+ 
+ def _now() -> str:
+@@ -245,26 +285,40 @@
+     def import_paths(self, paths: Iterable[str | Path], category: str, *, capture_group: str | None = None,
+                      legacy_label: str | None = None) -> list[str]:
+         _validate_category(category)
++        paths = list(paths)
+         ids = []
+         total = 0
+-        count = 0
+-        for path in paths:
++        duplicates = 0
++        existing_ids = {r.get("image_id") for r in self.snapshot()["records"]}
++        for index, path in enumerate(paths):
+             p = Path(path)
+             if p.is_symlink() or not p.is_file():
+                 raise ValueError(f"Not a regular image file: {p}")
+             size = p.stat().st_size
+             if size > MAX_FILE_BYTES:
+-                raise ValueError("Image exceeds the file size limit")
++                raise ImportLimitError("per-file size", MAX_FILE_BYTES, imported=len(ids)-duplicates,
++                                       duplicates=duplicates, unprocessed=len(paths)-index,
++                                       measured_value=size, unit="bytes")
++            if index >= MAX_ZIP_FILES:
++                raise ImportLimitError("file count", MAX_ZIP_FILES, imported=len(ids)-duplicates,
++                                       duplicates=duplicates, unprocessed=len(paths)-index,
++                                       measured_value=index + 1)
++            if total + size > MAX_ZIP_EXPANDED:
++                raise ImportLimitError("total expanded size", MAX_ZIP_EXPANDED, imported=len(ids)-duplicates,
++                                       duplicates=duplicates, unprocessed=len(paths)-index,
++                                       measured_value=total + size, unit="bytes")
+             total += size
+-            count += 1
+-            if count > MAX_ZIP_FILES or total > MAX_ZIP_EXPANDED:
+-                raise ValueError("Import exceeds file count or total size limit")
+             with p.open("rb") as f:
+                 data = f.read(MAX_FILE_BYTES + 1)
+             if len(data) != size or len(data) > MAX_FILE_BYTES:
+                 raise ValueError("Image changed while being read or exceeds the file size limit")
++            digest = hashlib.sha256(data).hexdigest()
++            if digest in existing_ids:
++                duplicates += 1
++            else:
++                existing_ids.add(digest)
+             ids.append(self._import_bytes(data, str(p), "file", category, capture_group, legacy_label))
+-        return ids
++        return ImportSummary(ids, imported=len(ids)-duplicates, duplicates=duplicates)
+ 
+     def import_zip(self, path: str | Path, category: str, *, capture_group: str | None = None) -> list[str]:
+         _validate_category(category)
+@@ -272,22 +326,37 @@
+         if p.is_symlink() or not p.is_file():
+             raise ValueError("ZIP must be a regular file")
+         if p.stat().st_size > MAX_ZIP_ARCHIVE_BYTES:
+-            raise ValueError("ZIP archive exceeds compressed size limit")
++            raise ImportLimitError("compressed archive size", MAX_ZIP_ARCHIVE_BYTES, imported=0,
++                                   duplicates=0, unprocessed=None,
++                                   measured_value=p.stat().st_size, unit="bytes")
+         archive_hash = hashlib.sha256()
+         compressed_read = 0
+         with p.open("rb") as archive_file:
+             while chunk := archive_file.read(1024 * 1024):
+                 compressed_read += len(chunk)
+                 if compressed_read > MAX_ZIP_ARCHIVE_BYTES:
+-                    raise ValueError("ZIP archive exceeds compressed size limit")
++                    raise ImportLimitError("compressed archive size", MAX_ZIP_ARCHIVE_BYTES, imported=0,
++                                           duplicates=0, unprocessed=None,
++                                           measured_value=compressed_read, unit="bytes")
+                 archive_hash.update(chunk)
+         archive_digest = archive_hash.hexdigest()
+         ids = []
++        duplicates = 0
++        existing_ids = {r.get("image_id") for r in self.snapshot()["records"]}
+         with zipfile.ZipFile(p) as archive:
+             infos = archive.infolist()
+             files = [i for i in infos if not i.is_dir()]
+-            if len(infos) > MAX_ZIP_FILES or sum(i.file_size for i in infos) > MAX_ZIP_EXPANDED:
+-                raise ValueError("ZIP exceeds entry count or expanded size limit")
++            if len(infos) > MAX_ZIP_FILES:
++                file_infos = [i for i in infos if not i.is_dir() and "__MACOSX" not in PurePosixPath(i.filename).parts
++                              and Path(i.filename).suffix.lower() in {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}]
++                raise ImportLimitError("archive entry count", MAX_ZIP_FILES, imported=0, duplicates=0,
++                                       unprocessed=len(file_infos), measured_value=len(infos), unit="entries")
++            expanded = sum(i.file_size for i in infos)
++            if expanded > MAX_ZIP_EXPANDED:
++                file_infos = [i for i in infos if not i.is_dir() and "__MACOSX" not in PurePosixPath(i.filename).parts
++                              and Path(i.filename).suffix.lower() in {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}]
++                raise ImportLimitError("archive expanded size", MAX_ZIP_EXPANDED, imported=0, duplicates=0,
++                                       unprocessed=len(file_infos), measured_value=expanded, unit="bytes")
+             for info in infos:
+                 name = PurePosixPath(info.filename)
+                 mode = (info.external_attr >> 16) & 0xFFFF
+@@ -299,23 +368,31 @@
+                 if info.flag_bits & 1:
+                     raise ValueError("Encrypted ZIP entries are not supported")
+                 if info.file_size > MAX_FILE_BYTES:
+-                    raise ValueError("ZIP image exceeds per-file size limit")
++                    raise ImportLimitError("per-file size", MAX_FILE_BYTES, imported=0, duplicates=0,
++                                           unprocessed=sum(_is_supported_zip_image(row) for row in files),
++                                           measured_value=info.file_size, unit="bytes")
+                 if info.file_size and (info.compress_size == 0 or info.file_size / info.compress_size > MAX_COMPRESSION_RATIO):
+-                    raise ValueError("ZIP entry compression ratio exceeds the limit")
++                    raise ImportLimitError("compression ratio", MAX_COMPRESSION_RATIO, imported=0, duplicates=0,
++                                           unprocessed=sum(_is_supported_zip_image(row) for row in files),
++                                           measured_value=(info.file_size // max(info.compress_size, 1)),
++                                           unit="ratio")
+                 if info.is_dir():
+                     continue
+             for info in files:
+-                if "__MACOSX" in PurePosixPath(info.filename).parts:
+-                    continue
+-                if Path(info.filename).suffix.lower() not in {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}:
++                if not _is_supported_zip_image(info):
+                     continue
+                 with archive.open(info) as member:
+                     data = member.read(MAX_FILE_BYTES + 1)
+                 if len(data) > MAX_FILE_BYTES or len(data) != info.file_size:
+                     raise ValueError("ZIP image exceeds bounds or has inconsistent size")
++                digest = hashlib.sha256(data).hexdigest()
++                if digest in existing_ids:
++                    duplicates += 1
++                else:
++                    existing_ids.add(digest)
+                 ids.append(self._import_bytes(data, f"{p}!/{info.filename}", "zip", category, capture_group,
+                                               archive_sha256=archive_digest))
+-        return ids
++        return ImportSummary(ids, imported=len(ids)-duplicates, duplicates=duplicates)
+ 
+     def import_folder(self, path: str | Path, category: str, *, capture_group: str | None = None) -> list[str]:
+         p = Path(path)
+@@ -331,8 +408,6 @@
+             except ValueError:
+                 continue
+             if candidate.is_file() and candidate.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}:
+-                if len(paths) >= MAX_ZIP_FILES:
+-                    raise ValueError("Folder exceeds file count limit")
+                 paths.append(candidate)
+         return self.import_paths(paths, category, capture_group=capture_group)
+ 
+--- a/core/uniform_observation.py
++++ b/core/uniform_observation.py
+@@ -23,7 +23,7 @@
+ 
+ LABELS = {'campus_uniform':'Campus Uniform recognized',
+           'organizational_shirt':'Organizational Shirt recognized',
+-          'other_clothing':'Other clothing recognized', None:'Unable to assess'}
++          'other_clothing':'Wrong Uniform recognized', None:'Unable to assess'}
+ CONFIG_ENV = 'CBVMS_UNIFORM_OBSERVATION_CONFIG'
+ 
+ 
+--- a/core/violation_engine.py
++++ b/core/violation_engine.py
+@@ -1,6 +1,6 @@
+ """Lightweight live violation checker for CBVMS.
+ 
+-Wraps the in-app ViolationTrainer classifiers (uniform / earring) and turns a
++Wraps the in-app ViolationTrainer uniform classifier and turns a
+ per-person face/torso crop into a list of human-readable violation strings.
+ """
+ 
+@@ -24,7 +24,15 @@
+         self._notifier = notifier
+         # Toggles (match the settings-panel switch semantics).
+         self.check_uniform: bool = True
+-        self.check_earring: bool = True
++
++    @property
++    def check_earring(self) -> bool:
++        """Compatibility for saved settings; this retired check cannot be enabled."""
++        return False
++
++    @check_earring.setter
++    def check_earring(self, _enabled) -> None:
++        pass
+ 
+     def check(
+         self,
+@@ -40,19 +48,7 @@
+             if label == "wrong_uniform" and conf >= CONF_THRESHOLD:
+                 violations.append(f"Wrong uniform ({conf:.0%})")
+ 
+-        if (
+-            self.check_earring
+-            and face_bgr is not None
+-            and face_bgr.size > 0
+-            and (gender or "").lower() == "male"
+-        ):
+-            label, conf = self._trainer.predict("earring", face_bgr)
+-            if label == "with_earring" and conf >= CONF_THRESHOLD:
+-                violations.append(f"Earring detected ({conf:.0%})")
+-
+-        # NOTE: check() is currently unused by the live pipeline — ui/dashboard.py
+-        # predicts inline in _check_violations and fires the notifier from _log_db
+-        # (which is cooldown-gated). This hook is kept for spec fidelity / future use.
++        # Compatibility helper; the live pipeline owns guarded persistence/audio.
+         if self._notifier is not None and violations:
+             self._notifier.notify(student_name="", violation=", ".join(violations))
+ 
+--- a/tests/test_detection_audio.py
++++ b/tests/test_detection_audio.py
+@@ -86,10 +86,15 @@
+         wrong = replace(good, accepted_categories=('wrong_uniform',), uniform_assessment=U.WRONG)
+         for a, suspended, expected in ((good,False,K.POSITIVE), (wrong,False,K.VIOLATION),
+                 (good,True,K.SUSPENSION), (wrong,True,K.SUSPENSION),
+-                (replace(good, accepted_categories=('earring',)),False,K.VIOLATION)):
++                (replace(good, accepted_categories=('earring',)),False,None)):
+             self.assertEqual(select_sound(a,suspended), expected)
+         for a in (replace(good,reliable_identity=False), replace(good,student_id='')):
+             self.assertIsNone(select_sound(a,True))
++
++    def test_retired_earring_result_never_queues_audio(self):
++        self.offer(assessment(accepted_categories=('earring',)))
++        self.drain()
++        self.assertEqual(self.backend.calls, [])
+ 
+     def test_display_text_and_no_violation_are_not_positive(self):
+         for state in ('Uniform compliant', 'No violation recorded', 'Checking uniform',
+@@ -113,7 +118,7 @@
+ 
+     def test_each_mapping_plays_local_asset(self):
+         for a, expected in ((assessment(), 'positive'),
+-            (assessment(accepted_categories=('earring',)), 'violation'),
++            (assessment(accepted_categories=('wrong_uniform',)), 'violation'),
+             (assessment(active_suspension=True), 'suspension')):
+             self.audio.cancel_detection()
+             self.offer(a)
+--- a/tests/test_live_pipeline.py
++++ b/tests/test_live_pipeline.py
+@@ -345,17 +345,34 @@
+         self.assertEqual(fx.notifier.notify.call_args.args, ("Student S-1", "Suspended until 2027-01-01 UTC"))
+         self.assertTrue(callable(fx.notifier.notify.call_args.kwargs["valid_if"]))
+ 
+-    def test_earring_category_independent_of_torso_and_gender(self):
++    def test_retired_earring_check_never_predicts_even_if_old_task_enables_it(self):
+         fx = PipelineFixture()
+         fx.trainer.is_trained.side_effect = lambda module: module == "earring"
+         fx.trainer.predict.return_value = ("with_earring", .9)
+-        result = fx.confirmed()
++        for seq in range(1, 5):
++            result = fx.analyze(seq, earring_enabled=True)
+         self.assertEqual(result.assessments[0].state, UNIFORM_NOT_ASSESSED)
+-        self.assertEqual(result.assessments[0].accepted_categories, ("earring",))
+-        fx.persist(result)
+-        self.assertEqual(fx.database.log_violation.call_args.kwargs["violation_code"], "earring")
+-        fx.recognizer.recognize_faces.return_value = [detection(gender="Female")]
+-        self.assertFalse(fx.analyze(5).assessments[0].accepted_categories)
++        self.assertEqual(result.assessments[0].accepted_categories, ())
++        fx.trainer.predict.assert_not_called()
++        self.assertTrue(all(c.args[0] != "earring" for c in fx.trainer.is_trained.call_args_list))
++        fx.persist(result)
++        fx.database.log_violation.assert_not_called()
++        # A queued result from an older producer must not create a new alert either.
++        stale_assessment = replace(result.assessments[0], accepted_categories=("earring",))
++        fx.persist(replace(result, assessments=(stale_assessment,)))
++        fx.database.log_violation.assert_not_called()
++        fx.notifier.notify.assert_not_called()
++
++    def test_legacy_checker_ignores_saved_earring_toggle(self):
++        from core.violation_engine import LiveViolationChecker
++        trainer = MagicMock()
++        trainer.predict.return_value = ("correct_uniform", .9)
++        checker = LiveViolationChecker(trainer)
++        checker.check_earring = True
++        self.assertFalse(checker.check_earring)
++        image = np.zeros((50, 50, 3), np.uint8)
++        self.assertEqual(checker.check(image, image, "Male"), [])
++        trainer.predict.assert_called_once_with("uniform", image)
+ 
+     def test_cancelled_old_session_disconnected_and_expired_results_have_no_side_effect(self):
+         for cause in ("cancelled", "source", "stale", "disconnected", "camera_late"):
+--- a/tests/test_live_state.py
++++ b/tests/test_live_state.py
+@@ -268,10 +268,10 @@
+         with self.assertRaises(FrozenInstanceError):
+             result.name = "Wrong Student"
+ 
+-    def test_earrings_independent_of_torso_and_male_eligibility(self):
++    def test_retired_earring_evidence_is_ignored(self):
+         state, result = self.settled([row(torso_valid=False, earring_violation=True)])
+         self.assertEqual(result[0].state, UNIFORM_NOT_ASSESSED)
+-        self.assertEqual(result[0].accepted_categories, ("earring",))
++        self.assertEqual(result[0].accepted_categories, ())
+         for changes in (dict(gender="Female"), dict(discipline_eligible=False), dict(earring_violation=None)):
+             current = dict(torso_valid=False, earring_violation=True)
+             current.update(changes)
+@@ -281,7 +281,7 @@
+ 
+     def test_separate_accepted_categories_are_auditable(self):
+         _, result = self.settled([row(uniform="wrong_uniform", earring_violation=True)])
+-        self.assertEqual(result[0].accepted_categories, ("wrong_uniform", "earring"))
++        self.assertEqual(result[0].accepted_categories, ("wrong_uniform",))
+ 
+     def test_suspension_metadata_only_exposed_after_reliable_identity(self):
+         state = LiveState()
+--- a/tests/test_monitor_startup.py
++++ b/tests/test_monitor_startup.py
+@@ -26,7 +26,7 @@
+         with ThreadPoolExecutor(max_workers=4) as pool:
+             bundles = list(pool.map(lambda _: MonitorModels(recognizer, detector, trainer, matcher), range(12)))
+         self.assertTrue(all(bundle is bundles[0] for bundle in bundles))
+-        self.assertEqual(set(bundles[0].readiness.snapshot()), {"face", "recognition", "body", "uniform", "earring"})
++        self.assertEqual(set(bundles[0].readiness.snapshot()), {"face", "recognition", "body", "uniform"})
+ 
+     def make_bundle(self):
+         recognizer = MagicMock()
+@@ -52,10 +52,11 @@
+         self.assertIs(bundle.uniform_matcher, second.uniform_matcher)
+         bundle.start()
+         wait_until(lambda: all(bundle.readiness.snapshot()[name].state in ("ready", "failed")
+-                               for name in ("face", "recognition", "body", "uniform", "earring")))
++                               for name in ("face", "recognition", "body", "uniform")))
+         self.assertTrue(bundle.readiness.ready("body"))
+         self.assertTrue(bundle.readiness.ready("uniform"))
+-        self.assertEqual(bundle.readiness.snapshot()["earring"].state, "failed")
++        self.assertNotIn("earring", bundle.readiness.snapshot())
++        self.assertTrue(all(c.args[0] != "earring" for c in trainer.is_trained.call_args_list))
+         detector.detect_persons.assert_called_once()
+         trainer.predict_proba.assert_called_once_with("uniform", unittest.mock.ANY)
+         matcher.is_uniform.assert_called_once()
+@@ -143,7 +144,7 @@
+         bundle.wait(1)
+         self.assertEqual(registry.snapshot()["body"].state, "ready")
+         self.assertEqual(registry.snapshot()["uniform"].state, "cancelled")
+-        self.assertEqual(registry.snapshot()["earring"].state, "cancelled")
++        self.assertNotIn("earring", registry.snapshot())
+         trainer.predict_proba.assert_not_called()
+ 
+     def test_retry_queues_every_failure_and_prioritizes_face_when_slot_opens(self):
+@@ -186,8 +187,8 @@
+     def test_missing_optional_weights_are_explicit_failures(self):
+         bundle, _, _, trainer, _ = self.make_bundle()
+         trainer.is_trained.side_effect = lambda module: False
+-        with self.assertRaisesRegex(RuntimeError, "No trained earring weights"):
+-            bundle._load_earring()
++        with self.assertRaisesRegex(RuntimeError, "Train a uniform classifier"):
++            bundle._load_uniform()
+ 
+     def test_shutdown_wait_does_not_start_preparation_after_login_abort(self):
+         bundle, recognizer, detector, _, _ = self.make_bundle()
+--- a/tests/test_uniform_models_ui.py
++++ b/tests/test_uniform_models_ui.py
+@@ -56,6 +56,14 @@
+         self.service.snapshot['reports']=[{'report_id':'report-fixture','status':'completed'}]
+         self.view.refresh();self.wait()
+         self.view.threshold.insert(0,'.8');self.view.ack.select();self.view._buttons()
++    def test_display_label_does_not_rewrite_saved_report(self):
++        report = self.service.report_value
++        before = deepcopy(report)
++        text = format_report(report)
++        self.assertIn('Wrong Uniform', text)
++        self.assertNotIn('other_clothing', text)
++        self.assertEqual(report, before)
++
+     def test_no_candidate_metrics_or_deployment_enabled_without_prerequisites(self):
+         self.assertIn('missing reviewed provenance',self.view.summary.cget('text'))
+         self.assertEqual(self.view.evaluate_button.cget('state'),'disabled')
+--- a/tests/test_uniform_observation_ui.py
++++ b/tests/test_uniform_observation_ui.py
+@@ -16,7 +16,7 @@
+         self.root.destroy();gc.collect();self.assertEqual(self.errors,[])
+     def test_four_outcomes_update_same_widget_and_never_imply_policy_violation(self):
+         card=None
+-        states=('Unable to assess','Campus Uniform recognized','Organizational Shirt recognized','Other clothing recognized')
++        states=('Unable to assess','Campus Uniform recognized','Organizational Shirt recognized','Wrong Uniform recognized')
+         for state in states:
+             row={'presence_id':'synthetic-passage','track_id':1,'student_id':'fixture-only',
+                  'name':'Synthetic UI fixture','reliable_identity':True,'state':state,
+--- a/ui/dashboard.py
++++ b/ui/dashboard.py
+@@ -193,9 +193,9 @@
+ 
+         # Real-time notification broker (sound + toast + bell badge + log panel)
+         self._notifier = Notifier()
+-        # YOLOv8 classification trainer (uniform / earring modules)
++        # YOLOv8 classification trainer (uniform module)
+         self._trainer = monitor_models.trainer if monitor_models is not None else ViolationTrainer()
+-        # Live violation checker (uniform / earring) backed by the trainer models
++        # Live violation checker (uniform) backed by the trainer models
+         self._checker = LiveViolationChecker(self._trainer, notifier=self._notifier)
+         # Full-body person detector (YOLOv8n) for reliable torso crops
+         if self._injected:
+@@ -258,7 +258,7 @@
+             and task.context.generation == self._monitor_generation
+             and task.camera_generation == self._camera_generation
+             and task.uniform_enabled == self._checker.check_uniform
+-            and task.earring_enabled == self._checker.check_earring)
++            and not task.earring_enabled)
+         self._processor.readiness = self._readiness
+         self._observation_only = OBSERVATION_ONLY
+         self._candidate_router = (ClearFrameRouter(fresh_selection=True,ttl=self._uniform_observation.config.frame_ttl)
+@@ -1798,7 +1798,7 @@
+                         self._tracking_worker.offer(MonitorTask(
+                             FrameContext(self._monitor_generation, sample.frame_id, sample.captured_at),
+                             sample.frame, sample.captured_wall_time or time.time()-(started-sample.captured_at), self._monitor_cancel,
+-                            uniform_enabled=self._checker.check_uniform, earring_enabled=self._checker.check_earring,
++                            uniform_enabled=self._checker.check_uniform, earring_enabled=False,
+                             camera_generation=self._camera_generation,
+                             source_id=str((self._camera_active_source or {}).get('id', '')),
+                             source_label=str((self._camera_active_source or {}).get('label', 'Camera'))))
+--- a/ui/live_alerts.py
++++ b/ui/live_alerts.py
+@@ -40,7 +40,8 @@
+     "unknown_person": ("Unknown person", COLOR_WARNING),
+     "campus_uniform_recognized": ("Campus Uniform recognized", COLOR_ACCENT),
+     "organizational_shirt_recognized": ("Organizational Shirt recognized", COLOR_ACCENT),
+-    "other_clothing_recognized": ("Other clothing recognized", COLOR_ACCENT),
++    "other_clothing_recognized": ("Wrong Uniform recognized", COLOR_ACCENT),
++    "wrong_uniform_recognized": ("Wrong Uniform recognized", COLOR_ACCENT),
+     "unable_to_assess": ("Unable to assess", COLOR_TEXT_MUTED),
+ }
+ 
+--- a/ui/settings.py
++++ b/ui/settings.py
+@@ -378,11 +378,9 @@
+ 
+         # Initialise from the live checker so the switches reflect the real state.
+         self._enable_uniform = ctk.BooleanVar(value=bool(getattr(self.checker, "check_uniform", True)))
+-        self._enable_earring = ctk.BooleanVar(value=bool(getattr(self.checker, "check_earring", True)))
+ 
+         items = [
+             ("Enable Uniform Check", self._enable_uniform, "uniform"),
+-            ("Enable Earring Check", self._enable_earring, "earring"),
+         ]
+         for i, (label, var, key) in enumerate(items):
+             sw = ctk.CTkSwitch(
+@@ -399,10 +397,9 @@
+         return row + 1
+ 
+     def _apply_violation_toggles(self, _changed: str | None) -> None:
+-        # Uniform / earring map to the live checker (the trained classifiers).
++        # Uniform maps to the live checker.
+         for attr, var in [
+             ("check_uniform", self._enable_uniform),
+-            ("check_earring", self._enable_earring),
+         ]:
+             try:
+                 setattr(self.checker, attr, bool(var.get()))
+@@ -492,7 +489,7 @@
+             except Exception:
+                 pass
+ 
+-    _CLASSIFIER_TITLES = {"uniform": "Uniform Check", "earring": "Earring Check"}
++    _CLASSIFIER_TITLES = {"uniform": "Uniform Check"}
+ 
+     def _model_status_section(self, master, *, row: int) -> int:
+         card = self._section_card(master, "Model Status")
+@@ -511,9 +508,9 @@
+         )
+         self._detector_status_label.pack(side="right")
+ 
+-        # Trainable classifiers (uniform / earring)
++        # Active uniform classifier
+         self._cls_status: dict[str, dict] = {}
+-        for module in ("uniform", "earring"):
++        for module in ("uniform",):
+             title = self._CLASSIFIER_TITLES[module]
+             model_file = Path(MODULES[module]["model_out"]).name
+ 
+@@ -622,23 +619,16 @@
+         ).pack(anchor="w", padx=PADDING, pady=(PADDING, 8))
+ 
+         text = (
+-            "Train classifiers directly inside CBVMS — no scripts or manual files needed.\n\n"
+-            "1) Open the Training tab\n"
+-            "   - Click 🎓 Training in the left sidebar.\n"
+-            "   - Choose a tab: Uniform Check or Earring Check.\n\n"
+-            "2) Build the dataset (per class)\n"
+-            "   - UNIFORM: correct_uniform vs wrong_uniform.\n"
+-            "   - EARRING: no_earring vs with_earring.\n"
+-            "   - Use 'Upload Photos' or 'Capture from Camera' for each class.\n"
+-            "   - Minimum 10 photos per class (more = better accuracy).\n\n"
+-            "3) Train\n"
+-            "   - Click 'Train Now'. A YOLOv8 classifier trains on your photos.\n"
+-            "   - The model is saved automatically to the models/ folder\n"
+-            "     (uniform_cls.pt / earring_cls.pt).\n\n"
+-            "4) Check status\n"
+-            "   - Return here and click 'Refresh Status'.\n"
+-            "   - A trained model shows 'Trained ✓' with its sample counts\n"
+-            "     and last-trained time.\n"
++            "1) Open Training → Uniform Check.\n\n"
++            "2) Choose Campus Uniform, Organizational Shirt, or Wrong Uniform.\n"
++            "   Upload Photos, Import Folder, Import ZIP, or Capture from Camera.\n"
++            "   Review the garment label and torso crop, then explicitly approve.\n"
++            "   Unclear examples stay pending or excluded. Label the clothing, not the day’s policy.\n\n"
++            "3) Click ‘Train candidate with approved datasets’.\n"
++            "   Check approved counts and resolve the displayed prerequisites.\n"
++            "   The minimum count permits an experiment; it does not establish accuracy.\n\n"
++            "4) Evaluate the candidate in Evaluation & Models.\n"
++            "   Training leaves the active model in place. Activation requires authorized review.\n"
+         )
+         box = ctk.CTkTextbox(
+             win,
+--- a/ui/training_panel.py
++++ b/ui/training_panel.py
+@@ -36,6 +36,7 @@
+     _IMAGE_EXTS += (".heic", ".heif")
+ 
+ from core.trainer import MIN_SAMPLES_PER_CLASS, MODULES, ViolationTrainer
++from core.uniform_dataset import CATEGORIES
+ from core.uniform_references import KINDS, REFERENCE_DIR, save_reference, list_references
+ from ui.background_task import BackgroundTask
+ from ui.components import (
+@@ -67,20 +68,19 @@
+ 
+ _MODULE_TABS = [
+     ("uniform", "Uniform Check"),
+-    ("earring", "Earring Check"),
+ ]
+ 
+ _HELP_TEXT = (
+     "Uniform Check uses a separate review dataset and isolated candidate training. Uploads do not rebuild "
+     "or replace the active model. Review labels, crops, provenance and quality first.\n\n"
+-    "Earring Check retains its existing training workflow. A minimum photo count is "
++    "A minimum photo count is "
+     "only a software requirement, not evidence of accuracy. Independent people, "
+     "capture sessions and conditions are needed for meaningful evaluation."
+ )
+ 
+ 
+ def _pretty(label: str) -> str:
+-    return label.replace("_", " ").title()
++    return CATEGORIES.get(label, label.replace("_", " ").title())
+ 
+ 
+ def _gather_images(folder: str) -> list[str]:
+@@ -111,8 +111,14 @@
+     return cv2.imread(str(path))
+ 
+ 
++class _TrainingTabs(ctk.CTkTabview):
++    def set(self, name):
++        # Old saved section names must land on the supported uniform workspace.
++        return super().set(name if name in self._tab_dict else 'Uniform Check')
++
++
+ class TrainingPanel(ctk.CTkFrame):
+-    """Two-tab training UI (Uniform / Earring) with dataset builder + trainer."""
++    """Uniform review/candidate training and the separate reference-art library."""
+ 
+     def __init__(
+         self,
+@@ -150,7 +156,7 @@
+     # ------------------------------------------------------------------
+ 
+     def _build(self) -> None:
+-        tabview = ctk.CTkTabview(
++        tabview = _TrainingTabs(
+             self,
+             fg_color=COLOR_BG,
+             segmented_button_fg_color=COLOR_SURFACE,
+@@ -486,6 +492,9 @@
+     # ------------------------------------------------------------------
+ 
+     def _upload(self, module: str, label: str) -> None:
++        if module == "earring":
++            self._tabview.set("Uniform Check")
++            return
+         # Per-extension filters + an All-files fallback — the macOS native panel is
+         # unreliable with a single space-separated multi-extension pattern.
+         filetypes = [
+@@ -507,6 +516,9 @@
+         self._add_paths_bg(module, label, paths)
+ 
+     def _import_folder(self, module: str, label: str) -> None:
++        if module == "earring":
++            self._tabview.set("Uniform Check")
++            return
+         folder = filedialog.askdirectory(title="Select a folder of photos")
+         if not folder:
+             return
+@@ -518,6 +530,9 @@
+ 
+     def _open_save_folder(self, module: str, label: str) -> None:
+         """Open this class's on-disk save folder in the OS file manager."""
++        if module == "earring":
++            self._tabview.set("Uniform Check")
++            return
+         folder = self.trainer.label_dir(module, label)
+         try:
+             folder.mkdir(parents=True, exist_ok=True)  # may not exist until first photo
+@@ -533,6 +548,9 @@
+ 
+     def _add_paths_bg(self, module: str, label: str, paths: list[str]) -> None:
+         """Read + add many image files on a worker thread so the UI stays responsive."""
++        if module == "earring":
++            self._tabview.set("Uniform Check")
++            return
+         total = len(paths)
+         self._set_buttons_state(module, False)
+         show_toast(self, f"Importing {total} photo(s) to {_pretty(label)}…", type="info")
+@@ -579,6 +597,9 @@
+ 
+     def _open_capture_screen(self, module: str, label: str) -> None:
+         """Take over the panel center with a live camera + capture controls (no modal)."""
++        if module == "earring":
++            self._tabview.set("Uniform Check")
++            return
+         if self._capture_screen is not None:
+             return  # already capturing
+         if self._tabview is not None:
+@@ -1156,6 +1177,9 @@
+             self._close_capture_screen()
+ 
+     def _clear(self, module: str, label: str) -> None:
++        if module == "earring":
++            self._tabview.set("Uniform Check")
++            return
+         dialog = ctk.CTkInputDialog(
+             text=f'Type "CLEAR" to delete ALL "{_pretty(label)}" photos.',
+             title="Confirm Clear",
+@@ -1189,6 +1213,9 @@
+         return False
+ 
+     def _start_training(self, module: str) -> None:
++        if module == "earring":
++            self._tabview.set("Uniform Check")
++            return
+         if self._candidate_job_blocks():
+             return
+         if self._training.get(module):
+@@ -1238,6 +1265,9 @@
+     # ------------------------------------------------------------------
+ 
+     def _start_evaluation(self, module: str) -> None:
++        if module == "earring":
++            self._tabview.set("Uniform Check")
++            return
+         if self._candidate_job_blocks():
+             return
+         if self._training.get(module) or self._evaluating.get(module):
+--- a/ui/uniform_candidate_panel.py
++++ b/ui/uniform_candidate_panel.py
+@@ -143,7 +143,8 @@
+         lines = []
+         for category in ('campus_uniform', 'organizational_shirt', 'other_clothing'):
+             groups = self.summary.get('groups_by_category', {}).get(category, {})
+-            lines.append(f"{CATEGORIES[category]}: {self.summary.get('included_by_category', {}).get(category, 0)} included • "
++            lines.append(f"{CATEGORIES[category]}: {self.summary.get('approved_by_category', {}).get(category, 0)} approved • "
++                         f"{self.summary.get('included_by_category', {}).get(category, 0)} eligible/included • "
+                          f"{groups.get('known', 0)} known capture groups • {groups.get('unknown', 0)} unknown-provenance group(s)")
+         lines.append(f"Pending: {self.summary.get('pending', 0)} • Excluded: {self.summary.get('excluded', 0)} • "
+                      f"Approved but quality/association blocked: {self.summary.get('quality_blocked', 0)}")
+--- a/ui/uniform_models_panel.py
++++ b/ui/uniform_models_panel.py
+@@ -16,10 +16,20 @@
+         return f"Evaluation: {report.get('status', 'unavailable')}\n{report.get('failure') or report.get('error') or report.get('message') or 'No completed metrics.'}"
+     summary = {key:report.get(key) for key in ('dataset_sha256','baseline','candidate','coverage',
+         'per_model','campus_comparison','policy_version','limitations','synthetic','experimental')}
++    def display_terms(value):
++        labels = {'other_clothing': 'Wrong Uniform', 'Other Clothing': 'Wrong Uniform'}
++        if isinstance(value, dict):
++            return {labels.get(key, key): display_terms(item) for key, item in value.items()}
++        if isinstance(value, list):
++            return [display_terms(item) for item in value]
++        if isinstance(value, str):
++            return labels.get(value, value)
++        return value
++    summary = display_terms(summary)
+     return ('Classification quality and uniform-policy correctness are separate.\n'
+             'Per-class precision/recall include sample denominators and Wilson 95% intervals.\n'
+             'Legacy binary labels do not establish Organizational Shirt or Campus Uniform classification recall.\n'
+-            'null = unavailable/undefined; unassessed outcomes are not Other Clothing.\n\n'
++            'null = unavailable/undefined; unable-to-assess outcomes are not Wrong Uniform.\n\n'
+             + json.dumps(summary,indent=2,ensure_ascii=False))
+ 
+ 
+--- a/ui/uniform_workspace.py
++++ b/ui/uniform_workspace.py
+@@ -38,6 +38,7 @@
+         self._images = []
+         self._review = None
+         self._refresh_again = False
++        self._status_override = None
+         self.grid_columnconfigure(0, weight=1)
+         self.grid_rowconfigure(2, weight=1)
+         self.status = ctk.CTkLabel(self, text='Loading review dataset…', anchor='w', wraplength=950)
+@@ -70,7 +71,9 @@
+                     ('Import ZIP', lambda c=category: self.import_zip(c)),
+                     ('Capture from Camera', lambda c=category: self.capture(c))):
+                     ctk.CTkButton(actions, text=title, command=action, width=145).pack(side='left', padx=4, pady=6)
+-                text = 'Each original is preserved. Imports need crop and label review before approval.'
++                text = ('Add clear examples of clothing outside the Campus Uniform and Organizational Shirt categories.'
++                        if category == 'other_clothing' else
++                        'Each original is preserved. Imports need crop and label review before approval.')
+             counts = ctk.CTkLabel(tab, text=text, anchor='w', wraplength=900)
+             counts.grid(row=2, column=0, sticky='ew', padx=8, pady=4)
+             gallery = ScrollableFrame(tab, fg_color=COLOR_BG)
+@@ -99,20 +102,29 @@
+         self._tab_changed()
+ 
+     def _error(self, error):
+-        self.status.configure(text=str(error) + ' Any examples already saved remain available for review.')
++        self._status_override = str(error) + ' Any examples already saved remain available for review.'
++        self.status.configure(text=self._status_override)
+ 
+     def run(self, operation, message, done=None, error=None):
+         if self.task.busy:
+             self.status.configure(text='An operation is still running. Please wait.')
+             return False
++        self._status_override = None
+         self.status.configure(text=message)
+         def finished(value):
+-            self.status.configure(text='Saved to the review dataset. The active model is unchanged.')
++            if hasattr(value, 'message') and callable(value.message):
++                self._status_override = value.message() + ' The active model is unchanged.'
++            else:
++                self._status_override = 'Saved to the review dataset. The active model is unchanged.'
++            self.status.configure(text=self._status_override)
+             if done:
+                 done(value)
+             self.refresh()
+         def failed(message):
+             self._error(message)
++            # Imports may stop at a bounded limit after safely saving earlier rows.
++            # Refresh so partial progress and pending counts are immediately visible.
++            self.refresh()
+             if error:
+                 error(message)
+         return self.task.run(operation, finished, failed)
+@@ -152,7 +164,9 @@
+                 widget.destroy()
+             self._images.clear()
+             totals = {s: sum(r['status'] == s for r in records) for s in ('approved', 'pending_review', 'excluded')}
+-            counts.configure(text=f"{len(records)} unique images • {totals['approved']} approved • {totals['pending_review']} pending review • {totals['excluded']} excluded\n"
++            instruction = ('Add clear examples of clothing outside the Campus Uniform and Organizational Shirt categories.\n'
++                           if category == 'other_clothing' else '')
++            counts.configure(text=instruction + f"{len(records)} unique images • {totals['approved']} approved • {totals['pending_review']} pending review • {totals['excluded']} excluded\n"
+                 + f"{sum(max(0, len(r.get('sources', []))-1) for r in records)} exact duplicate occurrences • {sum(bool(r.get('duplicate_of')) for r in records)} images flagged as near-duplicates")
+             page_label.configure(text=f'Page {actual + 1} • showing {len(rows)} of {len(records)}')
+             for i, (record, picture) in enumerate(rows):
+@@ -178,7 +192,8 @@
+                 + 'No logo or OCR model is trained or enabled.\n'
+                 + f"Dataset: {snapshot.get('counts', {}).get('total', len(snapshot['records']))} unique originals. "
+                 + 'Review legacy examples below; confirm each garment category.')
+-            self.status.configure(text='Review dataset and isolated candidates • active model unchanged')
++            if self._status_override is None:
++                self.status.configure(text='Review dataset and isolated candidates • active model unchanged')
+             if self._refresh_again:
+                 self._refresh_again = False
+                 self.refresh()
+@@ -299,6 +314,8 @@
+         self.category = ctk.CTkOptionMenu(body, values=list(CATEGORIES.values()))
+         self.category.set(CATEGORIES[record['category']])
+         self.category.pack(fill='x', padx=10, pady=4)
++        ctk.CTkLabel(body, text='Label the clothing itself: an Organizational Shirt stays in that category even on a day it is not permitted.',
++                     wraplength=780, justify='left', text_color=COLOR_TEXT_MUTED).pack(fill='x', padx=10, pady=4)
+         coords = ctk.CTkFrame(body)
+         coords.pack(fill='x', padx=10)
+         self.coords = []
+@@ -326,7 +343,7 @@
+         ctk.CTkLabel(body, text=(
+             'Select Logo box and drag on the original; the box must stay inside the correct torso. '
+             'The display preview may be scaled; saved coordinates and derived pixels use the original resolution.\n'
+-            'The white printed crest may also occur on Campus Uniform or Other Clothing. '
++            'The white printed crest may also occur on Campus Uniform or Wrong Uniform. '
+             'Lettering is not read automatically. Reference artwork belongs in DYCI Logo & Digital Shirts.'),
+             justify='left', wraplength=780, text_color=COLOR_TEXT_MUTED).pack(fill='x', padx=10, pady=4)
+         self.logo_source = ctk.CTkOptionMenu(body, values=['uncertain', 'photographed_print', 'reference_artwork'])
+--- /dev/null
++++ b/tests/test_training_layout_native_ui.py
+@@ -0,0 +1,99 @@
++"""Normal desktop navigation/layout, with disposable DB/catalog and no devices."""
++import gc
++import tempfile
++import time
++import unittest
++from pathlib import Path
++from unittest.mock import patch
++
++import customtkinter as ctk
++import numpy as np
++from PIL import Image
++from core.uniform_dataset import UniformDataset
++from core.uniform_candidate import CandidateService
++from database.db_manager import CBVMSDatabase
++from ui.dashboard import CBVMSDashboard
++from ui.uniform_workspace import UniformWorkspace
++
++
++class TrainingLayoutTests(unittest.TestCase):
++    def test_dashboard_training_controls_fit_and_touchpad_scrolls(self):
++        gc.collect()
++        with tempfile.TemporaryDirectory() as temp:
++            root = Path(temp)
++            dataset = UniformDataset(root/'catalog')
++            # A full gallery page gives the real scroll container overflow.
++            for index in range(12):
++                path = root/f'fixture-{index}.png'
++                Image.fromarray(np.random.default_rng(index).integers(
++                    0, 256, (180, 200, 3), dtype=np.uint8)).save(path)
++                dataset.import_paths([path], 'other_clothing')
++            candidate = CandidateService(dataset, candidates_root=root/'candidates')
++            db = CBVMSDatabase(root/'desktop.sqlite')
++            db.initialize()
++            with db.connect() as conn:
++                conn.execute("INSERT INTO users (username,password_hash,role) VALUES (?,?,?)",
++                             ('layout-reviewer', 'fixture-no-login', 'superadmin'))
++            class TestWorkspace(UniformWorkspace):
++                def __init__(self, *args, **kwargs):
++                    super().__init__(*args, dataset=dataset, candidate_service=candidate, **kwargs)
++            with patch('ui.uniform_workspace.UniformWorkspace', TestWorkspace), \
++                 patch.object(CBVMSDashboard, '_prewarm_models'), \
++                 patch.object(CBVMSDashboard, '_deferred_start_camera'), \
++                 patch.object(CBVMSDashboard, '_acquire_camera'), \
++                 patch('api.camera_store.get_camera_preference', return_value=None), \
++                 patch('api.camera_store.get_saved_ip_cameras', return_value=[]):
++                app = CBVMSDashboard('layout-reviewer', database=db)
++                errors = []
++                app.report_callback_exception = lambda *args: errors.append(args)
++                def pump():
++                    app.after(40, app.quit)
++                    app.mainloop()
++                def wait(predicate):
++                    deadline = time.monotonic()+10
++                    while not predicate() and time.monotonic()<deadline:
++                        pump()
++                    self.assertTrue(predicate())
++                    pump()
++                try:
++                    pump()
++                    app._nav_buttons['training'].invoke()
++                    wait(lambda: app._training_panel is not None)
++                    panel = app._training_panel
++                    view = panel._uniform_workspace
++                    wait(lambda: not view.task.busy)
++                    view.tabs._segmented_button._buttons_dict['Wrong Uniform'].invoke()
++                    wait(lambda: not view.task.busy)
++                    self.assertEqual(view.category(), 'other_clothing')
++                    self.assertEqual((app.winfo_width(),app.winfo_height()), (1280,800))
++                    def descendants(w):
++                        for child in w.winfo_children():
++                            yield child
++                            yield from descendants(child)
++                    required={'Upload Photos','Import Folder','Import ZIP','Capture from Camera'}
++                    visible={w.cget('text'):w for w in descendants(view)
++                             if isinstance(w,ctk.CTkButton) and w.winfo_ismapped()}
++                    self.assertTrue(required <= visible.keys())
++                    for button in [visible[t] for t in required] + list(view.tabs._segmented_button._buttons_dict.values()):
++                        self.assertGreaterEqual(button.winfo_rootx(),app.winfo_rootx())
++                        self.assertLessEqual(button.winfo_rootx()+button.winfo_width(),app.winfo_rootx()+1280)
++                        self.assertLessEqual(button.winfo_rooty()+button.winfo_height(),app.winfo_rooty()+800)
++                    gallery=view.views['other_clothing'][0]
++                    canvas=gallery._parent_canvas
++                    before=canvas.yview()[0]
++                    canvas.event_generate('<TouchpadScroll>',delta=65535,
++                        rootx=canvas.winfo_rootx()+20,rooty=canvas.winfo_rooty()+20)
++                    pump()
++                    self.assertGreater(canvas.yview()[0],before)
++                    for title, category in [('Campus Uniform','campus_uniform'),('Organizational Shirt','organizational_shirt')]:
++                        view.tabs._segmented_button._buttons_dict[title].invoke()
++                        wait(lambda:not view.task.busy)
++                        self.assertEqual(view.category(),category)
++                    panel._tabview._segmented_button._buttons_dict['DYCI Logo & Digital Shirts'].invoke()
++                    pump()
++                    self.assertEqual(panel._tabview.get(),'DYCI Logo & Digital Shirts')
++                    self.assertNotIn('earring',app._readiness.snapshot())
++                    self.assertEqual(errors,[])
++                finally:
++                    app._on_close()
++                    gc.collect()
+--- a/tests/test_uniform_candidate.py
++++ b/tests/test_uniform_candidate.py
+@@ -64,7 +64,7 @@
+         self.assertFalse(summary["eligible"])
+         self.assertFalse(summary["experimental_training_eligible"])
+         self.assertFalse(summary["evaluation_ready"])
+-        self.assertTrue(any("organizational_shirt" in reason for reason in summary["readiness_reasons"]))
++        self.assertTrue(any("Organizational Shirt" in reason for reason in summary["readiness_reasons"]))
+ 
+ 
+ class CandidateFreezeTests(unittest.TestCase):
+@@ -96,12 +96,35 @@
+         service = CandidateService(dataset, candidates_root=root / "candidates", base_weights=base)
+         return dataset, service, examples
+ 
++    def test_readiness_names_missing_local_weights_before_start(self):
++        with tempfile.TemporaryDirectory() as temp:
++            dataset, service, _ = self.make_fixture(Path(temp))
++            service.base_weights.unlink()
++            summary = service.summary(min_per_class=2)
++            self.assertFalse(summary['eligible'])
++            self.assertIn('Trusted local classifier weights are unavailable', ' '.join(summary['reasons']))
++            self.assertEqual(summary['approved_by_category']['other_clothing'], 2)
++            service.base_weights.write_bytes(b'')
++            self.assertIn('nonempty', ' '.join(service.summary(min_per_class=2)['reasons']))
++
+     def test_frozen_data_matches_live_letterbox_and_checksums(self):
+         with tempfile.TemporaryDirectory() as temporary:
+             root = Path(temporary)
+             dataset, service, examples = self.make_fixture(root)
++            pending_path = root / 'pending.png'
++            Image.fromarray(np.random.default_rng(991).integers(0, 256, (72, 91, 3), dtype=np.uint8)).save(pending_path)
++            pending_id = dataset.import_paths([pending_path], 'other_clothing', capture_group='camera-pending')[0]
++            excluded_path = root / 'excluded.png'
++            Image.fromarray(np.random.default_rng(992).integers(0, 256, (72, 91, 3), dtype=np.uint8)).save(excluded_path)
++            excluded_id = dataset.import_paths([excluded_path], 'other_clothing', capture_group='camera-excluded')[0]
++            row = next(r for r in dataset.snapshot()['records'] if r['image_id'] == excluded_id)
++            dataset.review(excluded_id, category='other_clothing', crop=[0, 0, row['width'], row['height']],
++                           status='excluded')
+             summary = service.summary(min_per_class=2)
+             self.assertTrue(summary["eligible"])
++            self.assertEqual(summary['approved_by_category']['other_clothing'], 2)
++            self.assertEqual(summary['pending'], 1)
++            self.assertEqual(summary['excluded'], 1)
+             run_id = "a" * 32
+             run_dir = service._run_dir(run_id)
+             run_dir.mkdir()
+@@ -110,9 +133,14 @@
+             self.assertEqual(len(json.loads((run_dir / "dataset_manifest.json").read_text())["entries"]), 6)
+             service._verify_bundle(run_dir)
+             manifest = json.loads((run_dir / "dataset_manifest.json").read_text())
++            self.assertEqual(json.loads((run_dir / 'class_map.json').read_text())['classes'][2]['category'], 'other_clothing')
++            wrong_entries = [entry for entry in manifest['entries'] if entry['category'] == 'other_clothing']
++            self.assertEqual(len(wrong_entries), 2)
++            self.assertTrue(all(entry['class_index'] == 2 and entry['split'] == 'train' for entry in wrong_entries))
++            self.assertNotIn(pending_id, [entry['image_id'] for entry in manifest['entries']])
++            self.assertNotIn(excluded_id, [entry['image_id'] for entry in manifest['entries']])
+             self.assertEqual(manifest["eligibility_snapshot"]["included_by_category"], {
+                 "campus_uniform": 2, "organizational_shirt": 2, "other_clothing": 2})
+-            import numpy as np
+             entry = manifest["entries"][0]
+             row = next(r for r in dataset.snapshot()["records"] if r["image_id"] == entry["image_id"])
+             raster = np.asarray(dataset.image(entry["image_id"]), dtype=np.uint8)
+--- a/tests/test_uniform_dataset.py
++++ b/tests/test_uniform_dataset.py
+@@ -9,7 +9,7 @@
+ import numpy as np
+ from PIL import Image
+ 
+-from core.uniform_dataset import CATEGORIES, UniformDataset, _CatalogLock
++from core.uniform_dataset import CATEGORIES, ImportLimitError, UniformDataset, _CatalogLock
+ 
+ 
+ def png_bytes(color=(30, 100, 180), size=(120, 100)):
+@@ -314,7 +314,7 @@
+         with zipfile.ZipFile(archive,'w') as z:
+             z.writestr('one.png', png_bytes())
+         with patch('core.uniform_dataset.MAX_ZIP_ARCHIVE_BYTES', 1):
+-            with self.assertRaisesRegex(ValueError, 'compressed size'):
++            with self.assertRaisesRegex(ValueError, 'compressed archive size'):
+                 self.ds.import_zip(archive, 'organizational_shirt')
+         with patch('core.uniform_dataset.MAX_IMAGE_PIXELS', 100):
+             with self.assertRaisesRegex(ValueError, 'pixel count'):
+@@ -327,6 +327,66 @@
+             self.ds.snapshot()
+         self.assertEqual(self.ds.index_path.read_text("utf-8"), "not-json")
+ 
++    def test_wrong_uniform_is_display_label_for_stable_class_key(self):
++        self.assertEqual(CATEGORIES['other_clothing'], 'Wrong Uniform')
++        image_id = self.ds.import_paths([self.image_file()], 'other_clothing')[0]
++        row = self.ds.snapshot()['records'][0]
++        self.assertEqual(row['category'], 'other_clothing')
++        self.assertEqual(image_id, row['image_id'])
++
++    def test_limit_error_reports_progress_and_retry_deduplicates(self):
++        paths = [self.image_file(f'{i}.png', png_bytes((i, 10, 20))) for i in range(3)]
++        with patch('core.uniform_dataset.MAX_ZIP_FILES', 2):
++            with self.assertRaises(ImportLimitError) as caught:
++                self.ds.import_paths(paths, 'other_clothing')
++        error = caught.exception
++        self.assertEqual((error.limit_name, error.configured_limit), ('file count', 2))
++        self.assertEqual((error.imported, error.duplicates, error.unprocessed), (2, 0, 1))
++        retry = self.ds.import_paths(paths[2:], 'other_clothing')
++        self.assertEqual(len(retry), 1)
++        self.assertEqual(self.ds.snapshot()['counts']['total'], 3)
++
++    def test_size_limits_report_progress_and_duplicate_retry(self):
++        paths = [self.image_file(f'bounded-{i}.png', png_bytes((i+20, 50, 90))) for i in range(3)]
++        cap = sum(p.stat().st_size for p in paths[:2])
++        with patch('core.uniform_dataset.MAX_ZIP_EXPANDED', cap):
++            with self.assertRaises(ImportLimitError) as caught:
++                self.ds.import_paths(paths, 'other_clothing')
++        error = caught.exception
++        self.assertEqual((error.limit_name,error.configured_limit),('total expanded size',cap))
++        self.assertEqual((error.imported,error.duplicates,error.unprocessed),(2,0,1))
++        result = self.ds.import_paths(paths, 'other_clothing')
++        self.assertEqual((result.imported,result.duplicates,result.unprocessed),(1,2,0))
++        self.assertEqual(self.ds.snapshot()['counts']['total'],3)
++        with patch('core.uniform_dataset.MAX_FILE_BYTES',1):
++            with self.assertRaises(ImportLimitError) as caught:
++                self.ds.import_paths(paths, 'other_clothing')
++        self.assertEqual((caught.exception.imported,caught.exception.unprocessed),(0,3))
++
++    def test_zip_preflight_count_and_size_limits_keep_zero_imports(self):
++        archive_path=Path(self.temp.name)/'bounded.zip'
++        with zipfile.ZipFile(archive_path,'w') as archive:
++            for i in range(3): archive.writestr(f'{i}.png',png_bytes((i,20,40)))
++        for constant,value,name in [('MAX_ZIP_FILES',2,'archive entry count'),
++                                   ('MAX_ZIP_EXPANDED',1,'archive expanded size'),
++                                   ('MAX_FILE_BYTES',1,'per-file size')]:
++            with patch('core.uniform_dataset.'+constant,value):
++                with self.assertRaises(ImportLimitError) as caught:
++                    self.ds.import_zip(archive_path,'other_clothing')
++            self.assertEqual(caught.exception.limit_name,name)
++            self.assertEqual((caught.exception.imported,caught.exception.unprocessed),(0,3))
++        with patch('core.uniform_dataset.MAX_ZIP_ARCHIVE_BYTES',1), \
++             patch('core.uniform_dataset.zipfile.ZipFile') as opener:
++            with self.assertRaises(ImportLimitError) as caught:
++                self.ds.import_zip(archive_path,'other_clothing')
++            opener.assert_not_called()
++            self.assertIsNone(caught.exception.unprocessed)
++        result=self.ds.import_zip(archive_path,'other_clothing')
++        self.assertEqual(result.imported,3)
++        retry=self.ds.import_zip(archive_path,'other_clothing')
++        self.assertEqual((retry.imported,retry.duplicates),(0,3))
++        self.assertEqual(self.ds.snapshot()['counts']['total'],3)
++
+ 
+ if __name__ == "__main__":
+     unittest.main()
+--- a/tests/test_uniform_workspace.py
++++ b/tests/test_uniform_workspace.py
+@@ -62,7 +62,13 @@
+ 
+     def test_named_categories_and_models_entry(self):
+         self.assertEqual(list(self.view.tabs._tab_dict),
+-            ['Campus Uniform', 'Organizational Shirt', 'Other Clothing', 'Evaluation & Models'])
++            ['Campus Uniform', 'Organizational Shirt', 'Wrong Uniform', 'Evaluation & Models'])
++        self.view.show_category('other_clothing')
++        self.wait()
++        wrong_gallery_text = self.view.views['other_clothing'][1].cget('text')
++        self.assertIn('Add clear examples of clothing outside the Campus Uniform and Organizational Shirt categories.', wrong_gallery_text)
++        labels = {w.cget('text') for w in self.descendants(self.view) if isinstance(w, ctk.CTkButton)}
++        self.assertTrue({'Upload Photos', 'Import Folder', 'Import ZIP', 'Capture from Camera'} <= labels)
+         self.view.show_category('organizational_shirt')
+         self.wait()
+         self.assertEqual(self.view.category(), 'organizational_shirt')
+@@ -77,7 +83,11 @@
+         window = self.view._candidate_window
+         self.wait(window.task)
+         self.assertEqual(window.title(), 'Train candidate with approved datasets')
+-        self.assertIn('Campus Uniform: 0 included', window.coverage.cget('text'))
++        coverage = window.coverage.cget('text')
++        self.assertIn('Campus Uniform: 0 approved • 0 eligible/included', coverage)
++        self.assertIn('Organizational Shirt: 0 approved • 0 eligible/included', coverage)
++        self.assertIn('Wrong Uniform: 0 approved • 0 eligible/included', coverage)
++        self.assertIn('Wrong Uniform has 0 eligible approved examples; requires 10.', window.readiness.cget('text'))
+         self.assertEqual(window.start_button.cget('state'), 'disabled')
+         self.assertTrue(window.start_button.winfo_ismapped())
+         self.assertEqual(list((Path(self.tmp.name)/'candidates').glob('*/candidate.pt')), [])
+@@ -107,6 +117,27 @@
+         self.assertEqual(result['category'], 'campus_uniform')
+         self.assertEqual(result['status'], 'approved')
+         self.assertEqual(self.source.read_bytes(), (self.dataset.root/result['original_path']).read_bytes())
++
++    def test_limit_failure_shows_progress_and_refreshes_partial_gallery(self):
++        self.view.show_category("other_clothing"); self.wait()
++        paths = []
++        for index in range(3):
++            path = Path(self.tmp.name) / f'limit-{index}.png'
++            image = Image.fromarray(np.random.default_rng(1200 + index).integers(
++                0, 256, (80, 90, 3), dtype=np.uint8))
++            image.save(path)
++            paths.append(str(path))
++        with patch('ui.uniform_workspace.filedialog.askopenfilenames', return_value=tuple(paths)), \
++             patch('core.uniform_dataset.MAX_ZIP_FILES', 2):
++            self.view.upload('other_clothing')
++            self.wait()
++            self.wait()
++        status = self.view.status.cget('text')
++        self.assertIn('file count limit (2 files', status)
++        self.assertIn('Imported: 2', status)
++        self.assertIn('skipped as duplicates: 0', status)
++        self.assertIn('left unprocessed: 1', status)
++        self.assertIn('2 unique images', self.view.views['other_clothing'][1].cget('text'))
+ 
+     def test_import_and_decode_stay_off_tk_thread(self):
+         main_thread = threading.get_ident()
+@@ -169,7 +200,9 @@
+             panel = TrainingPanel(self.root, trainer=trainer, get_frame=lambda: np.zeros((120,160,3),dtype=np.uint8))
+         panel.pack(fill='both', expand=True)
+         self.wait(panel._uniform_workspace.task)
+-        self.assertEqual(list(panel._tabview._tab_dict), ['Uniform Check', 'Earring Check', 'DYCI Logo & Digital Shirts'])
++        self.assertEqual(list(panel._tabview._tab_dict), ['Uniform Check', 'DYCI Logo & Digital Shirts'])
++        panel._tabview.set('Earring Check')
++        self.assertEqual(panel._tabview.get(), 'Uniform Check')
+         panel._open_capture_screen('uniform_stage1', 'organizational_shirt')
+         state = panel._capture_state
+         panel._do_capture(state, np.zeros((120,160,3),dtype=np.uint8))
+@@ -179,8 +212,10 @@
+         trainer.train.assert_not_called()
+         self.assertEqual(len(self.dataset.snapshot()['records']), 1)
+         with patch.object(panel._uniform_workspace.candidate_service, 'is_busy', return_value=True), patch('ui.training_panel.show_toast'):
++            panel._open_capture_screen('earring', 'no_earring')
+             panel._start_training('earring')
+             panel._start_evaluation('earring')
++        self.assertIsNone(panel._capture_screen)
+         trainer.train.assert_not_called()
+         trainer.evaluate.assert_not_called()
+         panel.on_hide()

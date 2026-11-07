@@ -1,0 +1,9 @@
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/Users/jopethones/Documents/GitHub/cbvms3.0/scripts/smoke_uniform_candidate.py", line 226, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/Users/jopethones/Documents/GitHub/cbvms3.0/scripts/smoke_uniform_candidate.py", line 163, in main
+    raise RuntimeError(f"Unexpected cancellation status: {status}")
+RuntimeError: Unexpected cancellation status: {'run_id': '0cc6890d6f224472b34ed2458d43d658', 'status': 'completed', 'epoch': 3, 'epochs': 3, 'message': 'Candidate training completed; no validation/evaluation or activation was performed.', 'resumable': False, 'train_loss': 0.30888577302296955, 'started_at': '2026-10-31T16:13:56.552116Z', 'worker_started_at': '2026-10-31T16:13:56.629253Z', 'process_id': 10916, 'run_uuid': '0cc6890d6f224472b34ed2458d43d658', 'manifest_sha256': '3c6682199d8a393e978c374705f359d072fdf9a98bc8350c15dc57991e76d90c', 'nondeployable': True}

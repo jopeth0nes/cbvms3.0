@@ -1,0 +1,253 @@
+{
+  "accuracy_evaluation": false,
+  "benchmark_kind": "raw_model_stage_timings",
+  "candidate": {
+    "dataset_version": "5027a6487c75990147b895c094f619f0e820c54acb82b79c3f2f501c4e23439f",
+    "id": "4eda5fd372adbd80749553f849bc155a3fc4873fa2b660774d413a26bdaaf65a",
+    "preprocessing_version": "trainer-letterbox-rgb-0-1-v1",
+    "synthetic_candidate": true
+  },
+  "configuration": {
+    "backends": [
+      "cpu",
+      "mps"
+    ],
+    "image_size": "original raster for body; predictor's fixed validated preprocessing for classifier",
+    "repeats": 30,
+    "requested_backend": "both",
+    "warmup": 4
+  },
+  "created_at_utc": "2026-11-04T17:09:41Z",
+  "environment": {
+    "cpu_count": 10,
+    "machine": "arm64",
+    "macos_version": "26.5",
+    "mps_available": true,
+    "numpy_version": "1.26.4",
+    "opencv_version": "4.10.0",
+    "platform": "macOS-26.5-arm64-arm-64bit",
+    "processor": "arm",
+    "python_version": "3.12.13",
+    "torch_version": "2.2.2",
+    "ultralytics_version": "8.3.27"
+  },
+  "input_count": 2,
+  "inputs": [
+    {
+      "height": 1080,
+      "sha256": "c02019c4979c191eb739ddd944445ef408dad5679acab6fd520ef9d434bfbc63",
+      "width": 810
+    },
+    {
+      "height": 720,
+      "sha256": "16d73869e3267a7d4ed00de8e860833bd1657c1b252e94c0c348277adc7b6edb",
+      "width": 1280
+    }
+  ],
+  "limitations": [
+    "Timing results are not accuracy, policy, passage, or deployment evidence.",
+    "No smaller input size or alternate preprocessing was evaluated.",
+    "Body inference reports requested and actual placement; a CPU fallback remains explicit.",
+    "Candidate preprocessing/inference are separately timed by CandidatePredictor; body timing is only total detector call time.",
+    "No queue-delay value is reported because this benchmark does not measure queueing.",
+    "Images were processed in memory; filenames and pixels are not included in this report."
+  ],
+  "passage_metrics": {
+    "available": false,
+    "reason": "Raw detector/classifier stage timing only; no passage or attendance stream was run."
+  },
+  "results": [
+    {
+      "body_detector": {
+        "backend_status": {
+          "active": "cpu",
+          "fallback_reason": null,
+          "model_parameter_device": "cpu",
+          "requested": "cpu",
+          "warm": true
+        },
+        "cold_load_ms": 14.75641701836139,
+        "detections": {
+          "counts": [
+            4,
+            2,
+            4,
+            2,
+            4,
+            2,
+            4,
+            2,
+            4,
+            2,
+            4,
+            2,
+            4,
+            2,
+            4,
+            2,
+            4,
+            2,
+            4,
+            2,
+            4,
+            2,
+            4,
+            2,
+            4,
+            2,
+            4,
+            2,
+            4,
+            2
+          ],
+          "median_per_frame": 3.0,
+          "sample_count": 30
+        },
+        "measurement_scope": "end_to_end_detect_persons_call; body preprocessing and inference are not separately exposed",
+        "status": "completed",
+        "timings": {
+          "total_ms": {
+            "count": 30,
+            "median_ms": 24.58222850691527,
+            "p95_ms": 32.27885417290963
+          }
+        },
+        "warmup_count": 4
+      },
+      "candidate": {
+        "backend_status": {
+          "active": "cpu",
+          "fallback_reason": null,
+          "model_parameter_device": "cpu",
+          "requested": "cpu"
+        },
+        "cold_load_ms": 9808.806583052501,
+        "placement_observations": [
+          {
+            "active": "cpu",
+            "fallback_reason": null,
+            "model_parameter_device": "cpu",
+            "requested": "cpu"
+          }
+        ],
+        "status": "completed",
+        "timings": {
+          "inference_ms": {
+            "count": 30,
+            "median_ms": 3.5580210387706757,
+            "p95_ms": 3.88116217800416
+          },
+          "preprocessing_ms": {
+            "count": 30,
+            "median_ms": 3.8394375005736947,
+            "p95_ms": 4.004533309489489
+          },
+          "total_ms": {
+            "count": 30,
+            "median_ms": 7.393645995762199,
+            "p95_ms": 7.92221863521263
+          }
+        },
+        "warmup_count": 4
+      },
+      "requested_backend": "cpu"
+    },
+    {
+      "body_detector": {
+        "backend_status": {
+          "active": "mps",
+          "fallback_reason": null,
+          "model_parameter_device": "mps:0",
+          "requested": "mps",
+          "warm": true
+        },
+        "cold_load_ms": 72.35733396373689,
+        "detections": {
+          "counts": [
+            4,
+            2,
+            4,
+            2,
+            4,
+            2,
+            4,
+            2,
+            4,
+            2,
+            4,
+            2,
+            4,
+            2,
+            4,
+            2,
+            4,
+            2,
+            4,
+            2,
+            4,
+            2,
+            4,
+            2,
+            4,
+            2,
+            4,
+            2,
+            4,
+            2
+          ],
+          "median_per_frame": 3.0,
+          "sample_count": 30
+        },
+        "measurement_scope": "end_to_end_detect_persons_call; body preprocessing and inference are not separately exposed",
+        "status": "completed",
+        "timings": {
+          "total_ms": {
+            "count": 30,
+            "median_ms": 12.22893747035414,
+            "p95_ms": 16.20810638996772
+          }
+        },
+        "warmup_count": 4
+      },
+      "candidate": {
+        "backend_status": {
+          "active": "mps",
+          "fallback_reason": null,
+          "model_parameter_device": "mps:0",
+          "requested": "mps"
+        },
+        "cold_load_ms": 74.93645802605897,
+        "placement_observations": [
+          {
+            "active": "mps",
+            "fallback_reason": null,
+            "model_parameter_device": "mps:0",
+            "requested": "mps"
+          }
+        ],
+        "status": "completed",
+        "timings": {
+          "inference_ms": {
+            "count": 30,
+            "median_ms": 3.6369164590723813,
+            "p95_ms": 3.821862459881231
+          },
+          "preprocessing_ms": {
+            "count": 30,
+            "median_ms": 4.288021067623049,
+            "p95_ms": 4.365898383548483
+          },
+          "total_ms": {
+            "count": 30,
+            "median_ms": 7.910499989520758,
+            "p95_ms": 8.168973063584417
+          }
+        },
+        "warmup_count": 4
+      },
+      "requested_backend": "mps"
+    }
+  ],
+  "schema_version": 1,
+  "synthetic_inputs": false
+}

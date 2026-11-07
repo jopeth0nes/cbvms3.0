@@ -1,0 +1,6 @@
+test_archive_and_decoded_image_limits (tests.test_uniform_dataset.UniformDatasetTests.test_archive_and_decoded_image_limits) ... ok
+
+----------------------------------------------------------------------
+Ran 1 test in 0.007s
+
+OK

@@ -1,0 +1,9 @@
+{
+  "wrapper_pid": 49372,
+  "wrapper_command": "output/uniform-stage5/run_owned_check.py pipeline-camera-regressions .venv/bin/python -m unittest tests.test_live_pipeline tests.test_camera_switching tests.test_live_persistence -v",
+  "started_at_utc": "2026-11-05T06:24:09.034802+00:00",
+  "command": ".venv/bin/python -m unittest tests.test_live_pipeline tests.test_camera_switching tests.test_live_persistence -v",
+  "pid": 49373,
+  "returncode": 0,
+  "finished_at_utc": "2026-11-05T06:24:10.787079+00:00"
+}

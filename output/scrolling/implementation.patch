@@ -1,0 +1,903 @@
+diff --git a/auth/register.py b/auth/register.py
+index 98cac91..d965d52 100644
+--- a/auth/register.py
++++ b/auth/register.py
+@@ -17,6 +17,7 @@ import tkinter as tk
+ 
+ import cv2
+ import customtkinter as ctk
++from ui.scrolling import ScrollableFrame
+ import numpy as np
+ from PIL import Image, ImageTk
+ 
+@@ -182,7 +183,7 @@ class StudentRegistrationWindow(ctk.CTkToplevel):
+     # ── Left: registration form ─────────────────────────────────────────
+ 
+     def _build_form(self, parent) -> None:
+-        card = ctk.CTkScrollableFrame(parent, fg_color=COLOR_SURFACE,
++        card = ScrollableFrame(parent, fg_color=COLOR_SURFACE,
+                             corner_radius=CORNER_RADIUS,
+                             border_width=1, border_color=COLOR_BORDER)
+         card.grid(row=0, column=0, sticky="nsew", padx=(0, 6), pady=(0, 0))
+diff --git a/ui/appeals_panel.py b/ui/appeals_panel.py
+index 459070d..802c958 100644
+--- a/ui/appeals_panel.py
++++ b/ui/appeals_panel.py
+@@ -5,6 +5,7 @@ import io
+ from concurrent.futures import ThreadPoolExecutor
+ from tkinter import messagebox
+ import customtkinter as ctk
++from ui.scrolling import ScrollableFrame
+ from PIL import Image, ImageOps
+ from core.appeal_categories import CATEGORIES, BY_CODE, BY_OPTION, SELECT_CATEGORY, category_display, validate_category
+ from core.discipline import display_local_datetime as ts
+@@ -302,7 +303,7 @@ class AppealsPanel(ctk.CTkFrame):
+ 
+     def _inbox_loaded(self, result):
+         self.subtitle.configure(text=f"{result['total']} appeals in this view  /  {self.filter.get()}" )
+-        listing = self.listing = ctk.CTkScrollableFrame(self.body, fg_color=COLOR_BG,
++        listing = self.listing = ScrollableFrame(self.body, fg_color=COLOR_BG,
+             scrollbar_button_color=BORDER, scrollbar_button_hover_color='#49677D')
+         listing.grid(row=0, column=0, sticky='nsew')
+         listing.grid_columnconfigure(0, weight=1)
+@@ -416,7 +417,7 @@ class AppealsPanel(ctk.CTkFrame):
+         self.subtitle.configure(text='Review the evidence, read the explanation, and record your decision.')
+         self.heading.configure(text=f"Appeal #{case['id']} · Violation #{case['violation_id']}")
+         # Only the evidence/details area scrolls at small sizes. Decisions stay in a fixed footer.
+-        content = ctk.CTkScrollableFrame(self.body, fg_color=CARD, corner_radius=16,
++        content = ScrollableFrame(self.body, fg_color=CARD, corner_radius=16,
+             border_width=1, border_color=BORDER)
+         content.grid(row=0, column=0, sticky='nsew')
+         content.grid_columnconfigure((0,1), weight=1, uniform='evidence')
+@@ -628,7 +629,7 @@ class AppealsPanel(ctk.CTkFrame):
+         window.title(f'Evidence analysis history · #{evidence_id}')
+         window.geometry('520x360')
+         self._case_windows.append(window)
+-        listing=ctk.CTkScrollableFrame(window,fg_color=COLOR_BG)
++        listing=ScrollableFrame(window,fg_color=COLOR_BG)
+         listing.pack(fill='both',expand=True,padx=12,pady=12)
+         for index, report in enumerate(runs):
+             ctk.CTkButton(listing,text=f"{report['status']} · {report.get('classification','inconclusive')} · {report.get('created_at','date unavailable')}",
+diff --git a/ui/attendance_panel.py b/ui/attendance_panel.py
+index c127645..b24a515 100644
+--- a/ui/attendance_panel.py
++++ b/ui/attendance_panel.py
+@@ -7,6 +7,7 @@ from database.security_events import UNKNOWN_COLUMNS
+ import tkinter as tk
+ from tkinter import ttk, filedialog
+ import customtkinter as ctk
++from ui.scrolling import ScrollableFrame
+ 
+ from core.academics import COLLEGES, COURSES, YEAR_LEVELS, NEEDS_REVIEW, courses_for
+ from core.attendance import TITLE, MANILA, SUMMARY_COLUMNS, EVENT_COLUMNS, display_time, validate_filters, export_csv
+@@ -41,7 +42,7 @@ class AttendancePanel(ctk.CTkFrame):
+             wraplength=950,justify='left',anchor='w',text_color=COLOR_TEXT_MUTED,font=body_small_font())
+         self.description.grid(row=1,column=0,sticky='ew',pady=6)
+         self.known_description = self.description.cget('text')
+-        form=self.form=ctk.CTkScrollableFrame(self,height=145,fg_color='transparent')
++        form=self.form=ScrollableFrame(self,height=145,fg_color='transparent')
+         form.grid(row=2,column=0,sticky='ew')
+         for col in range(3):
+             form.columnconfigure(col,weight=1,uniform='attendance_filters')
+diff --git a/ui/camera_configuration.py b/ui/camera_configuration.py
+index 2fee5e4..694dbff 100644
+--- a/ui/camera_configuration.py
++++ b/ui/camera_configuration.py
+@@ -8,6 +8,7 @@ from collections.abc import Callable
+ from typing import Any
+ 
+ import customtkinter as ctk
++from ui.scrolling import ScrollableFrame
+ 
+ from api.camera_manager import probe_ip_camera, scan_usb_cameras, test_ip_camera
+ from api.camera_store import (
+@@ -163,7 +164,7 @@ class CameraConfigurationSection(ctk.CTkFrame):
+ 
+     self._add_modal: ctk.CTkToplevel | None = None
+ 
+-    self._list_host = ctk.CTkScrollableFrame(self, fg_color="transparent", height=220)
++    self._list_host = ScrollableFrame(self, fg_color="transparent", height=220)
+     self._list_host.pack(fill="both", expand=True, padx=PADDING, pady=(0, 8))
+ 
+     stream = ctk.CTkFrame(self, fg_color="transparent")
+diff --git a/ui/components.py b/ui/components.py
+index 3162c25..7f6cacf 100644
+--- a/ui/components.py
++++ b/ui/components.py
+@@ -239,52 +239,9 @@ class MirrorController:
+ 
+ 
+ def enable_trackpad_scroll(scroll_frame) -> None:
+-    """Make a CTkScrollableFrame scroll reliably with the macOS trackpad / mouse wheel.
+-
+-    CustomTkinter binds the wheel globally (``bind_all``) and routes it by walking widget
+-    masters; with several scrollable panels in one app that routing is flaky on macOS, so
+-    the trackpad often does nothing. This binds the wheel directly on the frame's canvas and
+-    every current descendant, forwarding to the canvas and stopping propagation (``"break"``)
+-    so there's exactly one scroll per gesture. Call once after the frame's contents are built.
+-    """
+-    canvas = getattr(scroll_frame, "_parent_canvas", None)
+-    if canvas is None:
+-        return
+-
+-    def _on_wheel(event):
+-        try:
+-            if canvas.yview() != (0.0, 1.0):       # only when there's overflow to scroll
+-                if sys.platform.startswith("win"):
+-                    canvas.yview_scroll(-int(event.delta / 120) or (-1 if event.delta > 0 else 1), "units")
+-                else:                              # macOS + Linux <MouseWheel>
+-                    canvas.yview_scroll(-int(event.delta), "units")
+-        except Exception:
+-            pass
+-        return "break"
+-
+-    def _on_button(direction):
+-        def _handler(_event):
+-            try:
+-                if canvas.yview() != (0.0, 1.0):
+-                    canvas.yview_scroll(direction, "units")
+-            except Exception:
+-                pass
+-            return "break"
+-        return _handler
+-
+-    def _bind(widget):
+-        try:
+-            widget.bind("<MouseWheel>", _on_wheel, add="+")
+-            widget.bind("<Button-4>", _on_button(-1), add="+")   # Linux X11 wheel up
+-            widget.bind("<Button-5>", _on_button(1), add="+")    # Linux X11 wheel down
+-        except Exception:
+-            pass
+-        for child in widget.winfo_children():
+-            _bind(child)
+-
+-    # Binding the canvas recurses into the windowed inner frame and all content widgets,
+-    # covering every widget exactly once.
+-    _bind(canvas)
++    """Compatibility entry point for the shared, idempotent router."""
++    from ui.scrolling import install_scrolling
++    install_scrolling(scroll_frame)
+ 
+ 
+ def make_mirror_button(master, controller: MirrorController, on_toggle=None) -> ctk.CTkButton:
+diff --git a/ui/dashboard.py b/ui/dashboard.py
+index 07ead59..b5253bb 100644
+--- a/ui/dashboard.py
++++ b/ui/dashboard.py
+@@ -14,6 +14,7 @@ from datetime import timezone
+ 
+ import cv2
+ import customtkinter as ctk
++from ui.scrolling import ScrollableFrame
+ import numpy as np
+ from PIL import Image
+ from io import BytesIO
+@@ -400,7 +401,7 @@ class CBVMSDashboard(WorkspaceWindow):
+         # Placed/forgotten dynamically in _update_bell_badge().
+ 
+         # Only the menu shrinks/scrolls; reserve the footer even on short displays.
+-        navigation = ctk.CTkScrollableFrame(
++        navigation = ScrollableFrame(
+             sidebar, height=1, fg_color="transparent", corner_radius=0,
+             scrollbar_button_color=COLOR_BORDER,
+             scrollbar_button_hover_color=COLOR_ACCENT_HOVER,
+diff --git a/ui/enrollment.py b/ui/enrollment.py
+index d223df6..9f924e3 100644
+--- a/ui/enrollment.py
++++ b/ui/enrollment.py
+@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Callable
+ 
+ import cv2
+ import customtkinter as ctk
++from ui.scrolling import ScrollableFrame
+ import numpy as np
+ from PIL import Image, ImageTk
+ 
+@@ -882,7 +883,7 @@ class EnrollmentPanel(ctk.CTkFrame):
+         ).grid(row=1, column=0, sticky="w", padx=PADDING_LG, pady=(2, 14))
+ 
+         card.grid_rowconfigure(2, weight=1)
+-        form = ctk.CTkScrollableFrame(card, fg_color="transparent", height=310)
++        form = ScrollableFrame(card, fg_color="transparent", height=310)
+         form.grid(row=2, column=0, sticky="nsew", padx=PADDING_LG, pady=(0, 4))
+         form.grid_columnconfigure(1, weight=1)
+ 
+diff --git a/ui/live_alerts.py b/ui/live_alerts.py
+index b4d3681..d7bcab7 100644
+--- a/ui/live_alerts.py
++++ b/ui/live_alerts.py
+@@ -16,6 +16,7 @@ from typing import Iterable, Mapping
+ from core.attendance import MANILA
+ 
+ import customtkinter as ctk
++from ui.scrolling import ScrollableFrame
+ from PIL import Image, ImageTk
+ from core.attendance import MANILA
+ 
+@@ -244,7 +245,7 @@ class _PresenceCard(ctk.CTkFrame):
+         self._presentation = values
+ 
+ 
+-class LiveAlerts(ctk.CTkScrollableFrame):
++class LiveAlerts(ScrollableFrame):
+     """Tk-thread-only sidebar: stable widgets, wrapped text, no forced scrolling."""
+ 
+     def __init__(self, master, *, max_cards: int = 50, **kwargs) -> None:
+diff --git a/ui/multi_select_checklist.py b/ui/multi_select_checklist.py
+index e1dd104..6c79441 100644
+--- a/ui/multi_select_checklist.py
++++ b/ui/multi_select_checklist.py
+@@ -1,6 +1,7 @@
+ """Compact keyboard-friendly multi-select checklist for report filters."""
+ import tkinter as tk
+ import customtkinter as ctk
++from ui.scrolling import ScrollableFrame
+ 
+ 
+ def selection_after_toggle(values, selected, value, checked):
+@@ -43,7 +44,7 @@ class MultiSelectChecklist(ctk.CTkFrame):
+         win.bind('<Escape>',lambda _e:win.destroy())
+         search=tk.StringVar(); entry=ctk.CTkEntry(win,textvariable=search,placeholder_text='Search options'); entry.pack(fill='x',padx=10,pady=8)
+         controls=ctk.CTkFrame(win,fg_color='transparent'); controls.pack(fill='x',padx=8)
+-        scroll=ctk.CTkScrollableFrame(win); scroll.pack(fill='both',expand=True,padx=8,pady=8)
++        scroll=ScrollableFrame(win); scroll.pack(fill='both',expand=True,padx=8,pady=8)
+         checks={}
+         initial=set(self.values if self.selected is None else self.selected)
+         all_mode=self.selected is None
+diff --git a/ui/notifications_panel.py b/ui/notifications_panel.py
+index 8db23ed..1f13136 100644
+--- a/ui/notifications_panel.py
++++ b/ui/notifications_panel.py
+@@ -6,6 +6,7 @@ from datetime import datetime
+ from typing import TYPE_CHECKING, Callable
+ 
+ import customtkinter as ctk
++from ui.scrolling import ScrollableFrame
+ from core.discipline import parse_db_datetime
+ from core.notifier import Notification
+ 
+@@ -65,7 +66,7 @@ class NotificationsPanel(ctk.CTkFrame):
+         self._build_categories()
+         self._build_filter()
+ 
+-        self._list = ctk.CTkScrollableFrame(self, fg_color="transparent")
++        self._list = ScrollableFrame(self, fg_color="transparent")
+         self._list.grid(row=3, column=0, sticky="nsew", padx=PADDING, pady=(0, PADDING))
+         self._list.grid_columnconfigure(0, weight=1)
+ 
+diff --git a/ui/portal_scroll.py b/ui/portal_scroll.py
+index 114e269..8cb1496 100644
+--- a/ui/portal_scroll.py
++++ b/ui/portal_scroll.py
+@@ -3,6 +3,7 @@ import tkinter as tk
+ from tkinter import ttk
+ 
+ import customtkinter as ctk
++from ui.scrolling import install_scrolling
+ 
+ 
+ class PortalScrollFrame(ctk.CTkFrame):
+@@ -22,8 +23,8 @@ class PortalScrollFrame(ctk.CTkFrame):
+         self._layout_job = None
+         self._parent_canvas.bind("<Configure>", self._resize)
+         self.body.bind("<Configure>", self._schedule_region)
+-        self._wheel_root = self.winfo_toplevel()
+-        self._wheel_binding = self._wheel_root.bind("<MouseWheel>", self._wheel, add="+")
++        install_scrolling(self)
++        self._parent_canvas.configure(yscrollincrement=1)
+ 
+     def _resize(self, event):
+         if int(float(self._parent_canvas.itemcget(self._window, "width"))) != event.width:
+@@ -44,19 +45,8 @@ class PortalScrollFrame(ctk.CTkFrame):
+         if region:
+             self._parent_canvas.configure(scrollregion=region)
+ 
+-    def _wheel(self, event):
+-        widget = event.widget
+-        while widget is not None:
+-            if widget is self:
+-                delta = event.delta
+-                units = -int(delta / 120) if abs(delta) >= 120 else -int(delta)
+-                self._parent_canvas.yview_scroll(units, "units")
+-                return "break"
+-            widget = getattr(widget, "master", None)
+-
+     def destroy(self):
+         if self._layout_job is not None:
+             self.after_cancel(self._layout_job)
+             self._layout_job = None
+-        self._wheel_root.unbind("<MouseWheel>", self._wheel_binding)
+         super().destroy()
+diff --git a/ui/records_panel.py b/ui/records_panel.py
+index 2c9fe76..16b52bf 100644
+--- a/ui/records_panel.py
++++ b/ui/records_panel.py
+@@ -15,6 +15,7 @@ from datetime import datetime
+ from tkinter import filedialog, ttk, messagebox
+ 
+ import customtkinter as ctk
++from ui.scrolling import ScrollableFrame
+ from PIL import Image, ImageTk
+ 
+ from database.db_manager import CBVMSDatabase
+@@ -263,7 +264,7 @@ class RecordsPanel(ctk.CTkFrame):
+         self._viol_split.add(right, minsize=int(self._apply_widget_scaling(280)), stretch="never")
+         self._viol_split.bind("<Configure>", self._initialize_violation_split)
+         self._viol_split.bind("<ButtonRelease-1>", self._remember_violation_split, add="+")
+-        self._viol_detail = ctk.CTkScrollableFrame(
++        self._viol_detail = ScrollableFrame(
+             right, fg_color=COLOR_SURFACE,
+             corner_radius=CORNER_RADIUS,
+             border_width=1, border_color=COLOR_BORDER)
+diff --git a/ui/reports_panel.py b/ui/reports_panel.py
+index 3905664..7731865 100644
+--- a/ui/reports_panel.py
++++ b/ui/reports_panel.py
+@@ -4,6 +4,7 @@ import json
+ import tkinter as tk
+ from tkinter import ttk, filedialog, messagebox
+ import customtkinter as ctk
++from ui.scrolling import ScrollableFrame
+ 
+ from core.report_csv import ROSTER, read_csv, write_csv, import_roster
+ from core.report_snapshot import SECTIONS, create_snapshot, export_snapshot_csv, dependent_options, is_current_generation, sort_snapshot
+@@ -42,7 +43,7 @@ class ReportsPanel(ctk.CTkFrame):
+         self.applied_summary=ctk.CTkLabel(self,text='Applied filters: All',anchor='w',justify='left',width=1,wraplength=900,text_color=COLOR_TEXT_MUTED)
+         self.applied_summary.grid(row=1,column=0,sticky='ew',padx=8,pady=(0,5))
+         self.bind('<Configure>', self._resize_summaries, add='+')
+-        self.filter_box=ctk.CTkScrollableFrame(self,fg_color=COLOR_SURFACE,corner_radius=10,height=255);self.filter_box.grid(row=2,column=0,sticky='ew',pady=(0,8))
++        self.filter_box=ScrollableFrame(self,fg_color=COLOR_SURFACE,corner_radius=10,height=255);self.filter_box.grid(row=2,column=0,sticky='ew',pady=(0,8))
+         for col in range(4):self.filter_box.grid_columnconfigure(col,weight=1)
+         self.sections={}
+         for i,name in enumerate(SECTIONS):
+diff --git a/ui/settings.py b/ui/settings.py
+index c1072ec..99131d3 100644
+--- a/ui/settings.py
++++ b/ui/settings.py
+@@ -10,6 +10,7 @@ from typing import Callable
+ from typing import TYPE_CHECKING
+ 
+ import customtkinter as ctk
++from ui.scrolling import ScrollableFrame
+ 
+ from core.trainer import MODULES
+ from core.detection_audio import LABELS
+@@ -87,7 +88,7 @@ class SettingsPanel(ctk.CTkFrame):
+         self._refresh_model_status()
+ 
+     def _build(self) -> None:
+-        scroll = ctk.CTkScrollableFrame(self, fg_color="transparent")
++        scroll = ScrollableFrame(self, fg_color="transparent")
+         scroll.grid(row=0, column=0, sticky="nsew")
+         scroll.grid_columnconfigure(0, weight=1)
+ 
+diff --git a/ui/student_management.py b/ui/student_management.py
+index 6e463c7..b1fcf23 100644
+--- a/ui/student_management.py
++++ b/ui/student_management.py
+@@ -2,6 +2,7 @@
+ import tkinter as tk
+ from tkinter import ttk
+ import customtkinter as ctk
++from ui.scrolling import ScrollableFrame
+ 
+ from ui.academic_fields import AcademicFields
+ from ui.background_task import BackgroundTask
+@@ -62,7 +63,7 @@ def open_student_details(parent, database, student_id, actor, on_saved):
+         term_task=BackgroundTask(term_tab)
+         term_task.run(read_terms,lambda result:term_text.insert('end',json.dumps(result,indent=2,default=str,ensure_ascii=False)),
+                       lambda error:term_text.insert('end',error))
+-        form = ctk.CTkScrollableFrame(details, fg_color=COLOR_SURFACE)
++        form = ScrollableFrame(details, fg_color=COLOR_SURFACE)
+         form.pack(fill="both", expand=True)
+         ctk.CTkLabel(form, text=f"{student['name']} · {student_id}", font=heading_font(16),
+                      text_color=COLOR_TEXT).pack(anchor="w", pady=8)
+@@ -102,7 +103,7 @@ def open_student_details(parent, database, student_id, actor, on_saved):
+                       corner_radius=CORNER_RADIUS, command=save)
+         save_button.pack(fill="x", pady=8)
+ 
+-        log = ctk.CTkScrollableFrame(history, fg_color=COLOR_SURFACE)
++        log = ScrollableFrame(history, fg_color=COLOR_SURFACE)
+         log.pack(fill="both", expand=True)
+         messages = []
+         for item in history_rows:
+diff --git a/ui/suspension_overview.py b/ui/suspension_overview.py
+index 8a181b5..432afb4 100644
+--- a/ui/suspension_overview.py
++++ b/ui/suspension_overview.py
+@@ -4,6 +4,7 @@ import tkinter as tk
+ from tkinter import ttk
+ 
+ import customtkinter as ctk
++from ui.scrolling import ScrollableFrame
+ 
+ from core.academics import COLLEGES, YEAR_LEVELS, NEEDS_REVIEW, courses_for, COURSES
+ from core.discipline import parse_db_datetime, violation_display_name
+@@ -161,7 +162,7 @@ class SuspensionsWorkspace(ctk.CTkFrame):
+         self.nav.set('Overview')
+         self.host=ctk.CTkFrame(self,fg_color='transparent')
+         self.host.grid(row=2,column=0,sticky='nsew'); self.host.grid_columnconfigure(0,weight=1); self.host.grid_rowconfigure(0,weight=1)
+-        self.overview=ctk.CTkScrollableFrame(self.host,fg_color=COLOR_BG)
++        self.overview=ScrollableFrame(self.host,fg_color=COLOR_BG)
+         self.overview.grid(row=0,column=0,sticky='nsew'); self.overview.grid_columnconfigure(0,weight=1)
+         enable_trackpad_scroll(self.overview)
+         self._build_overview()
+diff --git a/ui/suspensions_panel.py b/ui/suspensions_panel.py
+index c930da8..6be9a47 100644
+--- a/ui/suspensions_panel.py
++++ b/ui/suspensions_panel.py
+@@ -6,6 +6,7 @@ import tkinter as tk
+ from tkinter import ttk
+ 
+ import customtkinter as ctk
++from ui.scrolling import ScrollableFrame
+ 
+ from core.discipline import parse_db_datetime, utc_now, violation_display_name
+ from core.academics import YEAR_LEVELS, legacy_year_section, resolve_pair, NEEDS_REVIEW, display_academics
+@@ -244,7 +245,7 @@ class SuspensionsPanel(ctk.CTkFrame):
+ 
+         # Suspensions is a summary page. History and lifting belong together
+         # on Violation History, where staff can select the suspension to lift.
+-        history_frame = ctk.CTkScrollableFrame if self.history_view == "violations" else ctk.CTkFrame
++        history_frame = ScrollableFrame if self.history_view == "violations" else ctk.CTkFrame
+         self._history_area = history_frame(self, fg_color=COLOR_SURFACE,
+                                         corner_radius=CORNER_RADIUS)
+         if self.history_view == "violations":
+diff --git a/ui/training_panel.py b/ui/training_panel.py
+index 6be5736..9a26fb6 100644
+--- a/ui/training_panel.py
++++ b/ui/training_panel.py
+@@ -15,6 +15,7 @@ from typing import Callable
+ 
+ import cv2
+ import customtkinter as ctk
++from ui.scrolling import ScrollableFrame
+ import numpy as np
+ from PIL import Image, ImageOps
+ 
+@@ -232,7 +233,7 @@ class TrainingPanel(ctk.CTkFrame):
+             self._build_class_column(left, module, label, col)
+ 
+         # RIGHT — training controls (scrollable: results card can be tall)
+-        right = ctk.CTkScrollableFrame(tab, fg_color="transparent")
++        right = ScrollableFrame(tab, fg_color="transparent")
+         right.grid(row=0, column=1, sticky="nsew", pady=PADDING)
+         self._build_training_controls(right, module)
+ 
+@@ -259,7 +260,7 @@ class TrainingPanel(ctk.CTkFrame):
+         count_badge.grid(row=0, column=1, sticky="e")
+ 
+         # Thumbnail grid (3 columns)
+-        thumbs = ctk.CTkScrollableFrame(
++        thumbs = ScrollableFrame(
+             frame, fg_color=COLOR_BG, corner_radius=CORNER_RADIUS, height=170,
+         )
+         thumbs.grid(row=1, column=0, sticky="nsew", padx=PADDING, pady=(0, 8))
+@@ -649,7 +650,7 @@ class TrainingPanel(ctk.CTkFrame):
+         ctk.CTkLabel(strip_card, text="Captured photos  ·  not saved yet",
+                      font=body_small_font(), text_color=COLOR_TEXT_MUTED).grid(
+             row=0, column=0, sticky="w", padx=12, pady=(10, 4))
+-        strip = ctk.CTkScrollableFrame(strip_card, fg_color="transparent",
++        strip = ScrollableFrame(strip_card, fg_color="transparent",
+                                        orientation="horizontal", height=84)
+         strip.grid(row=1, column=0, sticky="ew", padx=8, pady=(0, 10))
+         state["strip"] = strip
+@@ -973,7 +974,7 @@ class TrainingPanel(ctk.CTkFrame):
+                       hover_color=COLOR_ACCENT_HOVER, font=body_small_font(),
+                       command=lambda: self._back_to_camera(state)).grid(row=0, column=1, sticky="e")
+ 
+-        grid = ctk.CTkScrollableFrame(review, fg_color=COLOR_SURFACE, corner_radius=CORNER_RADIUS,
++        grid = ScrollableFrame(review, fg_color=COLOR_SURFACE, corner_radius=CORNER_RADIUS,
+                                       border_width=1, border_color=COLOR_BORDER)
+         grid.grid(row=1, column=0, sticky="nsew", padx=PADDING)
+         cols = 6
+diff --git a/ui/window_lifecycle.py b/ui/window_lifecycle.py
+index 7283ad8..029461e 100644
+--- a/ui/window_lifecycle.py
++++ b/ui/window_lifecycle.py
+@@ -4,6 +4,11 @@ import customtkinter as ctk
+ 
+ 
+ class WorkspaceWindow(ctk.CTk):
++    def __init__(self, *args, **kwargs):
++        super().__init__(*args, **kwargs)
++        from ui.scrolling import install_scrolling
++        install_scrolling(self)
++
+     def destroy(self):
+         if getattr(self, "_destroying", False):
+             return
+diff --git a/ui/scrolling.py b/ui/scrolling.py
+new file mode 100644
+index 0000000..5a7d214
+--- /dev/null
++++ b/ui/scrolling.py
+@@ -0,0 +1,184 @@
++"""One pointer-scoped wheel router per Tcl interpreter (Tk 8.6 and Tk 9).
++
++Map observation only installs a leading bindtag; wheel handlers are never global.
++Native Text/Listbox/Treeview bindings remain responsible for direct native input.
++"""
++from __future__ import annotations
++
++import math
++import tkinter as tk
++import weakref
++
++import customtkinter as ctk
++
++
++def decode_touchpad(delta):
++    value = int(delta)
++    x, y = (value >> 16) & 0xffff, value & 0xffff
++    return tuple(v - 65536 if v >= 32768 else v for v in (x, y))
++
++
++class Remainder:
++    def __init__(self):
++        self.value = 0.0
++
++    def take(self, amount):
++        if self.value * amount < 0:
++            self.value = 0.0
++        self.value += amount
++        whole = math.trunc(self.value)
++        self.value -= whole
++        return whole
++
++
++def install_scrolling(widget):
++    root = widget._root()
++    router = getattr(root, '_scroll_router', None)
++    if router is None:
++        router = root._scroll_router = ScrollRouter(root)
++    return router
++
++
++class ScrollRouter:
++    def __init__(self, root):
++        self.root = weakref.ref(root)
++        self.tag = 'CBVMSScroll' + str(id(self))
++        self.system = root.tk.call('tk', 'windowingsystem')
++        self.pending = weakref.WeakKeyDictionary()
++        self.last = None
++        self.sequences = []
++        for sequence, kind in (('<MouseWheel>', 'wheel'),
++                               ('<Shift-MouseWheel>', 'shift'),
++                               ('<TouchpadScroll>', 'touch'),
++                               ('<Button-4>', 'up'), ('<Button-5>', 'down'),
++                               ('<Shift-Button-4>', 'left'), ('<Shift-Button-5>', 'right')):
++            try:
++                root.bind_class(self.tag, sequence, lambda e, k=kind: self.handle(e, k))
++                self.sequences.append(sequence)
++            except tk.TclError:  # Tk 8.6 has no TouchpadScroll; Aqua has no button 4/5.
++                pass
++        # A single owned observer also sees future dialog and card widgets.
++        self.map_id = root.bind_all('<Map>', self._mapped, add='+')
++        self.attach_tree(root)
++
++    def attach_tree(self, widget):
++        tags = widget.bindtags()
++        if self.tag not in tags:
++            widget.bindtags((self.tag,) + tags)
++        for child in widget.winfo_children():
++            self.attach_tree(child)
++
++    def _mapped(self, event):
++        # Use raw Tk bindtags; CTk's bind wrappers restrict other operations.
++        widget = event.widget
++        tags = widget.bindtags()
++        if self.tag not in tags:
++            widget.bindtags((self.tag,) + tags)
++
++    def deltas(self, event, kind):
++        if kind == 'touch':
++            x, y = decode_touchpad(event.delta)
++            return -x, -y
++        if kind in ('up', 'down', 'left', 'right'):
++            return {'up': (0, -1), 'down': (0, 1), 'left': (-1, 0), 'right': (1, 0)}[kind]
++        delta = -float(event.delta)
++        if self.system != 'aqua':
++            delta /= 120.0
++        return (delta, 0) if kind == 'shift' or event.state & 1 else (0, delta)
++
++    @staticmethod
++    def eligible(widget, axis, amount):
++        if not amount:
++            return False
++        cls = widget.winfo_class()
++        if cls == 'Canvas':
++            # Image/zoom/camera canvases have no scrolling contract.
++            if not widget.cget(axis + 'scrollcommand') or not widget.cget('scrollregion'):
++                return False
++        elif cls not in ('Text', 'Listbox', 'Treeview'):
++            return False
++        first, last = getattr(widget, axis + 'view')()
++        return (first > 1e-9 if amount < 0 else last < 1 - 1e-9)
++
++    def target(self, pointer, dx, dy):
++        top = pointer.winfo_toplevel()
++        widget = pointer
++        while widget is not None:
++            if self.eligible(widget, 'x', dx) or self.eligible(widget, 'y', dy):
++                return widget
++            if widget is top:
++                break
++            widget = widget.master
++        return None
++
++    def handle(self, event, kind):
++        root = self.root()
++        if root is None:
++            return None
++        try:
++            pointer = root.winfo_containing(event.x_root, event.y_root)
++            if pointer is None:
++                return None
++            # A grab must never redirect a gesture to the dashboard underneath.
++            grab = root.grab_current()
++            if grab is not None and pointer.winfo_toplevel() is not grab.winfo_toplevel():
++                return 'break'
++            dx, dy = self.deltas(event, kind)
++            target = self.target(pointer, dx, dy)
++            if target is None:
++                self.last = None
++                self.pending.clear()
++                # Do not let focus/grab delivery scroll a different native widget.
++                if event.widget is not pointer and event.widget.winfo_class() in ("Text", "Listbox", "Treeview"):
++                    return "break"
++                return None
++            if self.last is None or self.last() is not target:
++                self.pending.clear()
++                self.last = weakref.ref(target)
++            # Preserve native acceleration, precise scrolling and widget bindings.
++            if target is event.widget and target.winfo_class() != 'Canvas':
++                return None
++            for axis, amount in (('x', dx), ('y', dy)):
++                if not self.eligible(target, axis, amount):
++                    continue
++                if target.winfo_class() == 'Canvas':
++                    # Move in pixels without changing scrollbar/keyboard increments.
++                    region = tuple(map(float, target.tk.splitlist(target.cget('scrollregion'))))
++                    extent = region[2 if axis == 'x' else 3] - region[0 if axis == 'x' else 1]
++                    pixels = amount if kind == 'touch' else amount * (8 if self.system == 'aqua' else 20)
++                    accum = self.pending.setdefault(target, {}).setdefault(axis, Remainder())
++                    pixels = accum.take(pixels)
++                    view = getattr(target, axis + 'view')
++                    if extent > 0 and pixels:
++                        view('moveto', view()[0] + pixels / extent)
++                else:
++                    accum = self.pending.setdefault(target, {}).setdefault(axis, Remainder())
++                    units = accum.take(amount)
++                    if units:
++                        getattr(target, axis + 'view_scroll')(units, 'units')
++            return 'break'
++        except (tk.TclError, KeyError):  # Widget disappeared during a queued event.
++            return None
++
++
++class ScrollableFrame(ctk.CTkScrollableFrame):
++    """CTk layout with shared routing instead of per-frame global wheel callbacks."""
++    def __init__(self, master, **kwargs):
++        install_scrolling(master)
++        super().__init__(master, **kwargs)
++        # Precise Tk 9 events use pixels. CTk's 8-pixel snapping loses small deltas.
++        self._parent_canvas.configure(xscrollincrement=1, yscrollincrement=1)
++
++    def destroy(self):
++        if getattr(self, "_scroll_destroying", False):
++            return
++        self._scroll_destroying = True
++        super().destroy()
++        # CTk otherwise leaves the outer canvas and its bound-method callbacks alive.
++        self._parent_frame.destroy()
++
++    def bind_all(self, sequence=None, func=None, add=None):
++        if sequence in ('<MouseWheel>', '<KeyPress-Shift_L>', '<KeyPress-Shift_R>',
++                        '<KeyRelease-Shift_L>', '<KeyRelease-Shift_R>'):
++            return None
++        return super().bind_all(sequence, func, add)
+diff --git a/tests/test_scrolling.py b/tests/test_scrolling.py
+new file mode 100644
+index 0000000..1da14a0
+--- /dev/null
++++ b/tests/test_scrolling.py
+@@ -0,0 +1,198 @@
++"""Disposable native widgets; no database, camera or production records."""
++import gc
++import tkinter as tk
++from tkinter import ttk
++from types import SimpleNamespace
++import unittest
++import weakref
++
++from ui.scrolling import Remainder, ScrollableFrame, decode_touchpad, install_scrolling
++from ui.window_lifecycle import WorkspaceWindow
++
++
++def packed(x, y):
++    value = ((x & 65535) << 16) | (y & 65535)
++    return value - 2**32 if value >= 2**31 else value
++
++
++class DeltaTests(unittest.TestCase):
++    def test_signed_axes(self):
++        for pair in ((1, -1), (-1, 1), (-32768, 32767), (0, 0)):
++            self.assertEqual(decode_touchpad(packed(*pair)), pair)
++
++    def test_small_deltas_and_reversal(self):
++        r = Remainder()
++        self.assertEqual([r.take(v) for v in (.4, .4, -.4, -.4, -.4)], [0, 0, 0, 0, -1])
++        self.assertEqual(r.take(.5), 0)
++        self.assertEqual(r.take(.5), 1)
++
++
++class NativeScrollTests(unittest.TestCase):
++    def setUp(self):
++        self.root = WorkspaceWindow()
++        self.root.geometry('700x550+40+40')
++        self.errors = []
++        self.root.report_callback_exception = lambda *args: self.errors.append(args)
++        self.router = install_scrolling(self.root)
++        self.pump()
++
++    def tearDown(self):
++        self.root.destroy()
++        self.assertEqual(self.errors, [])
++        gc.collect()
++
++    def pump(self):
++        self.root.update_idletasks()
++        self.root.update()
++
++    def canvas(self, parent, height=160, region=1000):
++        c = tk.Canvas(parent, width=300, height=height, highlightthickness=0,
++                      scrollregion=(0, 0, 1000, region), yscrollincrement=1,
++                      xscrollincrement=1, yscrollcommand=lambda *a: None,
++                      xscrollcommand=lambda *a: None)
++        c.pack()
++        self.pump()
++        return c
++
++    def event(self, widget, delta=-1, state=0):
++        return SimpleNamespace(widget=widget, delta=delta, state=state,
++                               x_root=widget.winfo_rootx()+5, y_root=widget.winfo_rooty()+5)
++
++    def test_pointer_child_nested_handoff_and_no_overflow(self):
++        outer = self.canvas(self.root, 350)
++        body = tk.Frame(outer)
++        outer.create_window(0, 0, anchor='nw', window=body)
++        inner = self.canvas(body)
++        label = tk.Label(inner, text='card')
++        inner.create_window(0, 0, anchor='nw', window=label)
++        self.pump()
++        self.assertIs(self.router.target(label, 0, 1), inner)
++        self.router.handle(self.event(label, packed(0, -1)), 'touch')
++        self.assertGreater(inner.yview()[0], 0)
++        self.assertEqual(outer.yview()[0], 0)
++        inner.yview_moveto(1)
++        self.assertIs(self.router.target(label, 0, 1), outer)
++        inner.configure(scrollregion=(0, 0, 300, 50))
++        self.assertIs(self.router.target(label, 0, 1), outer)
++        outer.configure(scrollregion=(0, 0, 300, 50))
++        self.assertIsNone(self.router.target(label, 0, 1))
++
++    def test_real_tk_touchpad_binding_and_horizontal(self):
++        c = self.canvas(self.root)
++        for x, y in ((0, -1), (-1, 0)):
++            c.event_generate('<TouchpadScroll>', delta=packed(x, y),
++                             rootx=c.winfo_rootx()+10, rooty=c.winfo_rooty()+10)
++            self.pump()
++        self.assertGreater(c.yview()[0], 0)
++        self.assertGreater(c.xview()[0], 0)
++        self.router.handle(self.event(c, -1, 1), 'shift')
++        self.assertGreater(c.xview()[0], .001)
++
++    def test_native_handler_runs_once(self):
++        text = tk.Text(self.root, height=5)
++        text.pack()
++        text.insert('end', '\n'.join(str(i) for i in range(200)))
++        self.pump()
++        calls = []
++        text.bind('<MouseWheel>', lambda e: calls.append(e.delta), add='+')
++        before = text.yview()
++        event = self.event(text, -120)
++        self.assertIsNone(self.router.handle(event, 'wheel'))
++        self.assertEqual(before, text.yview())
++        text.event_generate('<MouseWheel>', delta=-120, rootx=event.x_root, rooty=event.y_root)
++        self.pump()
++        self.assertEqual(calls, [-120])
++        self.assertGreater(text.yview()[0], before[0])
++
++    def test_dialog_isolation_and_grab(self):
++        behind = self.canvas(self.root)
++        dialog = tk.Toplevel(self.root)
++        dialog.geometry('400x300+800+40')
++        label = tk.Label(dialog, text='no overflow')
++        label.pack()
++        self.pump()
++        self.assertIsNone(self.router.target(label, 0, 1))
++        dialog.grab_set()
++        self.assertEqual(self.router.handle(self.event(behind), 'wheel'), 'break')
++        self.assertEqual(behind.yview()[0], 0)
++        dialog.destroy()
++
++    def test_dynamic_ctk_children_cleanup_and_no_global_wheel(self):
++        baseline = self.root.bind_all('<MouseWheel>')
++        maps = self.root.bind_all('<Map>')
++        refs = []
++        for _ in range(5):
++            frame = ScrollableFrame(self.root, height=100)
++            frame.pack()
++            label = tk.Label(frame, text='card')
++            label.pack()
++            self.pump()
++            self.assertEqual(label.bindtags().count(self.router.tag), 1)
++            refs.append(weakref.ref(frame))
++            frame.destroy()
++            del frame, label
++        gc.collect()
++        self.assertTrue(all(r() is None for r in refs))
++        self.assertEqual(baseline, self.root.bind_all('<MouseWheel>'))
++        self.assertEqual(maps, self.root.bind_all('<Map>'))
++
++    def test_small_canvas_deltas_reversal_and_pointer_not_focus(self):
++        c = self.canvas(self.root)
++        c.yview_moveto(.5)
++        before = c.yview()[0]
++        self.router.system = 'win32'
++        for delta in (-2, -2):  # 1/3 pixel each, must accumulate.
++            self.router.handle(self.event(c, delta), 'wheel')
++        self.assertEqual(c.yview()[0], before)
++        self.router.handle(self.event(c, 2), 'wheel')  # Reverse: discard stale remainder.
++        self.assertEqual(c.yview()[0], before)
++        for _ in range(3):
++            event = self.event(c, 2)
++            event.widget = self.root  # Delivery/focus differs from the pointer target.
++            self.router.handle(event, 'wheel')
++        self.assertLess(c.yview()[0], before)
++
++    def test_native_table_boundary_hands_off_once(self):
++        outer = self.canvas(self.root, 350)
++        tree = ttk.Treeview(outer, height=4)
++        outer.create_window(0, 0, anchor='nw', window=tree)
++        for i in range(50):
++            tree.insert('', 'end', text=str(i))
++        self.pump()
++        tree.yview_moveto(1)
++        before = tree.yview()
++        self.router.handle(self.event(tree, packed(0, -3)), 'touch')
++        self.assertEqual(tree.yview(), before)
++        self.assertGreater(outer.yview()[0], 0)
++
++    def test_overflowing_ctk_cards_and_dialog(self):
++        from ui.live_alerts import LiveAlerts
++        frame = LiveAlerts(self.root, height=100)
++        frame.pack()
++        for i in range(25):
++            tk.Label(frame, text='Synthetic activity ' + str(i)).grid(row=i+1, column=0)
++        self.pump()
++        canvas = frame._parent_canvas
++        self.assertLess(canvas.yview()[1], 1)
++        canvas.event_generate('<TouchpadScroll>', delta=packed(0, -2),
++                              rootx=canvas.winfo_rootx()+5, rooty=canvas.winfo_rooty()+5)
++        self.pump()
++        self.assertGreater(canvas.yview()[0], 0)
++        dialog = tk.Toplevel(self.root)
++        dialog.geometry('400x300+800+40')
++        inner = self.canvas(dialog)
++        before = canvas.yview()
++        self.router.handle(self.event(inner, packed(0, -2)), 'touch')
++        self.assertGreater(inner.yview()[0], 0)
++        self.assertEqual(canvas.yview(), before)
++        dialog.destroy()
++
++    def test_camera_canvas_inert_and_windows_linux_normalization(self):
++        camera = tk.Canvas(self.root)
++        camera.pack()
++        self.pump()
++        self.assertIsNone(self.router.target(camera, 1, 1))
++        for system in ('win32', 'x11'):
++            self.router.system = system
++            self.assertEqual(self.router.deltas(self.event(camera, 30), 'wheel'), (0, -.25))
++        self.assertEqual(self.router.deltas(self.event(camera), 'up'), (0, -1))

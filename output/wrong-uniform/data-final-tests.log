@@ -1,0 +1,80 @@
+test_archive_and_decoded_image_limits (tests.test_uniform_dataset.UniformDatasetTests.test_archive_and_decoded_image_limits) ... FAIL
+test_capture_png_is_lossless_and_imports_have_quality_flags (tests.test_uniform_dataset.UniformDatasetTests.test_capture_png_is_lossless_and_imports_have_quality_flags) ... ok
+test_catalog_corruption_fails_closed_without_overwrite (tests.test_uniform_dataset.UniformDatasetTests.test_catalog_corruption_fails_closed_without_overwrite) ... ok
+test_catalog_lock_open_failure_releases_thread_lock (tests.test_uniform_dataset.UniformDatasetTests.test_catalog_lock_open_failure_releases_thread_lock) ... ok
+test_conflicting_exact_reimport_invalidates_approval_but_same_source_does_not (tests.test_uniform_dataset.UniformDatasetTests.test_conflicting_exact_reimport_invalidates_approval_but_same_source_does_not) ... ok
+test_crop_proposal_persists_detector_origin_without_approval (tests.test_uniform_dataset.UniformDatasetTests.test_crop_proposal_persists_detector_origin_without_approval) ... ok
+test_eligibility_excludes_ambiguous_approved_records_and_title_case_labels (tests.test_uniform_dataset.UniformDatasetTests.test_eligibility_excludes_ambiguous_approved_records_and_title_case_labels) ... ok
+test_exact_dedup_keeps_original_bytes_and_source_occurrences (tests.test_uniform_dataset.UniformDatasetTests.test_exact_dedup_keeps_original_bytes_and_source_occurrences) ... ok
+test_exact_duplicate_import_bridges_capture_groups_for_split_safety (tests.test_uniform_dataset.UniformDatasetTests.test_exact_duplicate_import_bridges_capture_groups_for_split_safety) ... ok
+test_exif_orientation_is_recorded_without_transforming_raster (tests.test_uniform_dataset.UniformDatasetTests.test_exif_orientation_is_recorded_without_transforming_raster) ... ok
+test_human_review_can_resolve_import_association_uncertainty (tests.test_uniform_dataset.UniformDatasetTests.test_human_review_can_resolve_import_association_uncertainty) ... ok
+test_incremental_near_duplicate_link_flags_both_records (tests.test_uniform_dataset.UniformDatasetTests.test_incremental_near_duplicate_link_flags_both_records) ... ok
+test_known_capture_groups_do_not_leak_across_proposed_splits (tests.test_uniform_dataset.UniformDatasetTests.test_known_capture_groups_do_not_leak_across_proposed_splits) ... ok
+test_legacy_audit_is_idempotent_and_never_maps_old_labels (tests.test_uniform_dataset.UniformDatasetTests.test_legacy_audit_is_idempotent_and_never_maps_old_labels) ... ok
+test_limit_error_reports_progress_and_retry_deduplicates (tests.test_uniform_dataset.UniformDatasetTests.test_limit_error_reports_progress_and_retry_deduplicates) ... ok
+test_no_person_proposal_raises_useful_error_and_is_recorded (tests.test_uniform_dataset.UniformDatasetTests.test_no_person_proposal_raises_useful_error_and_is_recorded) ... ok
+test_proposed_splits_include_only_approved_rows (tests.test_uniform_dataset.UniformDatasetTests.test_proposed_splits_include_only_approved_rows) ... ok
+test_resolved_conflict_survives_same_source_reimport (tests.test_uniform_dataset.UniformDatasetTests.test_resolved_conflict_survives_same_source_reimport) ... ok
+test_review_validation_and_crop_coordinates_preserve_raster (tests.test_uniform_dataset.UniformDatasetTests.test_review_validation_and_crop_coordinates_preserve_raster) ... ok
+test_size_limits_report_progress_and_duplicate_retry (tests.test_uniform_dataset.UniformDatasetTests.test_size_limits_report_progress_and_duplicate_retry) ... ok
+test_unknown_provenance_is_one_group_and_never_claims_eval_readiness (tests.test_uniform_dataset.UniformDatasetTests.test_unknown_provenance_is_one_group_and_never_claims_eval_readiness) ... ok
+test_wrong_uniform_is_display_label_for_stable_class_key (tests.test_uniform_dataset.UniformDatasetTests.test_wrong_uniform_is_display_label_for_stable_class_key) ... ok
+test_zip_preflight_count_and_size_limits_keep_zero_imports (tests.test_uniform_dataset.UniformDatasetTests.test_zip_preflight_count_and_size_limits_keep_zero_imports) ... ok
+test_zip_preflight_rejects_traversal_before_import (tests.test_uniform_dataset.UniformDatasetTests.test_zip_preflight_rejects_traversal_before_import) ... ok
+test_zip_rejects_unsafe_directory_and_drive_paths_and_records_archive_hash (tests.test_uniform_dataset.UniformDatasetTests.test_zip_rejects_unsafe_directory_and_drive_paths_and_records_archive_hash) ... ok
+test_zip_symlink_and_compression_abuse_rejected_before_write (tests.test_uniform_dataset.UniformDatasetTests.test_zip_symlink_and_compression_abuse_rejected_before_write) ... ok
+test_cancel_during_prepare_writes_only_flag_and_finishes (tests.test_uniform_candidate.CandidateFreezeTests.test_cancel_during_prepare_writes_only_flag_and_finishes) ... ok
+test_checkpoint_pointer_is_the_recoverable_marker (tests.test_uniform_candidate.CandidateFreezeTests.test_checkpoint_pointer_is_the_recoverable_marker) ... ok
+test_class_map_mutation_and_resume_checkpoint_tamper_are_rejected (tests.test_uniform_candidate.CandidateFreezeTests.test_class_map_mutation_and_resume_checkpoint_tamper_are_rejected) ... ok
+test_frozen_data_matches_live_letterbox_and_checksums (tests.test_uniform_candidate.CandidateFreezeTests.test_frozen_data_matches_live_letterbox_and_checksums) ... ok
+test_invalid_approved_crop_is_excluded_consistently_with_summary (tests.test_uniform_candidate.CandidateFreezeTests.test_invalid_approved_crop_is_excluded_consistently_with_summary) ... ok
+test_lock_probe_and_release (tests.test_uniform_candidate.CandidateFreezeTests.test_lock_probe_and_release) ... ok
+test_mutated_prepared_tensor_and_manifest_are_rejected (tests.test_uniform_candidate.CandidateFreezeTests.test_mutated_prepared_tensor_and_manifest_are_rejected) ... ok
+test_real_child_inherited_flock_blocks_competitor_and_releases_on_exit (tests.test_uniform_candidate.CandidateFreezeTests.test_real_child_inherited_flock_blocks_competitor_and_releases_on_exit) ... ok
+test_stale_status_recovers_and_latest_uses_microsecond_timestamp (tests.test_uniform_candidate.CandidateFreezeTests.test_stale_status_recovers_and_latest_uses_microsecond_timestamp) ... ok
+test_start_hands_lock_to_child_and_reaps_without_a_real_worker (tests.test_uniform_candidate.CandidateFreezeTests.test_start_hands_lock_to_child_and_reaps_without_a_real_worker) ... ok
+test_symlink_original_is_rejected_before_resolution (tests.test_uniform_candidate.CandidateFreezeTests.test_symlink_original_is_rejected_before_resolution) ... ok
+test_symlink_run_directories_are_not_scanned (tests.test_uniform_candidate.CandidateFreezeTests.test_symlink_run_directories_are_not_scanned) ... ok
+test_worker_checkpoint_sidecar_and_pointer_are_consistent (tests.test_uniform_candidate.CandidateFreezeTests.test_worker_checkpoint_sidecar_and_pointer_are_consistent) ... ok
+test_worker_cpu_cross_entropy_step_is_finite_and_updates_weights (tests.test_uniform_candidate.CandidateFreezeTests.test_worker_cpu_cross_entropy_step_is_finite_and_updates_weights) ... ok
+test_config_bounds_and_unknown_keys (tests.test_uniform_candidate.CandidateSummaryTests.test_config_bounds_and_unknown_keys) ... ok
+test_missing_approved_categories_are_not_eligible (tests.test_uniform_candidate.CandidateSummaryTests.test_missing_approved_categories_are_not_eligible) ... ok
+test_only_clean_approved_valid_crops_count_and_unknown_is_shared_group (tests.test_uniform_candidate.CandidateSummaryTests.test_only_clean_approved_valid_crops_count_and_unknown_is_shared_group) ... ok
+test_animated_images_are_rejected (tests.test_uniform_evaluation.EvaluationFixture.test_animated_images_are_rejected) ... ok
+test_cancel_and_predictor_failure_never_emit_partial_metrics (tests.test_uniform_evaluation.EvaluationFixture.test_cancel_and_predictor_failure_never_emit_partial_metrics) ... ok
+test_dhash_index_finds_all_within_threshold_and_rejects_far_hash (tests.test_uniform_evaluation.EvaluationFixture.test_dhash_index_finds_all_within_threshold_and_rejects_far_hash) ... ok
+test_evaluation_lock_rejects_overlapping_jobs (tests.test_uniform_evaluation.EvaluationFixture.test_evaluation_lock_rejects_overlapping_jobs) ... ok
+test_exact_group_and_near_overlap_are_rejected_without_metrics (tests.test_uniform_evaluation.EvaluationFixture.test_exact_group_and_near_overlap_are_rejected_without_metrics) ... ok
+test_frozen_hash_tamper_and_undefined_wilson (tests.test_uniform_evaluation.EvaluationFixture.test_frozen_hash_tamper_and_undefined_wilson) ... ok
+test_import_freezes_byte_identical_images_and_provenance (tests.test_uniform_evaluation.EvaluationFixture.test_import_freezes_byte_identical_images_and_provenance) ... ok
+test_invalid_manifest_and_paths_rejected_before_set_creation (tests.test_uniform_evaluation.EvaluationFixture.test_invalid_manifest_and_paths_rejected_before_set_creation) ... ok
+test_load_set_rejects_frozen_manifest_tamper (tests.test_uniform_evaluation.EvaluationFixture.test_load_set_rejects_frozen_manifest_tamper) ... ok
+test_paired_metrics_keep_legacy_labels_semantically_separate (tests.test_uniform_evaluation.EvaluationFixture.test_paired_metrics_keep_legacy_labels_semantically_separate) ... ok
+test_policy_versions_are_bound_even_after_cancel_and_identical_reimport (tests.test_uniform_evaluation.EvaluationFixture.test_policy_versions_are_bound_even_after_cancel_and_identical_reimport) ... ok
+test_stale_report_is_recovered_without_metrics (tests.test_uniform_evaluation.EvaluationFixture.test_stale_report_is_recovered_without_metrics) ... ok
+test_storage_root_symlinks_are_rejected (tests.test_uniform_evaluation.EvaluationFixture.test_storage_root_symlinks_are_rejected) ... ok
+test_symlink_source_and_bad_hash_rejected (tests.test_uniform_evaluation.EvaluationFixture.test_symlink_source_and_bad_hash_rejected) ... ok
+test_synthetic_propagates_noneligible_experimental_status (tests.test_uniform_evaluation.EvaluationFixture.test_synthetic_propagates_noneligible_experimental_status) ... ok
+test_terminal_report_checksum_detects_mutation (tests.test_uniform_evaluation.EvaluationFixture.test_terminal_report_checksum_detects_mutation) ... ok
+test_three_class_baseline_gets_comparable_recall_delta (tests.test_uniform_evaluation.EvaluationFixture.test_three_class_baseline_gets_comparable_recall_delta) ... ok
+test_unassessable_human_review_is_covered_but_excluded_from_class_metrics (tests.test_uniform_evaluation.EvaluationFixture.test_unassessable_human_review_is_covered_but_excluded_from_class_metrics) ... ok
+test_wrong_baseline_independence_binding_fails_closed (tests.test_uniform_evaluation.EvaluationFixture.test_wrong_baseline_independence_binding_fails_closed) ... ok
+
+======================================================================
+FAIL: test_archive_and_decoded_image_limits (tests.test_uniform_dataset.UniformDatasetTests.test_archive_and_decoded_image_limits)
+----------------------------------------------------------------------
+core.uniform_dataset.ImportLimitError: Import exceeded compressed archive size limit (1 bytes; observed 415 bytes). Imported: 0; skipped as duplicates: 0; left unprocessed: all (count unavailable; archive rejected before opening). Retry the remaining files in smaller batches.
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/Users/jopethones/Documents/GitHub/cbvms3.0/tests/test_uniform_dataset.py", line 317, in test_archive_and_decoded_image_limits
+    with self.assertRaisesRegex(ValueError, 'compressed size'):
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: "compressed size" does not match "Import exceeded compressed archive size limit (1 bytes; observed 415 bytes). Imported: 0; skipped as duplicates: 0; left unprocessed: all (count unavailable; archive rejected before opening). Retry the remaining files in smaller batches."
+
+----------------------------------------------------------------------
+Ran 62 tests in 1.916s
+
+FAILED (failures=1)

@@ -1,0 +1,2484 @@
+--- a/core/live_pipeline.py
++++ b/core/live_pipeline.py
+@@ -78,6 +78,9 @@
+     first_usable_at: float | None = None
+     uniform_model_version: str | None = None
+     uniform_version_valid: object | None = None
++    uniform_tickets: tuple | None = None
++    assessment_queued_at: float | None = None
++    analysis_started_at: float | None = None
+ 
+     def __post_init__(self):
+         with measure("frame_copy"):
+@@ -229,7 +232,11 @@
+ 
+ class LiveProcessor:
+     def __init__(self, database, recognizer, person_detector, trainer, uniform_matcher,
+-                 notifier, *, latest_sample=lambda:None, state=None, observation_only=False):
++                 notifier, *, latest_sample=lambda:None, state=None, observation_only=False,
++                 uniform_observation=None):
++        if uniform_observation is not None and not observation_only:
++            raise ValueError('Candidate assessment requires observation-only processing')
++        self.uniform_observation = uniform_observation
+         self.database=database
+         self.recognizer=recognizer
+         self.person_detector=person_detector
+@@ -257,7 +264,14 @@
+         self._uniform_model_version = None
+ 
+     def analyze(self,task):
+-        if task.uniform_enabled and callable(getattr(type(self.trainer), 'uniform_version', None)):
++        candidate_session = self.uniform_observation
++        if candidate_session is not None:
++            if not self.observation_only:
++                raise RuntimeError('Observation candidate cannot run in production mode')
++            if task.uniform_tickets is None:
++                task = candidate_session.observe(task,task.observations)
++            task = task.with_uniform_version(candidate_session.version_token,candidate_session.matches)
++        elif task.uniform_enabled and callable(getattr(type(self.trainer), 'uniform_version', None)):
+             try:
+                 version = self.trainer.uniform_version()
+             except Exception as exc:
+@@ -270,7 +284,7 @@
+         if not task.valid():
+             event("frame_rejected", stage="analysis_start", reason=task.rejection())
+             return None
+-        key = (task.context.generation, task.context.frame_id)
++        key = (task.source_id,task.cancelled,task.camera_generation,task.context.generation,task.context.frame_id)
+         if key in self._analyzed_frames:
+             return None
+         self._analyzed_frames.append(key)
+@@ -344,7 +358,7 @@
+             self.publish_identity(MonitorResult(task, identities, time.monotonic(),
+                 "Face detected · Identity uncertain" if rows and not any(a.reliable_identity for a in identities)
+                 else "Recognition ready · Uniform not assessed" if rows else "No faces detected"))
+-        uniform_available=(task.uniform_enabled and self.person_detector is not None and
++        uniform_available=(candidate_session is None and task.uniform_enabled and self.person_detector is not None and
+                            (self.readiness is None or self.readiness.ready('uniform')) and
+                            self.trainer.is_trained('uniform'))
+         bodies=[]
+@@ -457,6 +471,25 @@
+         if observations is not None:
+             assessments=tuple(replace(a, track_id=o.track_id, presence_id=o.presence_id)
+                               for a,o in zip(assessments,observations))
++        if candidate_session is not None and task.uniform_enabled:
++            tickets = {t.key[-2:]:t for t in task.uniform_tickets or ()}
++            updated = []
++            bound_tickets = []
++            for assessment,observation,row in zip(assessments,observations or (),rows):
++                ticket = tickets.get((observation.track_id,observation.presence_id))
++                if ticket is not None:
++                    ticket = candidate_session.bind_identity(ticket,str(row.get('student_id') or '') if row.get('matched') else 'unknown')
++                    bound_tickets.append(ticket)
++                garment = candidate_session.assess(task,ticket) if ticket is not None else None
++                updated.append(replace(assessment,garment=garment,
++                    state=garment.state if garment else 'Unable to assess',
++                    reason=garment.reason if garment else 'No fresh associated candidate evidence',
++                    torso_box=observation.torso_box,body_box=observation.body_box,
++                    body_index=observation.body_index,uniform_label=None,uniform_confidence=0.,
++                    accepted_categories=tuple(c for c in assessment.accepted_categories if c!='wrong_uniform')))
++            assessments=tuple(updated)
++            task = candidate_session._attach(task,tuple(bound_tickets))
++            if not task.valid(): return None
+         for a in assessments:
+             event('person_assessed', frame_id=task.context.frame_id, presence_id=a.presence_id,
+                   state=a.state, reason=a.reason, reliable_identity=a.reliable_identity,
+@@ -469,6 +502,7 @@
+         if not self.observation_only and not task.observation_only:
+             self.submit_detection_audio(MonitorResult(task, assessments, time.monotonic()))
+         return MonitorResult(task,assessments,time.monotonic(),
++                             candidate_session.status_text() if candidate_session is not None else
+                              "No faces detected" if not rows else
+                              "Face detected · Identity uncertain" if not any(a.reliable_identity for a in assessments) else
+                              "Uniform not assessed" if not any(r.get('uniform_available') for r in rows) else "")
+@@ -509,6 +543,8 @@
+ 
+     def assessment_failed(self, task):
+         """An unobserved frame breaks evidence without recycling presence IDs."""
++        if self.uniform_observation is not None:
++            self.uniform_observation.invalidate()
+         if task.valid():
+             self.state.update(task.context, (), now=time.monotonic())
+             self.submit_detection_audio(MonitorResult(task, (), time.monotonic()))
+@@ -945,7 +981,7 @@
+                     self._ack_candidate(task, None, "worker_busy")
+                     return False
+                 self.requests.put_nowait(task)
+-                if PERF.enabled or TRACES.enabled:
++                if PERF.enabled or TRACES.enabled or getattr(self.processor,'uniform_observation',None) is not None:
+                     with self._queue_clock_lock:
+                         self._queue_clock[id(task)] = time.monotonic()
+                 self._request_ready.set()
+@@ -954,7 +990,7 @@
+         if not candidate and not self.stop_event.is_set():
+             event("frame_submitted", worker=type(self.processor).__name__, frame_id=task.context.frame_id)
+             with self._dispatch_lock:
+-                if not PERF.enabled and not TRACES.enabled:
++                if not PERF.enabled and not TRACES.enabled and getattr(self.processor,'uniform_observation',None) is None:
+                     put_latest(self.requests, task)
+                 else:
+                     with self._queue_clock_lock:
+@@ -1022,6 +1058,12 @@
+                         self._request_ready.clear()
+                 with self._queue_clock_lock:
+                     offered_at = self._queue_clock.pop(id(task), None)
++                if (task is not None and isinstance(self.processor,LiveProcessor)
++                        and self.processor.uniform_observation is not None):
++                    from copy import copy
++                    task = copy(task)
++                    object.__setattr__(task,'assessment_queued_at',offered_at)
++                    object.__setattr__(task,'analysis_started_at',time.monotonic())
+                 if task is None or not task.valid():
+                     with self._dispatch_lock:
+                         self.active_task = None
+--- a/core/live_state.py
++++ b/core/live_state.py
+@@ -213,6 +213,7 @@
+     active_suspension: bool = False
+     enrollment_status: str = ""
+     lifecycle_version: int = 0
++    garment: object | None = None  # Observation-only, separate from policy/discipline evidence.
+ 
+     @property
+     def matched(self) -> bool:
+--- a/core/uniform_model_registry.py
++++ b/core/uniform_model_registry.py
+@@ -118,10 +118,15 @@
+ 
+ class CandidatePredictor:
+     """Read-only local state-dict inference; no training or downloads."""
+-    def __init__(self,path,rule=None):
++    def __init__(self,path,rule=None,*,backend='cpu'):
+         import torch
+         from ultralytics.nn.tasks import ClassificationModel
++        if backend not in ('cpu','mps'):
++            raise ValueError('Candidate backend must be cpu or mps')
++        if backend == 'mps' and not torch.backends.mps.is_available():
++            raise RuntimeError('Requested candidate MPS backend is unavailable; no fallback performed')
+         self.torch = torch
++        self.backend = backend
+         self.path, self.rule = Path(path),rule
+         if read_json(self.path/'config.json').get('base_weights_sha256') != digest(ROOT/'yolov8n-cls.pt'):
+             raise ValueError('Installed backbone changed; candidate compatibility must be revalidated')
+@@ -138,21 +143,46 @@
+         model.load_state_dict(weights['state_dict'],strict=True)
+         if any(t.is_floating_point() and not torch.isfinite(t).all() for t in weights['state_dict'].values()):
+             raise ValueError('Candidate contains nonfinite weights')
+-        self.model = model.eval()
++        self.model = model.eval().to(backend)
++        if not str(next(self.model.parameters()).device).startswith(backend):
++            raise RuntimeError('Candidate parameter placement does not match requested backend')
+         self.model.requires_grad_(False)
+         self.lock = threading.Lock()
+ 
+     def probabilities(self,bgr):
++        return self.timed_probabilities(bgr)['probabilities']
++
++    def backend_status(self):
++        return {'requested':self.backend,'active':self.backend,
++                'model_parameter_device':str(next(self.model.parameters()).device),
++                'fallback_reason':None}
++
++    def timed_probabilities(self,bgr):
++        """Synchronized device timings, including transfer in preprocessing.
++
++        A requested MPS failure is reported to the caller, never hidden by CPU
++        fallback. The default deployment/evaluation path remains CPU and 224px.
++        """
+         import cv2
+         import numpy as np
++        import time
+         from core.trainer import _letterbox
+-        image = cv2.cvtColor(_letterbox(bgr,224),cv2.COLOR_BGR2RGB).astype(np.float32)/255.
+-        tensor = self.torch.from_numpy(image.transpose(2,0,1).copy()).unsqueeze(0)
+         with self.lock,self.torch.inference_mode():
+-            probs = self.model(tensor)[0].tolist()
++            if self.backend == 'mps': self.torch.mps.synchronize()
++            start = time.perf_counter()
++            image = cv2.cvtColor(_letterbox(bgr,224),cv2.COLOR_BGR2RGB).astype(np.float32)/255.
++            tensor = self.torch.from_numpy(image.transpose(2,0,1).copy()).unsqueeze(0).to(self.backend)
++            if self.backend == 'mps': self.torch.mps.synchronize()
++            preprocessed = time.perf_counter()
++            probs = self.model(tensor)[0].detach().cpu().tolist()
++            if self.backend == 'mps': self.torch.mps.synchronize()
++            finished = time.perf_counter()
+         if len(probs)!=3 or not all(math.isfinite(p) and 0<=p<=1 for p in probs):
+             raise ValueError('Invalid classifier probability output')
+-        return dict(zip(CLASSES,probs))
++        return {'probabilities':dict(zip(CLASSES,probs)),
++                'timings':{'preprocessing_ms':1000*(preprocessed-start),
++                           'inference_ms':1000*(finished-preprocessed),
++                           'total_ms':1000*(finished-start)},'backend':self.backend_status()}
+ 
+     def __call__(self,bgr):
+         probs = self.probabilities(bgr)
+--- a/ui/dashboard.py
++++ b/ui/dashboard.py
+@@ -32,6 +32,7 @@
+ from core.live_pipeline import LiveProcessor, LiveWorker, MonitorTask, MotionProjection, FaceTrackingProcessor
+ from core.assessment_candidates import (ClearFrameRouter, OBSERVATION_ONLY,
+     CLEAR_FRAME_SELECTION, PRIORITIZED_ASSESSMENT)
++from core.uniform_observation import ObservationUniformSession
+ from ui.live_alerts import LiveAlerts
+ from ui.live_overlay import draw_assessments
+ from core.uniform_matcher import UniformColorMatcher
+@@ -241,12 +242,14 @@
+         self._notification_out = queue.Queue(maxsize=50)
+         self._stats_out = queue.Queue(maxsize=1)
+         self._stats_busy = threading.Event()
++        self._uniform_observation = ObservationUniformSession.from_environment(observation_only=OBSERVATION_ONLY)
+         self._processor = LiveProcessor(
+             self._database, self._recognizer, self._person_detector,
+             self._trainer, self._uniform_matcher, self._notifier,
+             latest_sample=self._latest_monitor_sample,
+             state=LiveState(LiveConfig(violation_min_confidence=UNIFORM_VIOLATION_CONF)),
+             observation_only=OBSERVATION_ONLY,
++            uniform_observation=self._uniform_observation,
+         )
+         self._monitor_session_id = self._processor.security_session
+         self._monitor_session_started_at = datetime.now(timezone.utc)
+@@ -258,7 +261,9 @@
+             and task.earring_enabled == self._checker.check_earring)
+         self._processor.readiness = self._readiness
+         self._observation_only = OBSERVATION_ONLY
+-        self._candidate_router = ClearFrameRouter() if (CLEAR_FRAME_SELECTION or PRIORITIZED_ASSESSMENT) else None
++        self._candidate_router = (ClearFrameRouter(fresh_selection=True,ttl=self._uniform_observation.config.frame_ttl)
++            if self._uniform_observation is not None else
++            ClearFrameRouter() if (CLEAR_FRAME_SELECTION or PRIORITIZED_ASSESSMENT) else None)
+         if self._candidate_router is not None:
+             self._gallery_listener = self._on_gallery_revision
+             self._recognizer.add_gallery_listener(self._gallery_listener)
+@@ -1529,15 +1534,26 @@
+ 
+     def _prewarm_models(self) -> None:
+         self._monitor_models.start()
++        candidate = getattr(self,'_uniform_observation',None)
++        if candidate is not None:
++            try:
++                candidate.prepare()
++            except Exception as exc:
++                event('observation_candidate_unavailable',error=str(exc))
+ 
+     def _retry_models(self):
+         self._monitor_models.start(retry=True)
+ 
+     def _on_localized(self, result):
+         """Tracking worker submits its original pixels, landmarks and ownership token."""
++        candidate = getattr(self,'_uniform_observation',None)
++        if (candidate is not None and result.task.valid()
++                and result.task.context.generation == self._monitor_generation
++                and result.task.camera_generation == self._camera_generation):
++            result = replace(result,task=candidate.observe(result.task,result.observations))
+         candidate_observation_route = (getattr(self, "_observation_only", False)
+             and getattr(self, "_candidate_router", None) is not None
+-            and (CLEAR_FRAME_SELECTION or PRIORITIZED_ASSESSMENT))
++            and (CLEAR_FRAME_SELECTION or PRIORITIZED_ASSESSMENT or candidate is not None))
+         if (not result.task.valid() or not self._readiness.ready('recognition')
+                 or result.task.context.generation != self._monitor_generation
+                 or result.task.camera_generation != self._camera_generation
+@@ -1548,7 +1564,7 @@
+             if getattr(self, "_candidate_router", None) is not None:
+                 self._candidate_router.observe(result,
+                     prioritize=PRIORITIZED_ASSESSMENT,
+-                    select=CLEAR_FRAME_SELECTION)
++                    select=CLEAR_FRAME_SELECTION or candidate is not None)
+                 self._dispatch_assessment_candidate()
+                 return
+             else:
+@@ -1579,6 +1595,9 @@
+         router = getattr(self, "_candidate_router", None)
+         if router is not None:
+             router.reset()
++        candidate = getattr(self,'_uniform_observation',None)
++        if candidate is not None:
++            candidate.invalidate()
+ 
+     def _latest_monitor_sample(self):
+         """Worker-safe read; never starts devices or touches Tk."""
+@@ -1612,6 +1631,9 @@
+         self._tracking_times.clear()
+         if getattr(self, "_candidate_router", None) is not None:
+             self._candidate_router.reset()
++        candidate = getattr(self,'_uniform_observation',None)
++        if candidate is not None:
++            candidate.invalidate()
+         _drain(self._live_worker.requests)
+         _drain(self._live_worker.results)
+         if getattr(self, "_alerts_scroll", None) is not None:
+@@ -1647,7 +1669,7 @@
+                         assessed.update(face_box=current['face_box'],torso_box=current['torso_box'])
+                         if current['torso_box'] is None and assessed.get('state') != 'Enrollment review':
+                             assessed.update(state='Uniform not assessed',reason=current['reason'],
+-                                            detail=current['reason'],accepted_categories=())
++                                            detail=current['reason'],accepted_categories=(),garment=None)
+                         current=assessed
+                 combined.append(current)
+             return combined
+@@ -1672,6 +1694,14 @@
+         for assessment in result.assessments:
+             row = asdict(assessment)
+             row.update(observed_at=result.task.observed_at, detail=assessment.reason)
++            candidate = getattr(self,'_uniform_observation',None)
++            if candidate is not None and assessment.garment is not None:
++                ticket = next((t for t in result.task.uniform_tickets or ()
++                    if t.key[-2:]==(assessment.track_id,assessment.presence_id)),None)
++                if ticket is None or not candidate.result_valid(assessment.garment,ticket):
++                    row.update(state='Unable to assess',garment=None,
++                        reason='Candidate evidence expired or association changed',
++                        detail='Candidate evidence expired or association changed')
+             projection = projections.get(assessment.track_id)
+             if sample.frame_id == result.task.context.frame_id:
+                 box = assessment.face_box
+@@ -1727,6 +1757,9 @@
+                 self._halt_camera()
+             if self._active_nav == "live":
+                 model_message = self._readiness.message()
++                candidate = getattr(self,'_uniform_observation',None)
++                if candidate is not None:
++                    model_message += ' · '+candidate.status_text()
+                 if model_message != getattr(self, '_model_status_text', None):
+                     self._status_models.configure(text=model_message)
+                     self._model_status_text = model_message
+--- a/ui/live_alerts.py
++++ b/ui/live_alerts.py
+@@ -38,6 +38,10 @@
+     "uniform_not_assessed": ("Uniform not assessed", COLOR_TEXT_MUTED),
+     "enrollment_review": ("Enrollment review", "#C778DD"),
+     "unknown_person": ("Unknown person", COLOR_WARNING),
++    "campus_uniform_recognized": ("Campus Uniform recognized", COLOR_ACCENT),
++    "organizational_shirt_recognized": ("Organizational Shirt recognized", COLOR_ACCENT),
++    "other_clothing_recognized": ("Other clothing recognized", COLOR_ACCENT),
++    "unable_to_assess": ("Unable to assess", COLOR_TEXT_MUTED),
+ }
+ 
+ 
+--- a/scripts/replay_camera_assessment.py
++++ b/scripts/replay_camera_assessment.py
+@@ -289,6 +289,9 @@
+                         help="candidate mode: retain/select clearer original frames per passage")
+     parser.add_argument("--prioritized-assessment", action="store_true",
+                         help="candidate mode: enable fair prioritized candidate scheduling")
++    parser.add_argument('--uniform-observation-config',type=Path,
++                        help='Explicit Stage 4 candidate config; observation-only, no activation')
++    parser.add_argument('--body-backend',choices=('cpu','mps'),default=None)
+     args = parser.parse_args()
+     if not args.video.is_file() or (args.evaluation_db and not args.evaluation_db.is_file()):
+         parser.error("video and optional evaluation DB must be local files")
+@@ -298,6 +301,8 @@
+         parser.error("identity alias map must be a local JSON file")
+     if args.max_frames < 0:
+         parser.error("--max-frames cannot be negative")
++    if args.uniform_observation_config and args.mode!='candidate':
++        parser.error('Uniform observation config requires candidate mode')
+     try:
+         labels = load_annotations(args.annotations)
+     except ValueError as exc:
+@@ -313,6 +318,16 @@
+     from core.trainer import ViolationTrainer
+     from core.uniform_matcher import UniformColorMatcher
+     from core.performance import PERF, TRACES
++    from core.uniform_observation import ObservationConfig,ObservationUniformSession
++    from core.uniform_latency import UniformPassageMetrics
++    from core.uniform_model_registry import digest
++    from dataclasses import replace
++
++    uniform_session = (ObservationUniformSession(ObservationConfig.load(args.uniform_observation_config))
++                       if args.uniform_observation_config else None)
++    uniform_metrics = UniformPassageMetrics()
++    for annotation in labels:
++        uniform_metrics.observe_labels(annotation['people'])
+ 
+     capture = cv2.VideoCapture(str(args.video))
+     if not capture.isOpened():
+@@ -327,7 +342,7 @@
+     skipped_for_lag = 0
+     worker = None
+     database = None
+-    detector = PersonDetector()
++    detector = PersonDetector(backend=args.body_backend or (uniform_session.config.backend if uniform_session else None))
+     trainer = ViolationTrainer()
+     started = time.monotonic()
+     try:
+@@ -354,16 +369,21 @@
+             recognizer._ensure_models()
+             detector._ensure_model()
+             detector.detect_persons(first_frame)
+-            if trainer.is_trained("uniform"):
++            if uniform_session is not None:
++                uniform_session.prepare()
++                uniform_session.predictor.timed_probabilities(first_frame)
++            elif trainer.is_trained("uniform"):
+                 trainer.predict_proba("uniform", first_frame)
+             warmup_wall_ms = round((time.monotonic() - warm_started) * 1000, 2)
+             capture.set(cv2.CAP_PROP_POS_FRAMES, 0)
+             tracker = FaceTrackingProcessor(recognizer, detector)
+             processor = LiveProcessor(database, recognizer, detector, trainer, matcher,
+-                                      SimpleNamespace(), state=LiveState(), observation_only=True)
++                                      SimpleNamespace(), state=LiveState(), observation_only=True,
++                                      uniform_observation=uniform_session)
+             candidate_route = args.mode == "candidate" and (
+-                args.clear_frame_selection or args.prioritized_assessment)
+-            router = ClearFrameRouter() if candidate_route else None
++                args.clear_frame_selection or args.prioritized_assessment or uniform_session is not None)
++            router = (ClearFrameRouter(fresh_selection=True,ttl=uniform_session.config.frame_ttl)
++                      if uniform_session is not None else ClearFrameRouter() if candidate_route else None)
+             aliases = {}
+             if args.identity_alias_map:
+                 aliases = json.loads(args.identity_alias_map.read_text(encoding="utf-8"))
+@@ -402,6 +422,11 @@
+                 assessment_rows += len(result.assessments)
+                 metric.record_assessments(selected_index, selected_ms, selected_labels,
+                     result.task.observations or (), result.assessments, completion_ms=completion_ms)
++                if uniform_session is not None:
++                    for li,oi in metric._matches(selected_labels,result.task.observations or ()).items():
++                        if oi<len(result.assessments):
++                            uniform_metrics.record(selected_labels[li]['passage_alias'],
++                                result.assessments[oi].garment,completion_ms)
+             def dispatch_candidate():
+                 nonlocal selected_count, assessment_calls
+                 if router is None or worker.stop_event.is_set():
+@@ -440,6 +465,7 @@
+                 _camera_generation=0, _monitor_offer_time=-1e9,
+                 _live_worker=SimpleNamespace(offer=baseline_offer))
+             index = 0
++            replay_cancelled = threading.Event()
+             next_frame_at = time.monotonic()
+             while args.max_frames == 0 or index < args.max_frames:
+                 delay = next_frame_at-time.monotonic()
+@@ -463,18 +489,20 @@
+                     next_frame_at = replay_clock_start + index / fps
+                     continue
+                 task = MonitorTask(FrameContext(1, ("replay", index), captured), frame,
+-                    time.time(), threading.Event(), source_id="local-replay",
++                    time.time(), replay_cancelled, source_id="local-replay",
+                     source_label="Local evaluation replay", observation_only=True)
+                 with TRACES.observation(task, 'tracking', captured):
+                     tracked = tracker.analyze(task)
+                     TRACES.result(tracked)
+                 if tracked is not None:
++                    if uniform_session is not None:
++                        tracked = replace(tracked,task=uniform_session.observe(tracked.task,tracked.observations))
+                     if people and tracked.observations:
+                         metric.record_detections(index, media_ms, people, tracked.observations)
+                         metric.record_usable(index, media_ms, people, tracked.observations)
+                     if router is not None:
+                         router.observe(tracked, prioritize=args.prioritized_assessment,
+-                                       select=args.clear_frame_selection)
++                                       select=args.clear_frame_selection or uniform_session is not None)
+                         dispatch_candidate()
+                     else:
+                         CBVMSDashboard._on_localized(baseline_owner, tracked)
+@@ -532,7 +560,7 @@
+         "stage_timings": PERF.snapshot(), "observation_traces": TRACES.snapshot(),
+         "compute_latency_samples_dropped": compute_samples_dropped,
+         "frames_skipped_for_lag": skipped_for_lag,
+-        "passage_latency_verified": skipped_for_lag == 0,
++        "passage_latency_verified": skipped_for_lag == 0 and metrics.get('passage_count',0)>0,
+         "latency_clock": "paced video playback monotonic completion time; capture evidence uses video frame timeline; timing unverified if frames skipped",
+         "elapsed_wall_ms": round(elapsed*1000, 2),
+         "warmup_wall_ms": warmup_wall_ms,
+@@ -546,6 +574,19 @@
+         "evaluation_database_copied_to_private_temp_and_discarded": bool(args.evaluation_db),
+         "passage_details_written": False,
+         "comparison_requires_same_video_annotations_evaluation_db_and_flags": True}
++    if uniform_session is not None:
++        uniform_report = uniform_metrics.report()
++        report.update(uniform_passage_metrics=uniform_report,
++            uniform_candidate={'sha256':uniform_session.config.candidate_sha256,
++                'config_version':uniform_session.config.version,
++                'descriptor':{k:uniform_session.descriptor.get(k) for k in
++                    ('id','dataset_version','preprocessing_version','synthetic')},
++                'backend':uniform_session.predictor.backend_status()},
++            input_hashes={'video':digest(args.video),'annotations':digest(args.annotations)},
++            physical_camera_measurement=False,
++            passage_latency_verified=(skipped_for_lag==0 and
++                uniform_report['annotated_zone_entry_to_first_decision']['count']>0 and
++                uniform_report['annotated_first_usable_to_first_decision']['count']>0))
+     args.output.parent.mkdir(parents=True, exist_ok=True)
+     args.output.write_text(json.dumps(report, sort_keys=True) + "\n", encoding="utf-8")
+     print(json.dumps(report, sort_keys=True))
+--- /dev/null
++++ b/core/uniform_observation.py
+@@ -0,0 +1,392 @@
++"""Candidate garment assessment on tracked pixels; no database, camera or Tk owner.
++
++The tracker supplies immutable tickets. New tracking observations can invalidate
++in-flight work without waiting for ML. One analysis worker owns the predictor.
++Policy results are descriptive observations only and never disciplinary events.
++"""
++from collections import OrderedDict
++from dataclasses import dataclass, field, replace
++from pathlib import Path
++import math
++import os
++import threading
++import time
++import uuid
++
++import cv2
++
++from core.live_state import validate_torso
++from core.person_detector import skin_fraction, MAX_TORSO_SKIN_FRACTION
++from core.uniform_model_registry import (CandidatePredictor, candidate_descriptor,
++    json_hash, read_json, policy_rule, CLASSES)
++
++LABELS = {'campus_uniform':'Campus Uniform recognized',
++          'organizational_shirt':'Organizational Shirt recognized',
++          'other_clothing':'Other clothing recognized', None:'Unable to assess'}
++CONFIG_ENV = 'CBVMS_UNIFORM_OBSERVATION_CONFIG'
++
++
++@dataclass(frozen=True)
++class ObservationConfig:
++    candidate_bundle: str
++    candidate_sha256: str
++    recognition_confidence: float
++    backend: str = 'cpu'
++    assessment_zone: tuple | None = None
++    policy: dict | None = None
++    # Stage 1 quality-review heuristics, not calibrated accuracy thresholds.
++    minimum_torso_px: int = 160
++    minimum_sharpness: float = 25.
++    evidence_ttl: float = 1.
++    refresh_interval: float = .5
++    frame_ttl: float = 1.
++    max_passages: int = 48
++
++    @classmethod
++    def load(cls, path):
++        path = Path(path).resolve()
++        data = read_json(path)
++        if data.pop('schema', None) != 1 or data.pop('mode', None) != 'observation_only':
++            raise ValueError('Explicit schema-1 observation_only configuration required')
++        if set(data) - set(cls.__dataclass_fields__):
++            raise ValueError('Unknown observation configuration fields')
++        bundle = Path(data['candidate_bundle'])
++        data['candidate_bundle'] = str(bundle if bundle.is_absolute() else path.parent/bundle)
++        if data.get('assessment_zone') is not None:
++            data['assessment_zone'] = tuple(data['assessment_zone'])
++        config = cls(**data)
++        config.validate()
++        return config
++
++    def validate(self):
++        if self.backend not in ('cpu','mps'):
++            raise ValueError('Candidate backend must be cpu or mps')
++        if (not isinstance(self.candidate_sha256,str) or len(self.candidate_sha256) != 64 or
++                any(c not in '0123456789abcdef' for c in self.candidate_sha256)):
++            raise ValueError('Pin the candidate weight SHA256')
++        for name, low, high in (('recognition_confidence',.5,1),('minimum_sharpness',0,10000),
++                                ('evidence_ttl',.1,3),('refresh_interval',.1,3),('frame_ttl',.1,3)):
++            value = getattr(self,name)
++            if type(value) not in (int,float) or not math.isfinite(value) or not low <= value <= high:
++                raise ValueError('Invalid observation '+name)
++        if self.refresh_interval > self.evidence_ttl:
++            raise ValueError('Refresh interval cannot exceed evidence TTL')
++        if type(self.minimum_torso_px) is not int or not 32 <= self.minimum_torso_px <= 1024:
++            raise ValueError('Invalid minimum torso resolution')
++        if type(self.max_passages) is not int or not 1 <= self.max_passages <= 48:
++            raise ValueError('Passage capacity must be from 1 to 48')
++        if self.assessment_zone is not None:
++            z = self.assessment_zone
++            if (len(z)!=4 or any(type(v) not in (int,float) or not math.isfinite(v) for v in z)
++                    or not (0<=z[0]<z[2]<=1 and 0<=z[1]<z[3]<=1)):
++                raise ValueError('Assessment zone must be normalized x1,y1,x2,y2')
++        if self.policy is not None:
++            if not isinstance(self.policy,dict) or self.policy != policy_rule(self.policy.get('minimum_confidence')):
++                raise ValueError('Only the existing versioned garment policy is supported')
++
++    @property
++    def version(self):
++        from dataclasses import asdict
++        return json_hash(asdict(self))
++
++
++@dataclass(frozen=True)
++class TorsoTicket:
++    key: tuple
++    passage_id: str
++    revision: int
++    captured_at: float
++    frame_id: tuple
++    torso_box: tuple | None
++    usable: bool
++    reason: str
++
++
++@dataclass(frozen=True)
++class GarmentObservation:
++    passage_id: str
++    label: str | None
++    confidence: float
++    reason: str
++    model_version: str
++    policy_version: str
++    policy_outcome: str | None = None
++    cached: bool = False
++    timings: dict = field(default_factory=dict)
++    decision_at: float = 0.
++    evidence_at: float = 0.
++
++    @property
++    def state(self): return LABELS[self.label]
++
++
++@dataclass
++class _Passage:
++    passage_id: str
++    entered: float
++    seen: float
++    first_usable: float | None = None
++    revision: int = 0
++    signature: tuple | None = None
++    last_ticket: TorsoTicket | None = None
++    result: GarmentObservation | None = None
++    last_attempt_frame: tuple | None = None
++    identity_owner: str | None = None
++
++
++class ObservationUniformSession:
++    """Bounded same-camera/session/track evidence, with no production activation."""
++    def __init__(self, config, *, predictor_factory=CandidatePredictor, clock=time.monotonic):
++        config.validate()
++        self.config = config
++        self.clock = clock
++        self.session_id = uuid.uuid4().hex
++        self._version = config.version
++        self._epoch = 0
++        self._lock = threading.RLock()
++        self._load_lock = threading.Lock()
++        self._passages = OrderedDict()
++        self._scope = None
++        self._latest = -math.inf
++        self._predictor_factory = predictor_factory
++        self.predictor = None
++        self.descriptor = None
++        self.error = ''
++
++    @classmethod
++    def from_environment(cls, *, observation_only):
++        path = os.environ.get(CONFIG_ENV)
++        if not path: return None
++        if not observation_only:
++            raise ValueError(CONFIG_ENV+' requires CBVMS_ASSESSMENT_OBSERVATION_ONLY=1')
++        return cls(ObservationConfig.load(path))
++
++    @property
++    def version_token(self): return f'{self.session_id}:{self._epoch}:{self._version}'
++
++    def matches(self, token): return token == self.version_token
++
++    def invalidate(self):
++        with self._lock:
++            self._epoch += 1
++            self._passages.clear()
++            self._scope = None
++            self._latest = -math.inf
++
++    def prepare(self):
++        # Called only by model warmup/analysis workers, never rendering or Tk.
++        with self._load_lock:
++            if self.predictor is not None: return
++            if self.error: raise RuntimeError(self.error)
++            try:
++                info = candidate_descriptor(self.config.candidate_bundle)
++                if info['id'] != self.config.candidate_sha256:
++                    raise ValueError('Observation candidate hash changed')
++                predictor = self._predictor_factory(self.config.candidate_bundle, backend=self.config.backend)
++                self.descriptor, self.predictor = info, predictor
++            except Exception as exc:
++                self.error = str(exc)
++                raise
++
++    def status_text(self):
++        if self.error: return 'Candidate observation unavailable: '+self.error
++        if self.predictor is None: return 'Observation only · Loading candidate'
++        device = self.predictor.backend_status()['active']
++        synthetic = ' · synthetic test model' if self.descriptor.get('synthetic') else ''
++        return f'Observation only · Candidate {self.config.candidate_sha256[:12]} · {device.upper()}{synthetic}'
++
++    def _quality(self, task, observation, observations):
++        o = observation
++        if o.body_index is None:
++            return False,'No tracked body association',None
++        valid, reason = validate_torso(o.box,o.body_box,o.torso_box,task.frame.shape,
++            other_faces=[x.box for x in observations if x is not o],
++            other_bodies=[x.body_box for x in observations if x is not o and x.body_box is not None])
++        if not valid: return False, reason, None
++        x1,y1,x2,y2 = o.torso_box
++        for other in observations:
++            if other is o or other.torso_box is None:continue
++            a,b,c,d = other.torso_box
++            overlap = max(0,min(x2,c)-max(x1,a))*max(0,min(y2,d)-max(y1,b))
++            if overlap>.03*(x2-x1)*(y2-y1):
++                return False,'Another tracked torso overlaps this crop',None
++        face,body = o.box,o.body_box
++        fw,fh = max(1,face[2]-face[0]),max(1,face[3]-face[1])
++        signature = ((body[0]-face[0])/fw,(body[1]-face[1])/fh,
++                     (body[2]-face[2])/fw,(body[3]-face[3])/fh)
++        x1,y1,x2,y2 = map(int,o.torso_box)
++        crop = task.frame[y1:y2,x1:x2]
++        if min(crop.shape[:2]) < self.config.minimum_torso_px:
++            return False,'Insufficient torso resolution',signature
++        if skin_fraction(crop)>MAX_TORSO_SKIN_FRACTION:
++            return False,'Torso obscured or mostly skin',signature
++        # Same scale/cutoff as Stage 1's review warning, not a measured accuracy gate.
++        h,w = crop.shape[:2]
++        scale = min(1.,512/max(h,w))
++        small = cv2.resize(crop,(round(w*scale),round(h*scale))) if scale<1 else crop
++        sharpness = float(cv2.Laplacian(cv2.cvtColor(small,cv2.COLOR_BGR2GRAY),cv2.CV_32F).var())
++        if sharpness < self.config.minimum_sharpness:
++            return False,'Possible blur; waiting for fresh usable torso evidence',signature
++        return True,'Usable associated torso',signature
++
++    def _inside_zone(self, observation, shape):
++        if self.config.assessment_zone is None: return True
++        box = observation.body_box or observation.box
++        h,w = shape[:2]; x,y = (box[0]+box[2])/(2*w),(box[1]+box[3])/(2*h)
++        a,b,c,d = self.config.assessment_zone
++        return a<=x<=c and b<=y<=d
++
++    def observe(self, task, observations):
++        """Tracking-thread handoff: validate fresh geometry even while ML is busy."""
++        observations = tuple(observations or ())
++        now = self.clock()
++        tickets = []
++        # Retain the bounded Event identity itself; a recycled Python id must not
++        # let a later session inherit evidence when external generations repeat.
++        scope = (task.source_id,self.session_id,task.cancelled,task.context.generation,
++                 task.camera_generation,self._version)
++        with self._lock:
++            if not task.uniform_enabled:
++                self.invalidate()
++                return self._attach(task,())
++            if not task.valid(now) or not 0<=now-task.context.captured_at<=self.config.frame_ttl:
++                return self._attach(task, ())
++            if scope != self._scope:
++                self.invalidate()
++                self._scope = scope
++            stamp = task.context.captured_at
++            if stamp <= self._latest:
++                return self._attach(task, ())
++            self._latest = stamp
++            keys = {scope+(o.track_id,o.presence_id) for o in observations if self._inside_zone(o,task.frame.shape)}
++            for key in list(self._passages):
++                if key not in keys or now-self._passages[key].seen>self.config.evidence_ttl:
++                    del self._passages[key]
++            for o in observations[:self.config.max_passages]:
++                key = scope+(o.track_id,o.presence_id)
++                if key not in keys: continue
++                p = self._passages.get(key)
++                if p is None:
++                    p = self._passages[key] = _Passage(uuid.uuid4().hex,stamp,stamp)
++                p.seen = stamp
++                usable,reason,signature = self._quality(task,o,observations)
++                changed = (signature is not None and p.signature is not None and
++                    max(abs(a-b) for a,b in zip(signature,p.signature))>1.25)
++                if not usable or changed:
++                    p.revision += 1
++                    p.result = None
++                p.signature = signature
++                if usable and p.first_usable is None: p.first_usable = stamp
++                ticket = TorsoTicket(key,p.passage_id,p.revision,stamp,task.context.frame_id,
++                                     o.torso_box,usable,reason)
++                p.last_ticket = ticket
++                tickets.append(ticket)
++                self._passages.move_to_end(key)
++            while len(self._passages)>self.config.max_passages:
++                self._passages.popitem(last=False)
++        return self._attach(task,tuple(tickets))
++
++    @staticmethod
++    def _attach(task,tickets):
++        from copy import copy
++        result = copy(task)
++        object.__setattr__(result,'uniform_tickets',tickets)
++        return result
++
++    def _current(self,ticket,now):
++        p = self._passages.get(ticket.key)
++        return p if (p is not None and not ticket.key[2].is_set() and p.passage_id==ticket.passage_id and
++            p.revision==ticket.revision and 0<=now-p.seen<=self.config.evidence_ttl and
++            0<=now-ticket.captured_at<=self.config.frame_ttl) else None
++
++    def result_valid(self, result, ticket):
++        with self._lock:
++            return bool(self._current(ticket,self.clock()) is not None and
++                result.passage_id==ticket.passage_id and
++                result.model_version==self.config.candidate_sha256 and
++                result.policy_version==self._version and
++                (result.label is None or self.clock()-result.evidence_at<=self.config.evidence_ttl))
++
++    def bind_identity(self,ticket,owner):
++        """Identity changes revoke cached garment evidence, never relabel it."""
++        with self._lock:
++            p = self._current(ticket,self.clock())
++            if p is not None:
++                if p.identity_owner is not None and owner!=p.identity_owner:
++                    p.revision += 1
++                    p.result = None
++                    p.last_attempt_frame = None
++                    ticket = replace(ticket,revision=p.revision)
++                p.identity_owner = owner
++            return ticket
++
++    def assess(self, task, ticket):
++        started = self.clock()
++        policy_text = 'Policy not configured; department/day/schedule permissions unassessed'
++        if self.config.policy is not None:
++            policy_text = 'Existing garment policy only; department/day/schedule permissions unassessed'
++        with self._lock:
++            p = self._current(ticket,started)
++            if p is None or not task.valid(started): return None
++            if p.result is not None and ticket.captured_at<p.result.evidence_at:return None
++            def unknown(reason):
++                return GarmentObservation(p.passage_id,None,0.,reason+' · '+policy_text,
++                    self.config.candidate_sha256,self._version,decision_at=self.clock(),evidence_at=ticket.captured_at)
++            if not ticket.usable: return unknown(ticket.reason)
++            if (p.result is not None and p.result.label is not None and
++                    0<=ticket.captured_at-p.result.evidence_at<self.config.refresh_interval and
++                    started-p.result.evidence_at<=self.config.evidence_ttl):
++                return replace(p.result,cached=True,reason='Reused recent associated evidence · '+policy_text)
++            if p.last_attempt_frame==ticket.frame_id: return p.result
++            p.last_attempt_frame=ticket.frame_id
++        try:
++            self.prepare()
++            # Loading can outlive this frame. Never run inference on that stale crop.
++            with self._lock:
++                if self._current(ticket,self.clock()) is None or not task.valid(self.clock()): return None
++            x1,y1,x2,y2 = map(int,ticket.torso_box)
++            measured = self.predictor.timed_probabilities(task.frame[y1:y2,x1:x2])
++            probabilities = measured['probabilities']
++            if (set(probabilities)!=set(CLASSES) or any(not math.isfinite(v) or not 0<=v<=1 for v in probabilities.values())
++                    or abs(sum(probabilities.values())-1)>.001):
++                raise ValueError('Invalid garment probabilities')
++            raw = max(probabilities,key=probabilities.get)
++            confidence = probabilities[raw]
++            label = raw if confidence>=self.config.recognition_confidence else None
++            policy = None
++            if label is not None and self.config.policy is not None:
++                compliant = sum(probabilities[k] for k in self.config.policy['accepted_classes'])
++                if max(compliant,1-compliant)>=self.config.policy['minimum_confidence']:
++                    policy = 'compliant' if compliant>=.5 else 'violation'
++            finished = self.clock()
++            with self._lock:
++                p = self._current(ticket,finished)
++                if p is None or not task.valid(finished): return None
++                if p.result is not None and ticket.captured_at<p.result.evidence_at:return None
++                timings = dict(measured['timings'])
++                timings.update(queue_delay_ms=(1000*max(0,task.analysis_started_at-task.assessment_queued_at)
++                        if task.analysis_started_at is not None and task.assessment_queued_at is not None else None),
++                    capture_to_classifier_start_ms=1000*max(0,started-ticket.captured_at),
++                    assessment_ms=1000*(finished-started),
++                    capture_to_decision_ms=1000*(finished-ticket.captured_at),
++                    zone_entry_to_decision_ms=(1000*(finished-p.entered) if self.config.assessment_zone is not None else None),
++                    first_usable_to_decision_ms=1000*(finished-p.first_usable))
++                reason = ('Garment recognized' if label else 'Uncertain garment classification')+' · '+policy_text
++                if policy: reason += ' · Garment policy: '+policy
++                result = GarmentObservation(p.passage_id,label,confidence,reason,
++                    self.config.candidate_sha256,self._version,policy,timings=timings,
++                    decision_at=finished,evidence_at=ticket.captured_at)
++                p.result = result
++                return result
++        except Exception as exc:
++            with self._lock:
++                p = self._current(ticket,self.clock())
++                if p is None: return None
++                p.result = unknown('Candidate assessment failed: '+str(exc))
++                return p.result
++
++    def snapshot(self):
++        with self._lock:
++            return {'version':self.version_token,'passages':len(self._passages),
++                    'max_passages':self.config.max_passages,'model':self.config.candidate_sha256,
++                    'policy_configured':self.config.policy is not None,'error':self.error}
+--- /dev/null
++++ b/core/uniform_latency.py
+@@ -0,0 +1,109 @@
++"""Passage-level replay accounting. Missing ground truth remains missing."""
++import math
++import statistics
++from core.uniform_model_registry import CLASSES
++
++
++def distribution(values):
++    values=sorted(float(x) for x in values if x is not None and math.isfinite(x) and x>=0)
++    if not values:return {'count':0,'median_ms':None,'p95_ms':None}
++    index=(len(values)-1)*.95;lo=int(index);hi=min(lo+1,len(values)-1)
++    return {'count':len(values),'median_ms':statistics.median(values),
++            'p95_ms':values[lo]+(values[hi]-values[lo])*(index-lo)}
++
++
++class UniformPassageMetrics:
++    """Caller supplies authorized alias/geometry matches, never inferred labels.
++
++    Annotation times use replay media milliseconds. Both latency endpoints end at
++    actual wall-clock completion on that replay clock. Detector-observed timings
++    are kept separate from human-annotated zone/usable-frame timings.
++    """
++    def __init__(self):
++        self.passages={}
++        self.samples=[]
++        self.sample_keys=set()
++        self.limit=10000
++        self.dropped=0
++
++    def observe_labels(self,people):
++        for row in people:
++            alias=row.get('passage_alias')
++            if not isinstance(alias,str) or not alias:continue
++            if alias not in self.passages:
++                if len(self.passages)>=self.limit:raise ValueError('Passage report limit exceeded')
++                self.passages[alias]={'truth':{},'first_decision':None,'first_usable_decision':None,
++                                      'first_recognition':None,'latest':None,'updates':0}
++            p=self.passages[alias]
++            for name in ('zone_entry_ms','first_usable_torso_ms','garment_label','policy_label'):
++                value=row.get(name)
++                if value is None:continue
++                if name.endswith('_ms'):
++                    if type(value) not in (float,int) or not math.isfinite(value) or value<0:
++                        raise ValueError('Invalid annotated passage timestamp')
++                elif name=='garment_label' and value not in CLASSES:
++                    raise ValueError('Invalid garment ground truth')
++                elif name=='policy_label' and value not in ('compliant','violation'):
++                    raise ValueError('Invalid policy ground truth')
++                if name in p['truth'] and p['truth'][name]!=value:
++                    raise ValueError('Conflicting passage annotation; split distinct passages explicitly')
++                p['truth'][name]=value
++
++    def record(self,alias,garment,completion_ms):
++        if alias not in self.passages or garment is None:return
++        if not math.isfinite(completion_ms) or completion_ms<0:raise ValueError('Invalid completion time')
++        p=self.passages[alias];p['latest']=garment;p['updates']+=1
++        if p['first_decision'] is None:p['first_decision']=completion_ms
++        usable=p['truth'].get('first_usable_torso_ms')
++        if usable is not None and completion_ms>=usable and p['first_usable_decision'] is None:
++            p['first_usable_decision']=completion_ms
++        if garment.label is not None and p['first_recognition'] is None:p['first_recognition']=completion_ms
++        key=(garment.passage_id,garment.evidence_at)
++        if not garment.cached and key not in self.sample_keys and garment.timings:
++            if len(self.samples)<self.limit:
++                self.sample_keys.add(key);self.samples.append(garment.timings)
++            else:self.dropped+=1
++
++    def report(self):
++        ps=list(self.passages.values())
++        zone=[];usable=[];recognition=[];zone_recognition=[]
++        labelled=correct=policy_labelled=policy_ground_truth=false_violation=missed_violation=0
++        for p in ps:
++            truth=p['truth'];last=p['latest']
++            entry=truth.get('zone_entry_ms');first=truth.get('first_usable_torso_ms')
++            if entry is not None and p['first_decision'] is not None and p['first_decision']>=entry:
++                zone.append(p['first_decision']-entry)
++            if first is not None and p['first_usable_decision'] is not None:
++                usable.append(p['first_usable_decision']-first)
++            if first is not None and p['first_recognition'] is not None and p['first_recognition']>=first:
++                recognition.append(p['first_recognition']-first)
++            if entry is not None and p['first_recognition'] is not None and p['first_recognition']>=entry:
++                zone_recognition.append(p['first_recognition']-entry)
++            if truth.get('garment_label') is not None:
++                labelled+=1;correct+=int(last is not None and last.label==truth['garment_label'])
++            policy_ground_truth+=int(truth.get('policy_label') is not None)
++            if truth.get('policy_label') is not None and last is not None and last.policy_outcome is not None:
++                policy_labelled+=1
++                false_violation+=int(truth['policy_label']=='compliant' and last.policy_outcome=='violation')
++                missed_violation+=int(truth['policy_label']=='violation' and last.policy_outcome=='compliant')
++        return {'passage_count':len(ps),'missed_passages':sum(p['latest'] is None for p in ps),
++            'unassessed_passages':sum(p['latest'] is not None and p['latest'].label is None for p in ps),
++            'recognized_passages':sum(p['latest'] is not None and p['latest'].label is not None for p in ps),
++            'annotated_zone_entry_to_first_decision':distribution(zone),
++            'annotated_first_usable_to_first_decision':distribution(usable),
++            'annotated_first_usable_to_first_recognition':distribution(recognition),
++            'annotated_zone_entry_to_first_recognition':distribution(zone_recognition),
++            'classification_ground_truth_passages':labelled,
++            'correct_classification_passages':correct if labelled else None,
++            'policy_scored_passages':policy_labelled,
++            'policy_ground_truth_passages':policy_ground_truth,
++            'policy_unassessed_passages':policy_ground_truth-policy_labelled,
++            'false_violations':false_violation if policy_labelled else None,
++            'missed_violations':missed_violation if policy_labelled else None,
++            'inference_samples':len(self.samples),'samples_dropped':self.dropped,
++            'stages':{name:distribution([s.get(name) for s in self.samples]) for name in
++                ('preprocessing_ms','inference_ms','queue_delay_ms','assessment_ms','capture_to_decision_ms')},
++            'limitations':['Decision includes unable-to-assess; recognition latency is reported separately.',
++                'Missing passage/timing/garment/policy labels are not inferred from filenames or predictions.',
++                'Stage distributions count fresh inference attempts, not cache hits or independent people.',
++                '500 ms from first usable torso is an initial target, not an acceptance guarantee.']}
+--- /dev/null
++++ b/scripts/benchmark_uniform_backends.py
+@@ -0,0 +1,486 @@
++"""Read-only bounded CPU/MPS timings for an existing uniform candidate bundle.
++
++No camera, training, activation, data writes, face inference, or model downloads.
++Input images are consumed in memory and only their content hashes/dimensions are
++written to the output report.
++"""
++from __future__ import annotations
++
++import argparse
++import hashlib
++import io
++import json
++import os
++import platform
++import statistics
++import subprocess
++import sys
++import tempfile
++import time
++from pathlib import Path
++from typing import Callable
++
++ROOT = Path(__file__).resolve().parents[1]
++if str(ROOT) not in sys.path:
++    sys.path.insert(0, str(ROOT))
++os.environ.setdefault("MPLCONFIGDIR", str(Path(tempfile.gettempdir()) / "cbvms-uniform-benchmark-mpl"))
++os.environ.setdefault("YOLO_CONFIG_DIR", str(Path(tempfile.gettempdir()) / "cbvms-uniform-benchmark-yolo"))
++
++import cv2
++import numpy as np
++from PIL import Image, UnidentifiedImageError
++
++MAX_INPUTS = 100
++MAX_IMAGE_BYTES = 20 * 1024 * 1024
++MAX_IMAGE_PIXELS = 40_000_000
++MAX_TOTAL_INPUT_PIXELS = 80_000_000
++MAX_IMAGE_DIMENSION = 12_000
++MAX_REPEATS = 100
++MAX_WARMUP = 20
++BENCHMARK_THREADS = 2
++BODY_PREDICTOR_STAGES = ("preprocess", "inference", "postprocess")
++
++
++def build_parser() -> argparse.ArgumentParser:
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("--candidate", required=True, help="Existing completed Stage 2 candidate bundle directory")
++    source = parser.add_mutually_exclusive_group(required=True)
++    source.add_argument("--images", nargs="+", help="Explicit image paths; inputs are not copied or logged by filename")
++    source.add_argument("--synthetic-fixture", action="store_true", help="Use a deterministic generated raster; report is synthetic")
++    parser.add_argument("--backend", choices=("cpu", "mps", "both"), default="cpu")
++    parser.add_argument("--repeats", type=int, default=10)
++    parser.add_argument("--warmup", type=int, default=2)
++    parser.add_argument("--output", required=True, help="Output JSON report path")
++    return parser
++
++
++def _load_input_images(paths: list[str] | None, *, synthetic_fixture: bool) -> tuple[list[dict], list[dict]]:
++    if synthetic_fixture:
++        # Deterministic synthetic raster pixels; no person identity or source photos.
++        height, width = 480, 640
++        y, x = np.indices((height, width), dtype=np.uint16)
++        raster = np.stack(((3 * x + y) % 256, (x + 5 * y) % 256,
++                           (7 * x + 2 * y) % 256), axis=2).astype(np.uint8)
++        payload = cv2.imencode(".png", raster)[1].tobytes()
++        return [raster], [{"sha256": hashlib.sha256(payload).hexdigest(),
++                            "width": width, "height": height}]
++    if not paths:
++        raise ValueError("Provide one or more --images or choose --synthetic-fixture")
++    if len(paths) > MAX_INPUTS:
++        raise ValueError(f"Input count exceeds bounded limit of {MAX_INPUTS}")
++    images, metadata = [], []
++    total_pixels = 0
++    for source in paths:
++        path = Path(source)
++        try:
++            if path.is_symlink() or not path.is_file():
++                raise ValueError("Every input must be a regular non-symlink image file")
++            size = path.stat().st_size
++        except OSError:
++            raise ValueError("Unable to inspect an input image") from None
++        if size <= 0 or size > MAX_IMAGE_BYTES:
++            raise ValueError("Input image exceeds bounded file-size limit")
++        try:
++            with path.open("rb") as stream:
++                data = stream.read(MAX_IMAGE_BYTES + 1)
++        except OSError:
++            raise ValueError("Unable to read an input image") from None
++        if len(data) != size or len(data) > MAX_IMAGE_BYTES:
++            raise ValueError("Input image changed during bounded read")
++        try:
++            with Image.open(io.BytesIO(data)) as header:
++                width, height = header.size
++                image_format = (header.format or "").upper()
++                frame_count = getattr(header, "n_frames", 1)
++        except (UnidentifiedImageError, OSError, Image.DecompressionBombError):
++            raise ValueError("Input is not a readable supported image") from None
++        if image_format not in {"JPEG", "PNG", "WEBP", "BMP", "TIFF"} or frame_count != 1:
++            raise ValueError("Input image format is unsupported or animated")
++        if (width < 16 or height < 16 or width > MAX_IMAGE_DIMENSION
++                or height > MAX_IMAGE_DIMENSION or width * height > MAX_IMAGE_PIXELS):
++            raise ValueError("Input image dimensions exceed supported bounds")
++        total_pixels += width * height
++        if total_pixels > MAX_TOTAL_INPUT_PIXELS:
++            raise ValueError("Combined input pixel count exceeds the retained-memory budget")
++        try:
++            raster = cv2.imdecode(np.frombuffer(data, dtype=np.uint8),
++                                  cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION)
++        except Exception:
++            raise ValueError("Unable to decode an input image") from None
++        if raster is None or raster.ndim != 3 or raster.shape[2] != 3:
++            raise ValueError("Input is not a supported color raster image")
++        if raster.shape[:2] != (height, width):
++            raise ValueError("Decoded raster dimensions disagree with the bounded image header")
++        images.append(raster)
++        metadata.append({"sha256": hashlib.sha256(data).hexdigest(),
++                         "width": width, "height": height})
++    return images, metadata
++
++
++def _percentile95(values: list[float]) -> float | None:
++    if not values:
++        return None
++    return float(np.percentile(np.asarray(values, dtype=np.float64), 95, method="linear"))
++
++
++def _timing_summary(values: list[float]) -> dict:
++    return {"count": len(values),
++            "median_ms": float(statistics.median(values)) if values else None,
++            "p95_ms": _percentile95(values)}
++
++
++def _safe_error(exc: BaseException, secret_paths: list[str]) -> dict:
++    message = " ".join(str(exc).split())
++    for path in secret_paths:
++        if path:
++            message = message.replace(path, "[path]")
++            message = message.replace(Path(path).name, "[file]")
++    return {"type": type(exc).__name__, "message": message[:500]}
++
++
++def _runtime_environment() -> dict:
++    def sysctl_value(name: str) -> str | None:
++        try:
++            result = subprocess.run(["sysctl", "-n", name], check=True, capture_output=True,
++                                    text=True, timeout=1.0)
++            value = result.stdout.strip()
++            return value or None
++        except (OSError, subprocess.SubprocessError):
++            return None
++    info = {"platform": platform.platform(), "machine": platform.machine(),
++            "processor": platform.processor() or None, "cpu_count": os.cpu_count(),
++            "macos_version": platform.mac_ver()[0] or None,
++            "hardware_model": sysctl_value("hw.model"),
++            "cpu_model": sysctl_value("machdep.cpu.brand_string"),
++            "python_version": platform.python_version(), "numpy_version": np.__version__,
++            "opencv_version": cv2.__version__}
++    try:
++        import torch
++        info["torch_version"] = torch.__version__
++        info["mps_available"] = bool(getattr(getattr(torch.backends, "mps", None), "is_available", lambda: False)())
++    except Exception as exc:
++        info["torch_version"] = None
++        info["mps_available"] = False
++        info["torch_probe_error"] = type(exc).__name__
++    try:
++        import ultralytics
++        info["ultralytics_version"] = getattr(ultralytics, "__version__", None)
++    except Exception:
++        info["ultralytics_version"] = None
++    return info
++
++
++def _set_benchmark_threads() -> dict:
++    """Apply the same bounded Torch/OpenCV CPU thread settings for every pass."""
++    import torch
++    torch.set_num_threads(BENCHMARK_THREADS)
++    cv2.setNumThreads(BENCHMARK_THREADS)
++    return _thread_counts()
++
++
++def _thread_counts() -> dict:
++    import torch
++    return {"requested": BENCHMARK_THREADS, "torch": int(torch.get_num_threads()),
++            "opencv": int(cv2.getNumThreads())}
++
++
++def _instrument_predictor_stages(model, backend_status: Callable[[], dict], *,
++                                 perf_counter: Callable[[], float] = time.perf_counter,
++                                 synchronize: Callable[[], None] | None = None) -> dict:
++    """Measure existing Ultralytics predictor stages on this detector instance only."""
++    predictor = getattr(model, "predictor", None)
++    if predictor is None:
++        return {"sample_values": {name: [] for name in BODY_PREDICTOR_STAGES},
++                "missing": list(BODY_PREDICTOR_STAGES),
++                "reason": "PersonDetector model has no initialized Ultralytics predictor after warmup."}
++    samples = {name: [] for name in BODY_PREDICTOR_STAGES}
++    missing = []
++    if synchronize is None:
++        def synchronize():
++            import torch
++            torch.mps.synchronize()
++    for name in BODY_PREDICTOR_STAGES:
++        original = getattr(predictor, name, None)
++        if not callable(original):
++            missing.append(name)
++            continue
++
++        def measured(*args, _method=original, _name=name, **kwargs):
++            before = backend_status()
++            on_mps_before = before.get("active") == "mps"
++            if on_mps_before:
++                synchronize()
++            started = perf_counter()
++            try:
++                return _method(*args, **kwargs)
++            finally:
++                after = backend_status()
++                if on_mps_before or after.get("active") == "mps":
++                    synchronize()
++                elapsed = (perf_counter() - started) * 1000.0
++                samples[_name].append(elapsed)
++
++        try:
++            setattr(predictor, name, measured)
++        except Exception:
++            missing.append(name)
++    return {"sample_values": samples, "missing": missing,
++            "reason": ("Unavailable predictor methods: " + ", ".join(missing)) if missing else None}
++
++
++def _finish_predictor_stage_timings(instrumentation: dict, repeats: int) -> dict:
++    missing = set(instrumentation["missing"])
++    timing_rows = {}
++    partial_reasons = []
++    if instrumentation.get("reason"):
++        partial_reasons.append(instrumentation["reason"])
++    for name in BODY_PREDICTOR_STAGES:
++        values = instrumentation["sample_values"][name]
++        if name in missing:
++            timing_rows[name] = None
++        else:
++            timing_rows[name] = {"count": len(values), "samples_ms": list(values),
++                                 "median_ms": float(statistics.median(values)) if values else None,
++                                 "p95_ms": _percentile95(values)}
++            if len(values) != repeats:
++                partial_reasons.append(f"Predictor {name} ran {len(values)} times for {repeats} measured detector calls.")
++    return {"status": "partial" if partial_reasons else "available",
++            "timings_ms": timing_rows,
++            "reason": "; ".join(partial_reasons) or None}
++
++
++def _atomic_output(path: Path, report: dict) -> None:
++    path.parent.mkdir(parents=True, exist_ok=True)
++    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}-", suffix=".tmp", dir=path.parent)
++    try:
++        with os.fdopen(fd, "w", encoding="utf-8") as stream:
++            json.dump(report, stream, ensure_ascii=False, sort_keys=True, indent=2, allow_nan=False)
++            stream.write("\n")
++            stream.flush()
++            os.fsync(stream.fileno())
++        os.replace(temporary, path)
++    finally:
++        if os.path.exists(temporary):
++            os.unlink(temporary)
++
++
++def run_benchmark(candidate_path: str | Path, *, images: list[np.ndarray], image_metadata: list[dict],
++                  backend: str = "cpu", repeats: int = 10, warmup: int = 2,
++                  synthetic: bool = False,
++                  descriptor_fn: Callable | None = None,
++                  detector_factory: Callable | None = None,
++                  predictor_factory: Callable | None = None,
++                  clock: Callable[[], float] = time.perf_counter) -> dict:
++    if backend not in {"cpu", "mps", "both"}:
++        raise ValueError("backend must be cpu, mps, or both")
++    if type(repeats) is not int or not 1 <= repeats <= MAX_REPEATS:
++        raise ValueError(f"repeats must be an integer from 1 to {MAX_REPEATS}")
++    if type(warmup) is not int or not 0 <= warmup <= MAX_WARMUP:
++        raise ValueError(f"warmup must be an integer from 0 to {MAX_WARMUP}")
++    if not images or len(images) != len(image_metadata) or len(images) > MAX_INPUTS:
++        raise ValueError("A bounded nonempty image list and matching metadata are required")
++
++    candidate = Path(candidate_path)
++    if candidate.is_symlink() or not candidate.is_dir():
++        raise ValueError("Candidate path must be an existing non-symlink bundle directory")
++    body_weights = ROOT / "yolov8n.pt"
++    classifier_weights = ROOT / "yolov8n-cls.pt"
++    for path in (body_weights, classifier_weights):
++        if path.is_symlink() or not path.is_file() or path.stat().st_size < 1024:
++            raise ValueError("Required trusted local model weights are missing or incomplete; downloads are disabled")
++
++    # Validate the immutable Stage 2 bundle before constructing any model loader.
++    if descriptor_fn is None:
++        from core.uniform_model_registry import candidate_descriptor
++        descriptor_fn = candidate_descriptor
++    descriptor = descriptor_fn(candidate)
++    if not isinstance(descriptor, dict) or not descriptor.get("id"):
++        raise ValueError("Candidate validation did not return a stable model ID")
++
++    if detector_factory is None:
++        from core.person_detector import PersonDetector
++        detector_factory = PersonDetector
++    if predictor_factory is None:
++        from core.uniform_model_registry import CandidatePredictor
++        predictor_factory = CandidatePredictor
++
++    requests = ["cpu", "mps"] if backend == "both" else [backend]
++    backend_reports = []
++    secret_paths = [str(candidate.resolve()), *(str(item) for item in image_metadata if "path" in item)]
++    for requested in requests:
++        stage = {"requested_backend": requested,
++                 "candidate": {"status": "not_started"}, "body_detector": {"status": "not_started"}}
++        predictor = None
++        try:
++            started = clock()
++            predictor = predictor_factory(candidate, backend=requested)
++            stage["candidate"]["cold_load_ms"] = (clock() - started) * 1000.0
++            candidate_warmups = 0
++            candidate_warmup_threads = []
++            candidate_measured_threads = []
++            for index in range(warmup):
++                _set_benchmark_threads()
++                result = predictor.timed_probabilities(images[index % len(images)])
++                if (not isinstance(result, dict) or not isinstance(result.get("timings"), dict)
++                        or not isinstance(result.get("probabilities"), dict)):
++                    raise ValueError("Candidate timed_probabilities returned an invalid timing object")
++                candidate_warmups += 1
++                candidate_warmup_threads.append(_thread_counts())
++            samples: dict[str, list[float]] = {"preprocessing_ms": [], "inference_ms": [], "total_ms": []}
++            placements = []
++            for index in range(repeats):
++                _set_benchmark_threads()
++                result = predictor.timed_probabilities(images[index % len(images)])
++                timings = result["timings"]
++                if not isinstance(result.get("probabilities"), dict):
++                    raise ValueError("Candidate timed_probabilities returned invalid probabilities")
++                for key in samples:
++                    value = timings.get(key)
++                    if type(value) not in {int, float} or not np.isfinite(value) or value < 0:
++                        raise ValueError(f"Candidate returned invalid {key} timing")
++                    samples[key].append(float(value))
++                if isinstance(result.get("backend"), dict):
++                    placements.append(result["backend"])
++                candidate_measured_threads.append(_thread_counts())
++            candidate_status = predictor.backend_status()
++            if not isinstance(candidate_status, dict):
++                candidate_status = placements[-1] if placements else {}
++            stage["candidate"].update(status="completed", warmup_count=candidate_warmups,
++                                      timings={key: _timing_summary(values) for key, values in samples.items()},
++                                      backend_status=candidate_status,
++                                      placement_observations=_unique_statuses(placements),
++                                      thread_settings={"requested": BENCHMARK_THREADS,
++                                                       "warmup_observations": _unique_statuses(candidate_warmup_threads),
++                                                       "measured_observations": _unique_statuses(candidate_measured_threads),
++                                                       "measured_sample_count": len(candidate_measured_threads)})
++        except Exception as exc:
++            stage["candidate"].update(status="error", error=_safe_error(exc, secret_paths))
++            if predictor is not None:
++                try:
++                    stage["candidate"]["backend_status"] = predictor.backend_status()
++                except Exception:
++                    pass
++
++        # PersonDetector detects bodies only here; no face or pose model is called.
++        detector = None
++        try:
++            detector = detector_factory(backend=requested)
++            started = clock()
++            body_model = detector._ensure_model()  # explicit cold-load timing; local weights were preflighted above
++            body_cold_load = (clock() - started) * 1000.0
++            initial_status = detector.backend_status()
++            if body_model is None:
++                raise RuntimeError("Body detector local model failed to load")
++            if initial_status.get("active") == "unavailable" or initial_status.get("requested") != requested:
++                raise RuntimeError("Body detector backend initialization failed or changed the request")
++            body_warmup_threads = []
++            for index in range(warmup):
++                _set_benchmark_threads()
++                detector.detect_persons(images[index % len(images)])
++                if detector.last_error:
++                    raise RuntimeError("Body detector warmup inference failed")
++                body_warmup_threads.append(_thread_counts())
++            body_threads = []
++            predictor_stage_instrumentation = _instrument_predictor_stages(
++                detector._model, detector.backend_status)
++            body_samples = []
++            detection_counts = []
++            for index in range(repeats):
++                _set_benchmark_threads()
++                started = clock()
++                boxes = detector.detect_persons(images[index % len(images)])
++                body_samples.append((clock() - started) * 1000.0)
++                detection_counts.append(len(boxes))
++                body_threads.append(_thread_counts())
++                if detector.last_error:
++                    raise RuntimeError("Body detector measured inference failed")
++            predictor_stages = _finish_predictor_stage_timings(predictor_stage_instrumentation, repeats)
++            stage["body_detector"].update(status="completed", cold_load_ms=body_cold_load,
++                warmup_count=warmup, timings={"total_ms": _timing_summary(body_samples)},
++                predictor_stages=predictor_stages,
++                thread_settings={"requested": BENCHMARK_THREADS,
++                                 "warmup_observations": _unique_statuses(body_warmup_threads),
++                                 "measured_observations": _unique_statuses(body_threads),
++                                 "measured_sample_count": len(body_threads)},
++                detections={"sample_count": len(detection_counts),
++                            "median_per_frame": float(statistics.median(detection_counts)),
++                            "counts": detection_counts},
++                measurement_scope="end_to_end_detect_persons_call plus synchronized predictor stage wrappers",
++                backend_status=detector.backend_status())
++        except Exception as exc:
++            stage["body_detector"].update(status="error", error=_safe_error(exc, secret_paths),
++                                           backend_status=(detector.backend_status() if detector is not None else None))
++        backend_reports.append(stage)
++
++    return {"schema_version": 1, "benchmark_kind": "raw_model_stage_timings",
++            "created_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
++            "synthetic_inputs": bool(synthetic), "accuracy_evaluation": False,
++            "passage_metrics": {"available": False,
++                                "reason": "Raw detector/classifier stage timing only; no passage or attendance stream was run."},
++            "input_count": len(images), "inputs": image_metadata,
++            "candidate": {"id": descriptor["id"],
++                          "preprocessing_version": descriptor.get("preprocessing_version"),
++                          "dataset_version": descriptor.get("dataset_version"),
++                          "synthetic_candidate": bool(descriptor.get("synthetic"))},
++            "configuration": {"requested_backend": backend, "backends": requests,
++                              "repeats": repeats, "warmup": warmup,
++                              "image_size": "original raster for body; predictor's fixed validated preprocessing for classifier"},
++            "environment": _runtime_environment(), "results": backend_reports,
++            "limitations": ["Timing results are not accuracy, policy, passage, or deployment evidence.",
++                            "No smaller input size or alternate preprocessing was evaluated.",
++                            "Body inference reports requested and actual placement; a CPU fallback remains explicit.",
++                            "Candidate preprocessing/inference use synchronized timings; body stage wrappers synchronize and add instrumentation overhead.",
++                            "No queue-delay value is reported because this benchmark does not measure queueing.",
++                            "Images were processed in memory; filenames and pixels are not included in this report."]}
++
++
++def _unique_statuses(values: list[dict]) -> list[dict]:
++    unique = []
++    seen = set()
++    for value in values:
++        key = json.dumps(value, sort_keys=True, default=str)
++        if key not in seen:
++            unique.append(value)
++            seen.add(key)
++    return unique
++
++
++def main(argv: list[str] | None = None) -> int:
++    parser = build_parser()
++    args = parser.parse_args(argv)
++    if not 1 <= args.repeats <= MAX_REPEATS:
++        parser.error(f"--repeats must be between 1 and {MAX_REPEATS}")
++    if not 0 <= args.warmup <= MAX_WARMUP:
++        parser.error(f"--warmup must be between 0 and {MAX_WARMUP}")
++    try:
++        images, metadata = _load_input_images(args.images, synthetic_fixture=args.synthetic_fixture)
++        report = run_benchmark(args.candidate, images=images, image_metadata=metadata,
++                               backend=args.backend, repeats=args.repeats, warmup=args.warmup,
++                               synthetic=args.synthetic_fixture)
++        output = Path(args.output)
++        if output.is_symlink():
++            raise ValueError("Output path cannot be a symlink")
++        resolved_output = output.resolve()
++        candidate_root = Path(args.candidate).resolve()
++        if candidate_root == resolved_output or candidate_root in resolved_output.parents:
++            raise ValueError("Output JSON must be outside the immutable candidate bundle")
++        for source in (args.images or []):
++            if Path(source).resolve() == resolved_output:
++                raise ValueError("Output JSON cannot overwrite an input image")
++        _atomic_output(output, report)
++    except Exception as exc:
++        safe = _safe_error(exc, [args.candidate, *(args.images or [])])
++        print(f"benchmark error: {safe['type']}: {safe['message']}", file=sys.stderr)
++        return 2
++    print(f"Wrote benchmark report: {output}")
++    failed = any(stage.get(part, {}).get("status") != "completed"
++                 for stage in report.get("results", [])
++                 for part in ("candidate", "body_detector"))
++    if failed:
++        print("One or more backend stages failed; partial results were written.", file=sys.stderr)
++        return 2
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+--- /dev/null
++++ b/scripts/smoke_uniform_observation.py
+@@ -0,0 +1,157 @@
++#!/usr/bin/env python3
++"""Bounded synthetic passage plumbing with real candidate inference.
++
++Scripted face/body localization is a fixture, NOT a physical-camera measurement.
++No garment labels or real-world accuracy are asserted. No database is opened.
++"""
++import argparse
++from dataclasses import replace
++import hashlib
++import json
++import os
++from pathlib import Path
++import queue
++import sys
++import tempfile
++import threading
++import time
++from types import SimpleNamespace
++
++ROOT=Path(__file__).resolve().parents[1]
++sys.path.insert(0,str(ROOT))
++os.environ.setdefault('MPLCONFIGDIR',str(Path(tempfile.gettempdir())/'cbvms-uniform-smoke-mpl'))
++os.environ.setdefault('YOLO_CONFIG_DIR',str(Path(tempfile.gettempdir())/'cbvms-uniform-smoke-yolo'))
++import numpy as np
++import cv2
++import torch
++from core.live_pipeline import FaceTrackingProcessor,LiveProcessor,LiveWorker,MonitorTask
++from core.live_state import FrameContext
++from core.assessment_candidates import ClearFrameRouter
++from core.uniform_observation import ObservationConfig,ObservationUniformSession
++from core.uniform_model_registry import candidate_descriptor
++from core.uniform_latency import UniformPassageMetrics
++
++
++class FixtureRecognizer:
++    last_error=None
++    def detect_faces(self,frame):return [{'box':(220,20,280,100),'score':.99}]
++    def recognize_faces(self,frame,detections):
++        return [dict(d,matched=False,identity_uncertain=True) for d in detections]
++
++
++class FixtureBody:
++    last_error=None
++    visible=True
++    def detect_persons(self,frame):return [(150,0,370,450)] if self.visible else []
++    def chest_region(self,frame,face,body):return (170,120,350,320),'scripted-fixture'
++
++
++class ReadOnlyFixtureDatabase:
++    def attendance_term_snapshot(self,**kw):return {}
++
++
++def run(candidate,backend,passages):
++    torch.set_num_threads(2)
++    cv2.setNumThreads(2)
++    descriptor=candidate_descriptor(candidate)
++    config=ObservationConfig(str(Path(candidate).resolve()),descriptor['id'],.8,backend=backend,
++        assessment_zone=(0.,0.,1.,1.)) # explicit smoke confidence, not an operating recommendation
++    session=ObservationUniformSession(config)
++    session.prepare()
++    # First import of Ultralytics can reset OpenCV to serial. Apply the requested
++    # settings after loading as well, so CPU-first and MPS-second are comparable.
++    torch.set_num_threads(2)
++    cv2.setNumThreads(2)
++    gray=np.random.default_rng(73).integers(20,240,(480,640,1),dtype=np.uint8)
++    clear=np.repeat(gray,3,axis=2)
++    blurred=np.full_like(clear,100)
++    for _ in range(4):session.predictor.timed_probabilities(clear[120:320,170:350])
++    recognizer=FixtureRecognizer();body=FixtureBody()
++    processor=LiveProcessor(ReadOnlyFixtureDatabase(),recognizer,body,
++        SimpleNamespace(is_trained=lambda _:False),None,SimpleNamespace(),
++        observation_only=True,uniform_observation=session)
++    tracker=FaceTrackingProcessor(recognizer,body)
++    worker=LiveWorker(processor,observation_only=True,persistence_worker=True)
++    router=ClearFrameRouter(fresh_selection=True,ttl=config.frame_ttl,refresh_interval=0)
++    metrics=UniformPassageMetrics();origin=time.monotonic();sequence=0;failures=[]
++    worker.start()
++    try:
++        for passage in range(passages):
++            cancelled=threading.Event();alias='synthetic-'+str(passage)
++            entry=None;usable=None
++            for index in range(3):
++                # One fifth of the simulated passages has no usable torso at all.
++                pixels=blurred if passage%5==4 else clear
++                body.visible=index>0
++                sequence+=1;captured=time.monotonic()
++                if entry is None:entry=(captured-origin)*1000
++                task=MonitorTask(FrameContext(passage+1,('fixture',sequence),captured),pixels,
++                    time.time(),cancelled,earring_enabled=False,source_id='synthetic-camera',
++                    camera_generation=1,observation_only=True)
++                tracked=tracker.analyze(task)
++                tracked=replace(tracked,task=session.observe(tracked.task,tracked.observations))
++                if usable is None and any(t.usable for t in tracked.task.uniform_tickets):
++                    usable=(captured-origin)*1000
++                annotation={'passage_alias':alias,'zone_entry_ms':entry}
++                if usable is not None:annotation['first_usable_torso_ms']=usable
++                metrics.observe_labels([annotation])
++                router.observe(tracked,select=True)
++                candidate_task=router.next()
++                if candidate_task is None:
++                    failures.append('no_dispatch');continue
++                from copy import copy
++                offered=copy(candidate_task.task)
++                object.__setattr__(offered,'candidate_on_complete',router.complete)
++                if not worker.offer(offered):failures.append('offer_rejected');continue
++                try:result=worker.results.get(timeout=2)
++                except queue.Empty:failures.append('no_completed_result');continue
++                if result.assessments:
++                    metrics.record(alias,result.assessments[0].garment,(result.finished_at-origin)*1000)
++                else:failures.append('empty_assessment')
++                time.sleep(.035)
++            cancelled.set();router.reset();session.invalidate()
++    finally:
++        worker.stop();worker.done.wait(5)
++        if not worker.done.is_set():raise RuntimeError('Observation smoke worker did not stop')
++    assert processor.write_count==0 and not worker.persistence_worker and worker.attendance_writer is None
++    return {'backend':session.predictor.backend_status(),'candidate_id':descriptor['id'],
++        'synthetic_candidate':descriptor['synthetic'],'preprocessing_version':descriptor['preprocessing_version'],
++        'config_version':config.version,'fixture_pixel_sha256':hashlib.sha256(clear.tobytes()).hexdigest(),
++        'metrics':metrics.report(),'failures':failures,'database_opened':False,'production_writes':0,
++        'worker_stopped':worker.done.is_set(),'queue_capacity':worker.requests.maxsize,
++        'conditions':{'frames_per_simulated_passage':3,'simulated_passages':passages,
++            'blur_only_passages':passages//5,'warmup_calls':4,'fixture_confidence':.8,
++            'frame_size':[640,480],'candidate_input_size':224,'wait_between_frames_ms':35,
++            'torch_cpu_threads':torch.get_num_threads(),'opencv_threads':cv2.getNumThreads(),
++            'opencv_threads_requested':2,
++            'pytorch_operator_fallback_env':os.environ.get('PYTORCH_ENABLE_MPS_FALLBACK','unset'),
++            'physical_camera':False,'face_and_body_inference':'scripted fixture; real association/tracking code',
++            'classification_accuracy':None,'policy_accuracy':None,
++            'contention':'sequential backends; no live app/camera/training job; ordinary OS activity uncontrolled'}}
++
++
++def main():
++    parser=argparse.ArgumentParser(description=__doc__)
++    parser.add_argument('--candidate',required=True,type=Path)
++    parser.add_argument('--backend',choices=('cpu','mps','both'),default='both')
++    parser.add_argument('--passages',type=int,default=10)
++    parser.add_argument('--output',required=True,type=Path)
++    args=parser.parse_args()
++    if not 1<=args.passages<=50:parser.error('Use 1 to 50 simulated passages')
++    if args.output.suffix!='.json' or args.output.resolve().is_relative_to(args.candidate.resolve()):
++        parser.error('Use a separate JSON artifact outside the candidate bundle')
++    reports=[]
++    for backend in (('cpu','mps') if args.backend=='both' else (args.backend,)):
++        reports.append(run(args.candidate,backend,args.passages))
++    report={'kind':'synthetic_passage_integration_smoke','results':reports,
++        'real_passage_count':0,'physical_camera_measurement':False,'accuracy_evaluated':False,
++        'limitations':['Synthetic pixels and scripted localization; these timings exclude real face/body inference.',
++            'No evidence that the 500 ms target is met on real passages. Input size remains 224.',
++            'Recognition predictions on these rasters are not clothing labels or accuracy evidence.']}
++    args.output.parent.mkdir(parents=True,exist_ok=True)
++    args.output.write_text(json.dumps(report,indent=2,allow_nan=False)+'\n')
++    print('Wrote',args.output)
++    if any(r['failures'] for r in reports):raise SystemExit(1)
++
++
++if __name__=='__main__':main()
+--- /dev/null
++++ b/tests/test_uniform_backend_benchmark.py
+@@ -0,0 +1,281 @@
++"""No-model tests for the bounded uniform backend benchmark CLI and aggregation."""
++from __future__ import annotations
++
++import json
++import os
++import subprocess
++import sys
++import tempfile
++import unittest
++from pathlib import Path
++from unittest import mock
++
++import numpy as np
++
++from scripts import benchmark_uniform_backends as benchmark
++
++
++class FakePredictor:
++    def __init__(self, path, *, backend):
++        self.backend = backend
++        self.calls = 0
++
++    def timed_probabilities(self, image):
++        self.calls += 1
++        return {"probabilities": {"campus_uniform": 0.4},
++                "timings": {"preprocessing_ms": float(self.calls),
++                            "inference_ms": float(self.calls * 2),
++                            "total_ms": float(self.calls * 3)},
++                "backend": self.backend_status()}
++
++    def backend_status(self):
++        return {"requested": self.backend, "active": self.backend,
++                "model_parameter_device": self.backend, "fallback_reason": None}
++
++
++class FakeDetector:
++    def __init__(self, *, backend):
++        self.backend = backend
++        self.calls = 0
++        self.last_error = None
++        self._model = FakeYolo()
++
++    def _ensure_model(self):
++        return self._model
++
++    def detect_persons(self, image):
++        self.calls += 1
++        self._model.predictor.preprocess(image)
++        self._model.predictor.inference(image)
++        self._model.predictor.postprocess(image)
++        return [[0, 0, 20, 40]] if self.calls % 2 else []
++
++    def backend_status(self):
++        return {"requested": self.backend, "active": "cpu" if self.backend == "mps" else "cpu",
++                "model_parameter_device": "cpu", "fallback_reason": "test MPS unavailable" if self.backend == "mps" else None}
++
++
++class FakeYolo:
++    def __init__(self):
++        self.predictor = self.Predictor()
++
++    class Predictor:
++        def preprocess(self, image):
++            return image
++        def inference(self, image):
++            return image
++        def postprocess(self, image):
++            return image
++
++
++class BackendBenchmarkTests(unittest.TestCase):
++    def setUp(self):
++        self.temp = tempfile.TemporaryDirectory()
++        self.root = Path(self.temp.name)
++        self.bundle = self.root / "candidate-bundle"
++        self.bundle.mkdir()
++        self.image = np.full((64, 80, 3), 127, dtype=np.uint8)
++        self.metadata = [{"sha256": "a" * 64, "width": 80, "height": 64}]
++
++    def tearDown(self):
++        self.temp.cleanup()
++
++    def test_both_backends_reuse_same_inputs_and_write_aggregated_output(self):
++        events = []
++        seen_inputs = []
++        def descriptor(path):
++            events.append("validated_candidate")
++            self.assertEqual(path, self.bundle)
++            return {"id": "b" * 64, "preprocessing_version": "fixed-224-v1",
++                    "dataset_version": "train-set-3", "synthetic": False}
++        def predictor_factory(path, *, backend):
++            events.append("predictor:" + backend)
++            class RecordingPredictor(FakePredictor):
++                def timed_probabilities(self, image):
++                    seen_inputs.append((backend, image.shape, int(image[0, 0, 0])))
++                    return super().timed_probabilities(image)
++            return RecordingPredictor(path, backend=backend)
++        def detector_factory(*, backend):
++            events.append("body:" + backend)
++            return FakeDetector(backend=backend)
++        ticks = {"now": 0.0}
++        def clock():
++            ticks["now"] += 0.001
++            return ticks["now"]
++        thread_counts = {"requested": 2, "torch": 2, "opencv": 2}
++        with mock.patch.object(benchmark, "_runtime_environment", return_value={"python_version": "test"}), \
++                mock.patch.object(benchmark, "_set_benchmark_threads", return_value=thread_counts) as set_threads, \
++                mock.patch.object(benchmark, "_thread_counts", return_value=thread_counts):
++            report = benchmark.run_benchmark(
++                self.bundle, images=[self.image], image_metadata=self.metadata,
++                backend="both", repeats=3, warmup=1, descriptor_fn=descriptor,
++                detector_factory=detector_factory, predictor_factory=predictor_factory,
++                clock=clock)
++        self.assertEqual(events[0], "validated_candidate")
++        self.assertEqual(report["candidate"]["id"], "b" * 64)
++        self.assertEqual(report["candidate"]["dataset_version"], "train-set-3")
++        self.assertEqual(report["configuration"]["backends"], ["cpu", "mps"])
++        self.assertFalse(report["synthetic_inputs"])
++        self.assertFalse(report["accuracy_evaluation"])
++        self.assertFalse(report["passage_metrics"]["available"])
++        self.assertNotIn("queue_delay", json.dumps(report))
++        self.assertEqual(set_threads.call_count, 16)
++        self.assertEqual(len(seen_inputs), 8)
++        self.assertEqual({(shape, pixel) for _, shape, pixel in seen_inputs}, {((64, 80, 3), 127)})
++        cpu, mps = report["results"]
++        for result in (cpu, mps):
++            self.assertEqual(result["candidate"]["status"], "completed")
++            self.assertEqual(result["candidate"]["warmup_count"], 1)
++            summary = result["candidate"]["timings"]["total_ms"]
++            self.assertEqual(summary["count"], 3)
++            self.assertEqual(summary["median_ms"], 9.0)
++            self.assertEqual(summary["p95_ms"], 11.7)
++            self.assertEqual(result["body_detector"]["status"], "completed")
++            self.assertEqual(result["body_detector"]["backend_status"]["requested"], result["requested_backend"])
++            self.assertEqual(set(result["body_detector"]["timings"]), {"total_ms"})
++            self.assertIn("not separately exposed", result["body_detector"]["measurement_scope"])
++            self.assertEqual(result["candidate"]["thread_settings"]["requested"], 2)
++            self.assertEqual(result["candidate"]["thread_settings"]["measured_sample_count"], 3)
++            stage_times = result["body_detector"]["predictor_stages"]["timings_ms"]
++            self.assertEqual({name: row["count"] for name, row in stage_times.items()},
++                             {"preprocess": 3, "inference": 3, "postprocess": 3})
++        self.assertEqual(mps["body_detector"]["backend_status"]["active"], "cpu")
++        output = self.root / "benchmark.json"
++        benchmark._atomic_output(output, report)
++        serialized = json.loads(output.read_text())
++        self.assertEqual(serialized["inputs"], self.metadata)
++        self.assertNotIn("candidate-bundle", output.read_text())
++
++    def test_synthetic_fixture_is_deterministic_and_explicitly_labeled(self):
++        first_images, first_info = benchmark._load_input_images(None, synthetic_fixture=True)
++        second_images, second_info = benchmark._load_input_images(None, synthetic_fixture=True)
++        self.assertEqual(first_info, second_info)
++        np.testing.assert_array_equal(first_images[0], second_images[0])
++        self.assertEqual(first_info[0]["width"], 640)
++        self.assertEqual(first_info[0]["height"], 480)
++
++    def test_mps_predictor_failure_is_reported_and_cpu_result_retained(self):
++        def predictor_factory(path, *, backend):
++            if backend == "mps":
++                raise RuntimeError("explicit MPS unavailable")
++            return FakePredictor(path, backend=backend)
++        thread_counts = {"requested": 2, "torch": 2, "opencv": 2}
++        with mock.patch.object(benchmark, "_runtime_environment", return_value={}), \
++                mock.patch.object(benchmark, "_set_benchmark_threads", return_value=thread_counts), \
++                mock.patch.object(benchmark, "_thread_counts", return_value=thread_counts):
++            report = benchmark.run_benchmark(
++                self.bundle, images=[self.image], image_metadata=self.metadata,
++                backend="both", repeats=1, warmup=0,
++                descriptor_fn=lambda path: {"id": "b" * 64},
++                detector_factory=FakeDetector, predictor_factory=predictor_factory)
++        self.assertEqual(report["results"][0]["candidate"]["status"], "completed")
++        self.assertEqual(report["results"][1]["candidate"]["status"], "error")
++        self.assertEqual(report["results"][1]["candidate"]["error"]["type"], "RuntimeError")
++        self.assertEqual(report["results"][1]["body_detector"]["backend_status"]["fallback_reason"],
++                         "test MPS unavailable")
++
++    def test_body_stage_wrapper_synchronizes_mps_and_reports_each_method(self):
++        ticks = {"time": 0.0}
++        def fake_clock():
++            ticks["time"] += 0.01
++            return ticks["time"]
++        synchronizations = []
++        model = FakeYolo()
++        instrumentation = benchmark._instrument_predictor_stages(
++            model, lambda: {"active": "mps"}, perf_counter=fake_clock,
++            synchronize=lambda: synchronizations.append("sync"))
++        for method in ("preprocess", "inference", "postprocess"):
++            getattr(model.predictor, method)(self.image)
++            timing = instrumentation["sample_values"][method]
++            self.assertEqual(len(timing), 1)
++            self.assertGreater(timing[0], 0)
++        result = benchmark._finish_predictor_stage_timings(instrumentation, repeats=1)
++        self.assertEqual(result["status"], "available")
++        self.assertEqual(len(synchronizations), 6)
++
++    def test_candidate_validation_precedes_model_factories_and_missing_weights_fail_closed(self):
++        calls = []
++        with mock.patch.object(benchmark, "ROOT", self.root):
++            # Trusted local weights are absent in this isolated root; no loader may be called.
++            with self.assertRaisesRegex(ValueError, "trusted local model weights"):
++                benchmark.run_benchmark(self.bundle, images=[self.image], image_metadata=self.metadata,
++                    descriptor_fn=lambda path: calls.append("descriptor"),
++                    detector_factory=lambda **kwargs: calls.append("detector"),
++                    predictor_factory=lambda *a, **kw: calls.append("predictor"))
++        self.assertEqual(calls, [])
++
++    def test_invalid_bounds_paths_and_cli_source_are_rejected(self):
++        for kwargs in ({"backend": "cuda"}, {"repeats": 0}, {"repeats": 101}, {"warmup": -1}, {"warmup": 21}):
++            with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
++                benchmark.run_benchmark(self.bundle, images=[self.image], image_metadata=self.metadata,
++                    descriptor_fn=lambda path: {"id": "b" * 64}, detector_factory=FakeDetector,
++                    predictor_factory=FakePredictor, **kwargs)
++        parser = benchmark.build_parser()
++        with self.assertRaises(SystemExit):
++            parser.parse_args(["--candidate", str(self.bundle), "--output", str(self.root / "out.json")])
++        unsafe = self.root / "unsafe.png"
++        unsafe.symlink_to(self.root / "missing.png")
++        with self.assertRaisesRegex(ValueError, "non-symlink"):
++            benchmark._load_input_images([str(unsafe)], synthetic_fixture=False)
++
++    def test_image_header_bounds_and_total_pixel_budget_precede_opencv_decode(self):
++        image_path = self.root / "header-only.png"
++        image_path.write_bytes(b"bounded fixture bytes")
++
++        class Header:
++            def __init__(self, size):
++                self.size, self.format, self.n_frames = size, "PNG", 1
++            def __enter__(self):
++                return self
++            def __exit__(self, *args):
++                return False
++
++        with mock.patch.object(benchmark.Image, "open", return_value=Header((12001, 100))):
++            with mock.patch.object(benchmark.cv2, "imdecode") as decode:
++                with self.assertRaisesRegex(ValueError, "dimensions"):
++                    benchmark._load_input_images([str(image_path)], synthetic_fixture=False)
++                decode.assert_not_called()
++
++        class Raster:
++            ndim = 3
++            def __init__(self, width, height):
++                self.shape = (height, width, 3)
++        headers = [Header((6500, 6000)) for _ in range(3)]
++        with mock.patch.object(benchmark.Image, "open", side_effect=headers), \
++                mock.patch.object(benchmark.cv2, "imdecode",
++                                  side_effect=[Raster(6500, 6000), Raster(6500, 6000)]) as decode:
++            with self.assertRaisesRegex(ValueError, "Combined input pixel count"):
++                benchmark._load_input_images([str(image_path)] * 3, synthetic_fixture=False)
++            self.assertEqual(decode.call_count, 2)
++
++    def test_cli_partial_results_are_written_before_nonzero_stage_failure(self):
++        output = self.root / "partial-results.json"
++        partial = {"results": [
++            {"candidate": {"status": "error"},
++             "body_detector": {"status": "completed"}}]}
++        with mock.patch.object(benchmark, "_load_input_images",
++                               return_value=([self.image], self.metadata)), \
++                mock.patch.object(benchmark, "run_benchmark", return_value=partial):
++            code = benchmark.main(["--candidate", str(self.bundle), "--synthetic-fixture",
++                                   "--output", str(output), "--repeats", "1", "--warmup", "0"])
++        self.assertEqual(code, 2)
++        self.assertEqual(json.loads(output.read_text()), partial)
++
++    def test_script_bootstraps_repo_import_path_without_pythonpath(self):
++        script = Path(benchmark.__file__).resolve()
++        expected_root = str(script.parents[1])
++        child_code = (
++            "import runpy,sys,os; "
++            f"runpy.run_path({str(script)!r}, run_name='benchmark_import_test'); "
++            f"assert sys.path[0] == {expected_root!r}; "
++            "assert 'MPLCONFIGDIR' in os.environ and 'YOLO_CONFIG_DIR' in os.environ"
++        )
++        env = dict(os.environ)
++        env.pop("PYTHONPATH", None)
++        completed = subprocess.run([sys.executable, "-c", child_code], cwd=self.root,
++                                   env=env, capture_output=True, text=True, timeout=20)
++        self.assertEqual(completed.returncode, 0, completed.stderr)
++
++
++if __name__ == "__main__":
++    unittest.main()
+--- /dev/null
++++ b/tests/test_uniform_observation.py
+@@ -0,0 +1,240 @@
++"""Observation safety on disposable synthetic pixels; no accuracy claims."""
++from dataclasses import replace
++from pathlib import Path
++import json
++import tempfile
++import threading
++import unittest
++from unittest.mock import Mock, patch
++import numpy as np
++
++from core.live_pipeline import MonitorTask,TrackedFace,LiveProcessor,LiveWorker
++from core.live_state import FrameContext
++from core.uniform_observation import ObservationConfig,ObservationUniformSession,CONFIG_ENV
++from core.uniform_model_registry import CLASSES,policy_rule
++
++
++class FakePredictor:
++    def __init__(self):
++        self.calls=0; self.probs=dict(zip(CLASSES,(.05,.9,.05))); self.hook=None
++    def timed_probabilities(self,bgr):
++        self.calls+=1
++        if self.hook: self.hook()
++        return {'probabilities':self.probs,'timings':{'preprocessing_ms':1.,'inference_ms':2.,'total_ms':3.}}
++    def backend_status(self): return {'active':'cpu'}
++
++
++class ObservationTests(unittest.TestCase):
++    def setUp(self):
++        self.now=100.; self.cancelled=threading.Event(); self.seq=0
++        self.config=ObservationConfig('/unused','a'*64,.8,assessment_zone=(0.,0.,1.,1.))
++        self.session=ObservationUniformSession(self.config,clock=lambda:self.now)
++        self.predictor=FakePredictor();self.session.predictor=self.predictor
++        self.session.descriptor={'synthetic':True}
++        self.obs=TrackedFace((220,20,280,100),.99,(),1,'person:1:1',0,(150,0,370,450),(170,120,350,320))
++        gray=np.random.default_rng(5).integers(20,240,(480,640,1),dtype=np.uint8)
++        self.frame=np.repeat(gray,3,axis=2)
++        self.time_patch=patch('core.live_pipeline.time.monotonic',side_effect=lambda:self.now)
++        self.time_patch.start();self.addCleanup(self.time_patch.stop)
++
++    def task(self, *, observation=None,frame=None,dt=.1,**kw):
++        self.now+=dt;self.seq+=1
++        observations=(observation or self.obs,)
++        task=MonitorTask(FrameContext(1,('test',self.seq),self.now-.02),
++            self.frame if frame is None else frame,self.now,self.cancelled,
++            observations=observations,source_id='camera-1',camera_generation=3,observation_only=True,**kw)
++        return self.session.observe(task,observations)
++
++    def assess(self,task):return self.session.assess(task,task.uniform_tickets[0])
++
++    def test_recognition_policy_separation_and_explicit_existing_policy(self):
++        result=self.assess(self.task())
++        self.assertEqual(result.label,'organizational_shirt')
++        self.assertIsNone(result.policy_outcome)
++        self.assertIn('Policy not configured',result.reason)
++        self.assertEqual(result.state,'Organizational Shirt recognized')
++        self.session=ObservationUniformSession(replace(self.config,policy=policy_rule(.8)),clock=lambda:self.now)
++        self.session.predictor=self.predictor
++        result=self.assess(self.task())
++        self.assertEqual(result.policy_outcome,'compliant')
++        self.predictor.probs=dict(zip(CLASSES,(.02,.03,.95)))
++        result=self.assess(self.task(dt=.6))
++        self.assertEqual((result.label,result.policy_outcome),('other_clothing','violation'))
++        self.assertIn('permissions unassessed',result.reason)
++
++    def test_cached_result_one_logical_passage_and_refresh(self):
++        first=self.assess(self.task());cached=self.assess(self.task())
++        self.assertEqual(first.passage_id,cached.passage_id)
++        self.assertTrue(cached.cached);self.assertEqual(self.predictor.calls,1)
++        self.assess(self.task(dt=.6));self.assertEqual(self.predictor.calls,2)
++        self.assertEqual(self.session.snapshot()['passages'],1)
++
++    def test_uncertainty_never_cached_and_new_frame_resolves(self):
++        self.predictor.probs=dict(zip(CLASSES,(.34,.33,.33)))
++        unknown=self.assess(self.task());self.assertIsNone(unknown.label)
++        self.assertIsNone(unknown.policy_outcome)
++        self.predictor.probs=dict(zip(CLASSES,(.9,.05,.05)))
++        resolved=self.assess(self.task());self.assertEqual(resolved.label,'campus_uniform')
++        self.assertEqual(unknown.passage_id,resolved.passage_id);self.assertEqual(self.predictor.calls,2)
++
++    def test_blur_resolution_obstruction_and_invalid_association_abstain(self):
++        cases=[(self.obs,np.full_like(self.frame,100),'blur'),
++               (replace(self.obs,torso_box=(200,120,300,200)),self.frame,'resolution'),
++               (replace(self.obs,torso_box=(170,40,350,200)),self.frame,'Torso'),
++               (replace(self.obs,body_box=None),self.frame,'association')]
++        for observation,frame,reason in cases:
++            with self.subTest(reason=reason):
++                result=self.assess(self.task(observation=observation,frame=frame))
++                self.assertIsNone(result.label);self.assertIsNone(result.policy_outcome)
++                self.assertIn(reason.lower(),result.reason.lower())
++        with patch('core.uniform_observation.skin_fraction',return_value=1.):
++            self.assertIn('obscured',self.assess(self.task()).reason)
++        self.assertEqual(self.predictor.calls,0)
++
++    def test_new_bad_association_revokes_cached_and_inflight_result(self):
++        old=self.task();result=self.assess(old)
++        bad=self.task(observation=replace(self.obs,torso_box=None))
++        self.assertFalse(self.session.result_valid(result,old.uniform_tickets[0]))
++        self.assertIsNone(self.assess(bad).label)
++        fresh=self.task()
++        self.predictor.hook=lambda:self.task(observation=replace(self.obs,body_box=None))
++        self.assertIsNone(self.assess(fresh))
++
++    def test_identity_reassignment_invalidates_without_new_passage_card(self):
++        first=self.task();ticket=first.uniform_tickets[0]
++        ticket=self.session.bind_identity(ticket,'student-A')
++        old=self.session.assess(first,ticket)
++        second=self.task();other=self.session.bind_identity(second.uniform_tickets[0],'student-B')
++        self.assertFalse(self.session.result_valid(old,ticket))
++        new=self.session.assess(second,other)
++        self.assertEqual(old.passage_id,new.passage_id);self.assertEqual(self.predictor.calls,2)
++
++    def test_all_scopes_expiry_and_disappearance_invalidate(self):
++        for field in ('source','session','generation','camera_generation','track','presence','model_policy'):
++            with self.subTest(field=field):
++                old=self.task();result=self.assess(old)
++                if field=='model_policy': self.session.invalidate()
++                else:
++                    next_task=self.task();o=self.obs
++                    if field=='source':next_task=replace(next_task,source_id='camera-2')
++                    if field=='session':next_task=replace(next_task,cancelled=threading.Event())
++                    if field=='generation':next_task=replace(next_task,context=replace(next_task.context,generation=2))
++                    if field=='camera_generation':next_task=replace(next_task,camera_generation=4)
++                    if field=='track':o=replace(o,track_id=2)
++                    if field=='presence':o=replace(o,presence_id='replacement')
++                    # Advance timestamp because duplicate observations are intentionally rejected.
++                    self.now+=.01
++                    next_task=replace(next_task,context=replace(next_task.context,captured_at=self.now))
++                    self.session.observe(next_task,(o,))
++                self.assertFalse(self.session.result_valid(result,old.uniform_tickets[0]))
++        old=self.task();result=self.assess(old);self.now+=1.1
++        self.assertFalse(self.session.result_valid(result,old.uniform_tickets[0]))
++        current=self.task();self.now+=.01
++        gone=replace(current,context=replace(current.context,captured_at=self.now))
++        self.session.observe(gone,());self.assertEqual(self.session.snapshot()['passages'],0)
++
++    def test_duplicate_out_of_order_and_stale_frames_do_not_supply_evidence(self):
++        task=self.task();self.assess(task)
++        duplicate=self.session.observe(task,task.observations)
++        self.assertEqual(duplicate.uniform_tickets,())
++        self.assess(task);self.assertEqual(self.predictor.calls,1)
++        self.now+=2.;self.assertIsNone(self.assess(task))
++        self.assertEqual(self.session.observe(task,task.observations).uniform_tickets,())
++
++    def test_old_result_cannot_cross_passages_or_replace_newer_evidence(self):
++        first=self.task();old=self.assess(first)
++        second=self.task(dt=.6);new=self.assess(second)
++        self.assertIsNone(self.assess(first))
++        forged=replace(new,passage_id='different-passage')
++        self.assertFalse(self.session.result_valid(forged,second.uniform_tickets[0]))
++        self.cancelled.set()
++        self.assertFalse(self.session.result_valid(new,second.uniform_tickets[0]))
++
++    def test_zone_and_first_usable_timing_exclude_bad_frame_wait(self):
++        self.assess(self.task(frame=np.zeros_like(self.frame)))
++        result=self.assess(self.task(dt=.4))
++        t=result.timings
++        self.assertGreater(t['zone_entry_to_decision_ms'],t['first_usable_to_decision_ms']+300)
++        self.assertIsNone(t['queue_delay_ms']) # direct invocation has no worker queue measurement
++        self.session=ObservationUniformSession(replace(self.config,assessment_zone=None),clock=lambda:self.now)
++        self.session.predictor=self.predictor
++        self.assertIsNone(self.assess(self.task()).timings['zone_entry_to_decision_ms'])
++
++    def test_capacity_bounds(self):
++        task=self.task()
++        self.now+=.01
++        task=replace(task,context=replace(task.context,captured_at=self.now))
++        observations=tuple(replace(self.obs,track_id=i,presence_id=str(i)) for i in range(100))
++        self.session.observe(task,observations)
++        self.assertLessEqual(self.session.snapshot()['passages'],48)
++
++    def test_toggle_off_and_failed_identity_analysis_revoke_evidence(self):
++        old=self.task();result=self.assess(old)
++        self.task(uniform_enabled=False)
++        self.assertFalse(self.session.result_valid(result,old.uniform_tickets[0]))
++        old=self.task();result=self.assess(old)
++        from tests.test_live_pipeline import PipelineFixture
++        fx=PipelineFixture();fx.processor.observation_only=True;fx.processor.uniform_observation=self.session
++        fx.processor.assessment_failed(old)
++        self.assertFalse(self.session.result_valid(result,old.uniform_tickets[0]))
++
++    def test_load_validation_no_fallback_and_environment_requires_observation(self):
++        for config in (replace(self.config,backend='cuda'),replace(self.config,recognition_confidence=float('nan')),
++                       replace(self.config,policy={'kind':'invented'}),replace(self.config,assessment_zone=(0,0,2,1))):
++            with self.assertRaises((ValueError,TypeError)):config.validate()
++        with patch.dict('os.environ',{CONFIG_ENV:'/fixture'},clear=True):
++            with self.assertRaisesRegex(ValueError,'OBSERVATION_ONLY'):ObservationUniformSession.from_environment(observation_only=False)
++        session=ObservationUniformSession(self.config,predictor_factory=Mock())
++        with patch('core.uniform_observation.candidate_descriptor',return_value={'id':'changed'}):
++            with self.assertRaisesRegex(ValueError,'hash changed'):session.prepare()
++        session._predictor_factory.assert_not_called()
++
++    def test_config_relative_bundle_and_invalid_unknown_options(self):
++        with tempfile.TemporaryDirectory() as temp:
++            p=Path(temp)/'config.json'
++            value={'schema':1,'mode':'observation_only','candidate_bundle':'bundle','candidate_sha256':'a'*64,'recognition_confidence':.8}
++            p.write_text(json.dumps(value));self.assertEqual(ObservationConfig.load(p).candidate_bundle,str(Path(temp).resolve()/'bundle'))
++            value['activate']=True;p.write_text(json.dumps(value))
++            with self.assertRaisesRegex(ValueError,'Unknown'):ObservationConfig.load(p)
++
++    def test_pipeline_unknown_identity_recognizes_without_side_effects_or_legacy_classifier(self):
++        from tests.test_live_pipeline import PipelineFixture
++        fx=PipelineFixture();fx.processor.observation_only=True;fx.processor.uniform_observation=self.session
++        task=self.task();fx.recognizer.recognize_faces.return_value=[{'box':self.obs.box,'matched':False,'identity_uncertain':True}]
++        result=fx.processor.analyze(task)
++        self.assertEqual(result.assessments[0].garment.label,'organizational_shirt')
++        self.assertEqual(result.assessments[0].accepted_categories,())
++        self.assertIsNone(result.assessments[0].uniform_label)
++        fx.processor.persist(result);fx.processor.submit_attendance(result);fx.processor.submit_unknowns(result)
++        fx.processor.submit_detection_audio(result)
++        for name in ('record_attendance','record_premises_entry','log_violation','log_security_event'):
++            getattr(fx.database,name).assert_not_called()
++        fx.notifier.notify.assert_not_called();fx.trainer.predict_proba.assert_not_called()
++        worker=LiveWorker(fx.processor,persistence_worker=True)
++        self.assertFalse(worker.persistence_worker);self.assertIsNone(worker.attendance_writer)
++        with self.assertRaisesRegex(ValueError,'observation-only'):
++            LiveProcessor(None,None,None,None,None,None,uniform_observation=self.session)
++
++    def test_two_people_and_reordered_recognition_keep_their_own_torso_pixels(self):
++        from tests.test_live_pipeline import PipelineFixture
++        fx=PipelineFixture();fx.processor.observation_only=True;fx.processor.uniform_observation=self.session
++        fx.recognizer.recognize_faces.side_effect=lambda frame,detections:[dict(d,matched=False,identity_uncertain=True) for d in detections]
++        left=replace(self.obs,box=(140,20,200,100),body_box=(40,0,270,450),torso_box=(60,120,240,320))
++        right=replace(self.obs,box=(460,20,520,100),body_box=(360,0,590,450),torso_box=(380,120,560,320),
++                      body_index=1,track_id=2,presence_id='person:1:2')
++        pixels=self.frame.copy();pixels[120,60]=10;pixels[120,380]=200
++        def predict(crop):
++            label='campus_uniform' if crop[0,0,0]==10 else 'organizational_shirt'
++            return {'probabilities':{c:.9 if c==label else .05 for c in CLASSES},'timings':{}}
++        self.predictor.timed_probabilities=predict
++        for observations in ((left,right),(right,left)):
++            task=self.task(dt=.6);self.now+=.01
++            task=replace(task,frame=pixels,context=replace(task.context,captured_at=self.now),
++                         observations=observations,assessment_order_ids=(right.presence_id,left.presence_id))
++            task=self.session.observe(task,observations)
++            result=fx.processor.analyze(task)
++            self.assertEqual({a.presence_id:a.garment.label for a in result.assessments},
++                {left.presence_id:'campus_uniform',right.presence_id:'organizational_shirt'})
++
++
++if __name__=='__main__':unittest.main()
+--- /dev/null
++++ b/tests/test_uniform_latency.py
+@@ -0,0 +1,43 @@
++import unittest
++from dataclasses import replace
++from core.uniform_latency import UniformPassageMetrics,distribution
++from core.uniform_observation import GarmentObservation
++
++
++class UniformLatencyTests(unittest.TestCase):
++    def garment(self,label=None,policy=None,cached=False):
++        return GarmentObservation('fixture',label,.9,'fixture','model','policy',policy,cached,
++            {'inference_ms':12.,'queue_delay_ms':3.,'assessment_ms':20.},decision_at=1.,evidence_at=.9)
++
++    def test_missing_and_unassessed_not_hidden_and_metrics_require_ground_truth(self):
++        m=UniformPassageMetrics();m.observe_labels([{'passage_alias':p} for p in ('missed','blur','recognized')])
++        m.record('blur',self.garment(),100);m.record('recognized',self.garment('other_clothing','violation'),200)
++        r=m.report();self.assertEqual((r['passage_count'],r['missed_passages'],r['unassessed_passages'],r['recognized_passages']),(3,1,1,1))
++        self.assertIsNone(r['false_violations']);self.assertIsNone(r['correct_classification_passages'])
++        self.assertIsNone(r['annotated_zone_entry_to_first_decision']['median_ms'])
++
++    def test_both_endpoints_and_later_resolution_one_passage(self):
++        m=UniformPassageMetrics();m.observe_labels([{'passage_alias':'p','zone_entry_ms':0,
++            'first_usable_torso_ms':100,'garment_label':'organizational_shirt','policy_label':'compliant'}])
++        m.record('p',self.garment(),50)
++        m.record('p',replace(self.garment('organizational_shirt','compliant'),evidence_at=1.1),250)
++        m.record('p',replace(self.garment('organizational_shirt','compliant',True),evidence_at=1.1),300)
++        r=m.report();self.assertEqual(r['passage_count'],1)
++        self.assertEqual(r['annotated_zone_entry_to_first_decision']['median_ms'],50)
++        self.assertEqual(r['annotated_first_usable_to_first_decision']['median_ms'],150)
++        self.assertEqual(r['annotated_first_usable_to_first_recognition']['median_ms'],150)
++        self.assertEqual(r['inference_samples'],2);self.assertEqual(r['correct_classification_passages'],1)
++        self.assertEqual(r['false_violations'],0)
++
++    def test_conflicting_labels_and_negative_timestamps_rejected(self):
++        m=UniformPassageMetrics();m.observe_labels([{'passage_alias':'p','garment_label':'campus_uniform'}])
++        with self.assertRaises(ValueError):m.observe_labels([{'passage_alias':'p','garment_label':'other_clothing'}])
++        with self.assertRaises(ValueError):m.observe_labels([{'passage_alias':'p','zone_entry_ms':-1}])
++        with self.assertRaises(ValueError):m.observe_labels([{'passage_alias':'p','garment_label':'wrong_uniform'}])
++
++    def test_summary_percentiles_are_actual_samples(self):
++        self.assertEqual(distribution([10,20,30]),{'count':3,'median_ms':20.,'p95_ms':29.})
++        self.assertEqual(distribution([]),{'count':0,'median_ms':None,'p95_ms':None})
++
++
++if __name__=='__main__':unittest.main()
+--- /dev/null
++++ b/tests/test_uniform_observation_ui.py
+@@ -0,0 +1,35 @@
++"""Native rendering/dedup checks with synthetic rows; no DB/model/camera."""
++import gc
++import unittest
++import customtkinter as ctk
++from ui.live_alerts import LiveAlerts,assessment_style
++from ui.components import COLOR_ACCENT,COLOR_TEXT_MUTED
++
++
++class UniformObservationUITests(unittest.TestCase):
++    def setUp(self):
++        gc.collect()
++        self.root=ctk.CTk();self.root.geometry('550x450+60+60');self.errors=[]
++        self.root.report_callback_exception=lambda *args:self.errors.append(args)
++        self.alerts=LiveAlerts(self.root);self.alerts.pack(fill='both',expand=True)
++    def tearDown(self):
++        self.root.destroy();gc.collect();self.assertEqual(self.errors,[])
++    def test_four_outcomes_update_same_widget_and_never_imply_policy_violation(self):
++        card=None
++        states=('Unable to assess','Campus Uniform recognized','Organizational Shirt recognized','Other clothing recognized')
++        for state in states:
++            row={'presence_id':'synthetic-passage','track_id':1,'student_id':'fixture-only',
++                 'name':'Synthetic UI fixture','reliable_identity':True,'state':state,
++                 'detail':'Observation only · Policy not configured','accepted_categories':()}
++            self.alerts.update_assessments([row]);self.root.update_idletasks();self.root.update()
++            self.assertEqual(len(self.alerts._cards),1)
++            widget=self.alerts._cards['synthetic-passage']
++            if card is not None:self.assertIs(card,widget)
++            card=widget
++            label,color=assessment_style(row)
++            self.assertEqual(label,state)
++            self.assertEqual(color,COLOR_TEXT_MUTED if state=='Unable to assess' else COLOR_ACCENT)
++        self.alerts.destroy();self.root.update_idletasks();self.root.update()
++
++
++if __name__=='__main__':unittest.main()
+--- /dev/null
++++ b/tests/test_uniform_predictor_backends.py
+@@ -0,0 +1,39 @@
++"""Predictor contract checks without loading model files or opening devices."""
++import threading
++import unittest
++from unittest.mock import patch
++import numpy as np
++import torch
++from core.uniform_model_registry import CandidatePredictor,CLASSES
++
++
++class UniformPredictorBackendTests(unittest.TestCase):
++    def test_unsupported_or_unavailable_backend_fails_before_weights(self):
++        with patch('torch.load') as load:
++            with self.assertRaises(ValueError):CandidatePredictor('/unused',backend='cuda')
++            with patch('torch.backends.mps.is_available',return_value=False):
++                with self.assertRaisesRegex(RuntimeError,'no fallback'):CandidatePredictor('/unused',backend='mps')
++            load.assert_not_called()
++
++    def test_timed_path_keeps_rgb_float_letterbox_mapping_and_no_flip(self):
++        received=[]
++        class Model:
++            def __call__(self,tensor):
++                received.append(tensor)
++                return torch.tensor([[.1,.2,.7]])
++            def parameters(self):return iter((torch.zeros(1),))
++        predictor=CandidatePredictor.__new__(CandidatePredictor)
++        predictor.torch=torch;predictor.backend='cpu';predictor.lock=threading.Lock();predictor.model=Model()
++        image=np.zeros((224,224,3),np.uint8)
++        image[:,:112]=(10,20,30);image[:,112:]=(40,50,60)
++        result=predictor.timed_probabilities(image)
++        tensor=received[0]
++        self.assertEqual(tuple(tensor.shape),(1,3,224,224));self.assertEqual(tensor.dtype,torch.float32)
++        self.assertTrue(torch.allclose(tensor[0,:,100,20],torch.tensor([30,20,10])/255))
++        self.assertTrue(torch.allclose(tensor[0,:,100,200],torch.tensor([60,50,40])/255))
++        self.assertEqual(list(result['probabilities']),CLASSES)
++        self.assertGreaterEqual(result['timings']['total_ms'],result['timings']['inference_ms'])
++        self.assertEqual(result['backend']['model_parameter_device'],'cpu')
++
++
++if __name__=='__main__':unittest.main()
+--- /dev/null
++++ b/docs/UNIFORM_OBSERVATION_WORKFLOW.md
+@@ -0,0 +1,173 @@
++# Stage 4 candidate observation workflow
++
++Stage 4 does not activate a model. Normal startup still uses the unchanged active
++bundle. Observation mode uses a separately pinned, validated Stage 2 candidate and
++blocks attendance, security, disciplinary and notification/audio side effects in
++the live processor. The preview-only secondary camera remains preview-only.
++
++The current real catalog has no approved examples and there is no real candidate.
++The retained synthetic candidate is only suitable for software/timing smoke tests.
++It cannot demonstrate garment accuracy or meet activation requirements.
++
++## Explicit configuration
++
++Create a JSON file outside a model bundle. No repository configuration is enabled
++automatically. Use the candidate's verified weight SHA256, and an explicitly chosen
++recognition confidence. The following values are **smoke-test values only**, not
++accuracy criteria or recommended production settings:
++
++```json
++{
++  "schema": 1,
++  "mode": "observation_only",
++  "candidate_bundle": "/absolute/path/to/completed/candidate",
++  "candidate_sha256": "the_64_character_candidate_weight_sha256",
++  "recognition_confidence": 0.8,
++  "backend": "cpu",
++  "assessment_zone": [0.0, 0.0, 1.0, 1.0],
++  "policy": null
++}
++```
++
++Run from the repository:
++
++```sh
++CBVMS_ASSESSMENT_OBSERVATION_ONLY=1 \
++CBVMS_UNIFORM_OBSERVATION_CONFIG=/absolute/path/to/observation.json \
++.venv/bin/python main.py
++```
++
++The second variable without observation-only mode is rejected. The config is read
++once; changing model, policy, thresholds or zone requires stopping and restarting
++the observation session. Loaded weights and preprocessing are a frozen in-memory
++snapshot. The config and bundle are never written by observation inference.
++
++Candidate MPS is opt-in (`"backend": "mps"`). Parameter placement is verified and
++an unavailable/failing MPS classifier reports failure rather than quietly running
++on CPU. The existing body detector separately supports
++`CBVMS_BODY_YOLO_BACKEND=cpu|mps` and discloses fallback through its existing backend
++status/diagnostics. Face recognition stays on its existing ONNX CPU path.
++
++Use one monitoring app and no concurrent training/benchmark job for measurements.
++Model loading/warmup and inference run outside Tk. Loading is excluded from warm
++inference measurements and may be much slower. Body/face/candidate work shares the
++machine with rendering and ordinary OS activity; component latency does not imply
++end-to-end latency. The observation config forces the existing bounded, fresh-frame
++router; it does not start a second classifier or camera-analysis owner.
++
++## Evidence, outcomes and policy
++
++The existing tracker supplies same-frame face/body/torso boxes. Evidence is scoped
++by camera ID, monitor cancellation/session token, generation, camera generation,
++track ID, presence ID and the pinned candidate/config versions. Disappearance,
++reassignment, association changes, bad crops, stale frames, source changes,
++identity changes, model/config restart and analysis failure revoke evidence.
++
++The cache holds at most 48 passages; the existing router/worker retain bounded
++frames/queues. Default frame/evidence TTL is 1 second; reliable evidence can be
++reused for at most 0.5 seconds before fresh inference is attempted. Uncertain
++classifications are retried on a new usable frame. An unusable frame immediately
++reports `Unable to assess`; it does not wait indefinitely for a perfect frame.
++
++Outcomes are `Campus Uniform recognized`, `Organizational Shirt recognized`,
++`Other clothing recognized`, or `Unable to assess`. Unknown identity does not turn
++garment recognition into other clothing. Garment results do not feed the legacy
++binary violation confirmation or disciplinary writer. Existing identity/earring
++logic and alert/passage deduplication remain in place.
++
++Geometry/overlap checks and the existing skin guard reject invalid associations
++and possible obstruction. Default quality gates use the Stage 1 heuristics:
++minimum torso side 160 px and Laplacian variance 25 at no more than 512 px. These
++are conservative review heuristics, **not validated accuracy thresholds**, and
++cannot detect every obstruction. No mirror flip or smaller classifier input is
++introduced; inference remains `trainer-letterbox-rgb-0-1-v1`, 224 px, RGB [0,1].
++
++`policy: null` means policy is not configured; no violation is inferred. Optional
++policy must exactly match the existing Stage 3 `garment-policy-v1` rule, with an
++explicit `minimum_confidence`, `kind: garment_probability_sum` and
++`accepted_classes: [campus_uniform, organizational_shirt]`. This is only global
++garment-policy observation. No department/day/schedule garment-permission engine
++was found; those permissions remain explicitly unassessed even with this rule.
++Recognition and policy uncertainty remain separate. Nothing activates the candidate.
++
++## Reproducible measurements
++
++Raw model stages (same explicit images/configuration on both devices):
++
++```sh
++.venv/bin/python scripts/benchmark_uniform_backends.py \
++  --candidate /absolute/path/to/candidate \
++  --images /absolute/path/to/consented-image.jpg \
++  --backend both --warmup 4 --repeats 30 \
++  --output output/uniform-stage4/backend-benchmark.json
++```
++
++For bounded generated-raster integration with scripted localization and real
++tracking/router/worker/candidate inference:
++
++```sh
++.venv/bin/python scripts/smoke_uniform_observation.py \
++  --candidate /absolute/path/to/candidate --backend both --passages 10 \
++  --output output/uniform-stage4/passage-smoke.json
++```
++
++This deliberately includes unusable torsos. It opens no database or camera. Its
++passages are synthetic; neither its labels nor its latency are real-world evidence.
++
++For consented footage, extend the existing per-frame JSONL annotations with
++optional, reviewed per-passage `garment_label`, `policy_label`, `zone_entry_ms` and
++`first_usable_torso_ms`. Times are absolute milliseconds on the video timeline.
++`garment_label` uses stable IDs `campus_uniform`, `organizational_shirt`,
++`other_clothing`; policy labels are independently reviewed `compliant`/`violation`.
++Do not derive labels from filenames or predictions. Keep `passage_alias` stable
++within a passage and use a new alias for another passage. Conflicting annotations
++are rejected. Existing `face_box` annotations join results to the correct person.
++
++```sh
++.venv/bin/python scripts/replay_camera_assessment.py \
++  --video /absolute/path/to/consented-passage.mp4 \
++  --annotations /absolute/path/to/reviewed-passages.jsonl \
++  --mode candidate --uniform-observation-config /absolute/path/to/observation.json \
++  --body-backend cpu --max-frames 1800 \
++  --output output/uniform-stage4/candidate-replay-cpu.json
++```
++
++Run CPU and MPS sequentially on identical footage/annotations/zone/confidence and
++224 px preprocessing, changing only the backend settings. Report hashes, versions,
++warmup, hardware, thread settings, actual devices/fallback, skipped frames, counts
++and missing labels. Replay initializes an empty disposable roster by default; an
++explicit authorized evaluation DB is copied to a temporary DB before use. It never
++writes production records. Garment evaluation does not require an identity gallery.
++
++Reports distinguish first decision (including inability to assess) from first
++recognition; a fast abstention is not a successful recognition. Both annotated
++zone-entry→decision and first-usable-torso→decision distributions include sample
++counts, median and p95. Missing annotations yield null timings, not invented zeroes.
++Queue delay measures time actually spent waiting in the assessment worker queue;
++capture-to-decision also includes localization, routing and preceding analysis.
++Missed/unassessed passages are separate from completed inferences. Policy false/
++missed violations are scored only on assessed policy outcomes with policy ground
++truth; policy abstentions have their own count.
++
++500 ms from the first usable torso is an initial target, not a guarantee. Real
++passage footage, reviewed candidate data, independent labels and physical-camera
++coverage are still missing. Smaller input sizes were not adopted or evaluated.
++
++## Manual acceptance and rollback
++
++1. Start an explicitly configured observation session. Check the candidate hash,
++   actual backend and synthetic-model warning in the model status. Production
++   activation must remain unchanged.
++2. On one consented primary camera, enter/leave the configured zone, briefly obscure
++   the torso, move out of frame and return. Check fresh evidence can resolve
++   uncertainty and no old person's garment follows a replacement track.
++3. Switch sources, open/close the preview pop-out, and scroll with two fingers.
++   Confirm the secondary camera remains preview-only, the UI stays responsive,
++   and a logical passage updates without duplicate alert cards or saved logs.
++4. Verify policy-unconfigured text; inspect persistence only in disposable tests.
++   Do not use the synthetic candidate to approve model accuracy or activation.
++
++Stop the observation app and unset the two observation environment variables to
++return to ordinary startup. No production-model rollback is needed. For code-only
++rollback use the Stage 4 checkpoint's scoped patch after reviewing later edits;
++retain all original datasets, bundles and previous fixes.

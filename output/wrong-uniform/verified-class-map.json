@@ -1,0 +1,17 @@
+{
+  "classes": [
+    {
+      "category": "campus_uniform",
+      "index": 0
+    },
+    {
+      "category": "organizational_shirt",
+      "index": 1
+    },
+    {
+      "category": "other_clothing",
+      "index": 2
+    }
+  ],
+  "mapping_version": "uniform-garments-v1"
+}

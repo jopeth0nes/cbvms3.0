@@ -1,0 +1,9 @@
+{
+  "wrapper_pid": 49699,
+  "wrapper_command": "output/uniform-stage5/run_owned_check.py final-logo-native .venv/bin/python -m unittest tests.test_uniform_logo_ui -v",
+  "started_at_utc": "2026-11-05T06:29:32.910684+00:00",
+  "command": ".venv/bin/python -m unittest tests.test_uniform_logo_ui -v",
+  "pid": 49700,
+  "returncode": 0,
+  "finished_at_utc": "2026-11-05T06:29:36.782265+00:00"
+}

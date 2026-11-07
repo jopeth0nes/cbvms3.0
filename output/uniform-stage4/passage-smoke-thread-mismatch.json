@@ -1,0 +1,225 @@
+{
+  "kind": "synthetic_passage_integration_smoke",
+  "results": [
+    {
+      "backend": {
+        "requested": "cpu",
+        "active": "cpu",
+        "model_parameter_device": "cpu",
+        "fallback_reason": null
+      },
+      "candidate_id": "4eda5fd372adbd80749553f849bc155a3fc4873fa2b660774d413a26bdaaf65a",
+      "synthetic_candidate": true,
+      "preprocessing_version": "trainer-letterbox-rgb-0-1-v1",
+      "config_version": "e872a480a59a7e3f7ac4cd475f25c1974855118804f8db78e4b87fae0033d3a5",
+      "fixture_pixel_sha256": "bb08e5ab64862621080e0249334c9863c4b9a5ed79ebe0858e1054c71836b501",
+      "metrics": {
+        "passage_count": 10,
+        "missed_passages": 0,
+        "unassessed_passages": 10,
+        "recognized_passages": 0,
+        "annotated_zone_entry_to_first_decision": {
+          "count": 10,
+          "median_ms": 0.3425210015848279,
+          "p95_ms": 1.5667348809074588
+        },
+        "annotated_first_usable_to_first_decision": {
+          "count": 8,
+          "median_ms": 3.5985204740427434,
+          "p95_ms": 4.69554325682111
+        },
+        "annotated_first_usable_to_first_recognition": {
+          "count": 0,
+          "median_ms": null,
+          "p95_ms": null
+        },
+        "annotated_zone_entry_to_first_recognition": {
+          "count": 0,
+          "median_ms": null,
+          "p95_ms": null
+        },
+        "classification_ground_truth_passages": 0,
+        "correct_classification_passages": null,
+        "policy_scored_passages": 0,
+        "policy_ground_truth_passages": 0,
+        "policy_unassessed_passages": 0,
+        "false_violations": null,
+        "missed_violations": null,
+        "inference_samples": 16,
+        "samples_dropped": 0,
+        "stages": {
+          "preprocessing_ms": {
+            "count": 16,
+            "median_ms": 0.14143745647743344,
+            "p95_ms": 0.15965619240887463
+          },
+          "inference_ms": {
+            "count": 16,
+            "median_ms": 2.589917043223977,
+            "p95_ms": 2.699406730243936
+          },
+          "queue_delay_ms": {
+            "count": 16,
+            "median_ms": 0.021729443687945604,
+            "p95_ms": 0.026604480808600783
+          },
+          "assessment_ms": {
+            "count": 16,
+            "median_ms": 2.758479444310069,
+            "p95_ms": 2.8912810375913978
+          },
+          "capture_to_decision_ms": {
+            "count": 16,
+            "median_ms": 3.4932499402202666,
+            "p95_ms": 4.139197495533153
+          }
+        },
+        "limitations": [
+          "Decision includes unable-to-assess; recognition latency is reported separately.",
+          "Missing passage/timing/garment/policy labels are not inferred from filenames or predictions.",
+          "Stage distributions count fresh inference attempts, not cache hits or independent people.",
+          "500 ms from first usable torso is an initial target, not an acceptance guarantee."
+        ]
+      },
+      "failures": [],
+      "database_opened": false,
+      "production_writes": 0,
+      "worker_stopped": true,
+      "queue_capacity": 1,
+      "conditions": {
+        "frames_per_simulated_passage": 3,
+        "simulated_passages": 10,
+        "blur_only_passages": 2,
+        "warmup_calls": 4,
+        "fixture_confidence": 0.8,
+        "frame_size": [
+          640,
+          480
+        ],
+        "candidate_input_size": 224,
+        "wait_between_frames_ms": 35,
+        "torch_cpu_threads": 2,
+        "opencv_threads": 1,
+        "physical_camera": false,
+        "face_and_body_inference": "scripted fixture; real association/tracking code",
+        "classification_accuracy": null,
+        "policy_accuracy": null,
+        "contention": "sequential backends; no live app/camera/training job; ordinary OS activity uncontrolled"
+      }
+    },
+    {
+      "backend": {
+        "requested": "mps",
+        "active": "mps",
+        "model_parameter_device": "mps:0",
+        "fallback_reason": null
+      },
+      "candidate_id": "4eda5fd372adbd80749553f849bc155a3fc4873fa2b660774d413a26bdaaf65a",
+      "synthetic_candidate": true,
+      "preprocessing_version": "trainer-letterbox-rgb-0-1-v1",
+      "config_version": "57acf0996e48e039e6eeef9a6d2848c8d283cb6b172b8df8aff8eb5dec6a33fa",
+      "fixture_pixel_sha256": "bb08e5ab64862621080e0249334c9863c4b9a5ed79ebe0858e1054c71836b501",
+      "metrics": {
+        "passage_count": 10,
+        "missed_passages": 0,
+        "unassessed_passages": 10,
+        "recognized_passages": 0,
+        "annotated_zone_entry_to_first_decision": {
+          "count": 10,
+          "median_ms": 1.4095835504122078,
+          "p95_ms": 1.8185374035965651
+        },
+        "annotated_first_usable_to_first_decision": {
+          "count": 8,
+          "median_ms": 12.771292065735906,
+          "p95_ms": 18.044095434015617
+        },
+        "annotated_first_usable_to_first_recognition": {
+          "count": 0,
+          "median_ms": null,
+          "p95_ms": null
+        },
+        "annotated_zone_entry_to_first_recognition": {
+          "count": 0,
+          "median_ms": null,
+          "p95_ms": null
+        },
+        "classification_ground_truth_passages": 0,
+        "correct_classification_passages": null,
+        "policy_scored_passages": 0,
+        "policy_ground_truth_passages": 0,
+        "policy_unassessed_passages": 0,
+        "false_violations": null,
+        "missed_violations": null,
+        "inference_samples": 16,
+        "samples_dropped": 0,
+        "stages": {
+          "preprocessing_ms": {
+            "count": 16,
+            "median_ms": 1.335979555733502,
+            "p95_ms": 2.221020666183904
+          },
+          "inference_ms": {
+            "count": 16,
+            "median_ms": 8.49016651045531,
+            "p95_ms": 12.900823261588812
+          },
+          "queue_delay_ms": {
+            "count": 16,
+            "median_ms": 0.050541479140520096,
+            "p95_ms": 0.11410450679250062
+          },
+          "assessment_ms": {
+            "count": 16,
+            "median_ms": 9.930936968885362,
+            "p95_ms": 14.824624551692978
+          },
+          "capture_to_decision_ms": {
+            "count": 16,
+            "median_ms": 13.698916998691857,
+            "p95_ms": 18.15727024222724
+          }
+        },
+        "limitations": [
+          "Decision includes unable-to-assess; recognition latency is reported separately.",
+          "Missing passage/timing/garment/policy labels are not inferred from filenames or predictions.",
+          "Stage distributions count fresh inference attempts, not cache hits or independent people.",
+          "500 ms from first usable torso is an initial target, not an acceptance guarantee."
+        ]
+      },
+      "failures": [],
+      "database_opened": false,
+      "production_writes": 0,
+      "worker_stopped": true,
+      "queue_capacity": 1,
+      "conditions": {
+        "frames_per_simulated_passage": 3,
+        "simulated_passages": 10,
+        "blur_only_passages": 2,
+        "warmup_calls": 4,
+        "fixture_confidence": 0.8,
+        "frame_size": [
+          640,
+          480
+        ],
+        "candidate_input_size": 224,
+        "wait_between_frames_ms": 35,
+        "torch_cpu_threads": 2,
+        "opencv_threads": 10,
+        "physical_camera": false,
+        "face_and_body_inference": "scripted fixture; real association/tracking code",
+        "classification_accuracy": null,
+        "policy_accuracy": null,
+        "contention": "sequential backends; no live app/camera/training job; ordinary OS activity uncontrolled"
+      }
+    }
+  ],
+  "real_passage_count": 0,
+  "physical_camera_measurement": false,
+  "accuracy_evaluated": false,
+  "limitations": [
+    "Synthetic pixels and scripted localization; these timings exclude real face/body inference.",
+    "No evidence that the 500 ms target is met on real passages. Input size remains 224.",
+    "Recognition predictions on these rasters are not clothing labels or accuracy evidence."
+  ]
+}

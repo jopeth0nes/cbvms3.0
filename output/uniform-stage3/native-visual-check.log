@@ -1,0 +1,2 @@
+{"pid": 38383, "started_at": "2026-11-04T11:27:47.660825+00:00", "command": "/Users/jopethones/Documents/GitHub/cbvms3.0/.venv/bin/python output/uniform-stage3/native_visual_check.py"}
+{"status": "passed", "active": "legacy-9cfbcb7cb159ea7de3d8afa24eba01268b29a8252a311615a185149868a5609b", "candidates": 0, "authorization": "no session in isolated view", "camera_opened": false, "errors": []}

@@ -1,0 +1,10 @@
+{
+  "core/uniform_dataset.py": "6efcfa4f74106b0cd82667ac48210e96b827c89eb2ea469c8ff739f5885af364",
+  "core/uniform_references.py": "c2fb46eddc334e7ed7ffab041462ed087bdadde3464e14d53b58cfa62157511a",
+  "core/uniform_observation.py": "ac9b9b84369bfe1ee0034c39e6598f5a8dcd1c2c114915a2b81269d15dbb229b",
+  "core/uniform_latency.py": "77517277d905492c484229e6bdbb48feb685a62466b506175b635bfa944692a1",
+  "ui/uniform_workspace.py": "e8c9925dfd7d937fa4e5eba54cdf586842004bd62d97f5d5377d8d205a6ac4f9",
+  "ui/uniform_models_panel.py": "e9d5123cd65bc74e9e92812df0f622ab01ea332f773c962cddda2e97524cbf0f",
+  "ui/training_panel.py": "4cb448b6a5cbe56a83e9493c334e0e695352368e42d0ec7c9fd7cfb26404ed44",
+  "docs/UNIFORM_UPGRADE_CHECKPOINT.md": "5b79607e10fe7f10c520c960d9fa10a3fec7356b892cc63ada7e6dc7118805ea"
+}

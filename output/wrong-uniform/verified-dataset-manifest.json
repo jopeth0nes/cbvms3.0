@@ -1,0 +1,714 @@
+{
+  "dataset_preprocess_version": "uniform-stage1-raster-v1",
+  "dataset_snapshot_sha256": "b41a75a56dd5caebbc016f5e8754cba0cb73fd203b2711c326871496d0bf4f77",
+  "eligibility_snapshot": {
+    "approved_by_category": {
+      "campus_uniform": 10,
+      "organizational_shirt": 10,
+      "other_clothing": 10
+    },
+    "excluded": 1,
+    "groups_by_category": {
+      "campus_uniform": {
+        "known": 1,
+        "unknown": 0
+      },
+      "organizational_shirt": {
+        "known": 1,
+        "unknown": 0
+      },
+      "other_clothing": {
+        "known": 1,
+        "unknown": 1
+      }
+    },
+    "included_by_category": {
+      "campus_uniform": 10,
+      "organizational_shirt": 10,
+      "other_clothing": 10
+    },
+    "pending": 1,
+    "quality_blocked": 0,
+    "readiness_reasons": [
+      "1 pending-review record(s) are excluded.",
+      "1 excluded record(s) are not used."
+    ]
+  },
+  "entries": [
+    {
+      "category": "other_clothing",
+      "class_index": 2,
+      "crop": [
+        10,
+        10,
+        210,
+        170
+      ],
+      "crop_source": "manual",
+      "group_ids": [
+        "fixture-session-2"
+      ],
+      "image_id": "07a5db7d131cefd9a6d1c613687136b6908cd42a9f87eef6413198a1fbfd26ff",
+      "near_duplicate_ids": [],
+      "original_sha256": "07a5db7d131cefd9a6d1c613687136b6908cd42a9f87eef6413198a1fbfd26ff",
+      "prepared_path": "prepared/07a5db7d131cefd9a6d1c613687136b6908cd42a9f87eef6413198a1fbfd26ff.npy",
+      "prepared_sha256": "02941b8edff5e05832d06d6fbb366b547e8761761348cc1a27bb008ca3ed01b0",
+      "preprocess_version": "uniform-stage1-raster-v1",
+      "split": "train",
+      "unknown_provenance": false
+    },
+    {
+      "category": "organizational_shirt",
+      "class_index": 1,
+      "crop": [
+        10,
+        10,
+        210,
+        170
+      ],
+      "crop_source": "manual",
+      "group_ids": [
+        "fixture-session-1"
+      ],
+      "image_id": "0dfcfba487596af9489814a8fa5ba6a4677b34284bf67d17b13bfe53a8700be9",
+      "near_duplicate_ids": [],
+      "original_sha256": "0dfcfba487596af9489814a8fa5ba6a4677b34284bf67d17b13bfe53a8700be9",
+      "prepared_path": "prepared/0dfcfba487596af9489814a8fa5ba6a4677b34284bf67d17b13bfe53a8700be9.npy",
+      "prepared_sha256": "6eaae16cdf69b07d7eff8753a19c8d196765af6f545821b44bc29d102bbee7a2",
+      "preprocess_version": "uniform-stage1-raster-v1",
+      "split": "train",
+      "unknown_provenance": false
+    },
+    {
+      "category": "other_clothing",
+      "class_index": 2,
+      "crop": [
+        10,
+        10,
+        210,
+        170
+      ],
+      "crop_source": "manual",
+      "group_ids": [
+        "fixture-session-2"
+      ],
+      "image_id": "1e28024c1dd90656bc6ba86f50cd03ba64181ea3226ea2aa93cae6739a13453f",
+      "near_duplicate_ids": [],
+      "original_sha256": "1e28024c1dd90656bc6ba86f50cd03ba64181ea3226ea2aa93cae6739a13453f",
+      "prepared_path": "prepared/1e28024c1dd90656bc6ba86f50cd03ba64181ea3226ea2aa93cae6739a13453f.npy",
+      "prepared_sha256": "7bb1ee2574aaa2b3cf5c6cb5eede59e5aaaf27eca4ff8b33f521114777171dfd",
+      "preprocess_version": "uniform-stage1-raster-v1",
+      "split": "train",
+      "unknown_provenance": false
+    },
+    {
+      "category": "campus_uniform",
+      "class_index": 0,
+      "crop": [
+        10,
+        10,
+        210,
+        170
+      ],
+      "crop_source": "manual",
+      "group_ids": [
+        "fixture-session-0"
+      ],
+      "image_id": "3ed4e76b8a19d14a38ad70fc670112ed6f1b0216a575a152fad50004795947bd",
+      "near_duplicate_ids": [],
+      "original_sha256": "3ed4e76b8a19d14a38ad70fc670112ed6f1b0216a575a152fad50004795947bd",
+      "prepared_path": "prepared/3ed4e76b8a19d14a38ad70fc670112ed6f1b0216a575a152fad50004795947bd.npy",
+      "prepared_sha256": "40b26774090420fae68160b56f06d439175fb7a51330d3ec80ba836e6afb2a8e",
+      "preprocess_version": "uniform-stage1-raster-v1",
+      "split": "train",
+      "unknown_provenance": false
+    },
+    {
+      "category": "other_clothing",
+      "class_index": 2,
+      "crop": [
+        10,
+        10,
+        210,
+        170
+      ],
+      "crop_source": "manual",
+      "group_ids": [
+        "fixture-session-2"
+      ],
+      "image_id": "4f2e5026c232103c86d244e7369d0c78d6e6154d9a105f0e3498de27d5ae5a53",
+      "near_duplicate_ids": [],
+      "original_sha256": "4f2e5026c232103c86d244e7369d0c78d6e6154d9a105f0e3498de27d5ae5a53",
+      "prepared_path": "prepared/4f2e5026c232103c86d244e7369d0c78d6e6154d9a105f0e3498de27d5ae5a53.npy",
+      "prepared_sha256": "01d5e6e6d7cbb4dd7c28ae6fe831213d0affc45059780cfc47b0d1187fddaa1b",
+      "preprocess_version": "uniform-stage1-raster-v1",
+      "split": "train",
+      "unknown_provenance": false
+    },
+    {
+      "category": "other_clothing",
+      "class_index": 2,
+      "crop": [
+        10,
+        10,
+        210,
+        170
+      ],
+      "crop_source": "manual",
+      "group_ids": [
+        "fixture-session-2"
+      ],
+      "image_id": "508c02728201355ed44d19702176567eab62eca2ae73989fd6f264ebdd4db55d",
+      "near_duplicate_ids": [],
+      "original_sha256": "508c02728201355ed44d19702176567eab62eca2ae73989fd6f264ebdd4db55d",
+      "prepared_path": "prepared/508c02728201355ed44d19702176567eab62eca2ae73989fd6f264ebdd4db55d.npy",
+      "prepared_sha256": "19019ec2633a43098d80f30b1b76e4e0b91d76bd804d81a77dcaaa6d91bfa1b5",
+      "preprocess_version": "uniform-stage1-raster-v1",
+      "split": "train",
+      "unknown_provenance": false
+    },
+    {
+      "category": "campus_uniform",
+      "class_index": 0,
+      "crop": [
+        10,
+        10,
+        210,
+        170
+      ],
+      "crop_source": "manual",
+      "group_ids": [
+        "fixture-session-0"
+      ],
+      "image_id": "5d1653cd3223f739f0eb9e58fc47b575827cc9357a117e807241d2cc96594e8f",
+      "near_duplicate_ids": [],
+      "original_sha256": "5d1653cd3223f739f0eb9e58fc47b575827cc9357a117e807241d2cc96594e8f",
+      "prepared_path": "prepared/5d1653cd3223f739f0eb9e58fc47b575827cc9357a117e807241d2cc96594e8f.npy",
+      "prepared_sha256": "45b9df7d7b8a3930eafa3e8ba37860b0c9017741efa4fdd840dca3af1c89d9f3",
+      "preprocess_version": "uniform-stage1-raster-v1",
+      "split": "train",
+      "unknown_provenance": false
+    },
+    {
+      "category": "organizational_shirt",
+      "class_index": 1,
+      "crop": [
+        10,
+        10,
+        210,
+        170
+      ],
+      "crop_source": "manual",
+      "group_ids": [
+        "fixture-session-1"
+      ],
+      "image_id": "5eed54928dadc73b64d664afc16194e6c277988b0d25c2c45af59d0a3db968f0",
+      "near_duplicate_ids": [],
+      "original_sha256": "5eed54928dadc73b64d664afc16194e6c277988b0d25c2c45af59d0a3db968f0",
+      "prepared_path": "prepared/5eed54928dadc73b64d664afc16194e6c277988b0d25c2c45af59d0a3db968f0.npy",
+      "prepared_sha256": "f89fed4a8de57dd62f8fd84d6d534647d3e4b94b57ff402471e3bac99724d2ec",
+      "preprocess_version": "uniform-stage1-raster-v1",
+      "split": "train",
+      "unknown_provenance": false
+    },
+    {
+      "category": "other_clothing",
+      "class_index": 2,
+      "crop": [
+        20,
+        25,
+        200,
+        160
+      ],
+      "crop_source": "manual",
+      "group_ids": [],
+      "image_id": "71a747a22d906e92f1e2c6fc5c6c83d46f578377b99552e6196855d7f9b45387",
+      "near_duplicate_ids": [],
+      "original_sha256": "71a747a22d906e92f1e2c6fc5c6c83d46f578377b99552e6196855d7f9b45387",
+      "prepared_path": "prepared/71a747a22d906e92f1e2c6fc5c6c83d46f578377b99552e6196855d7f9b45387.npy",
+      "prepared_sha256": "8890bdf4d0b4395a1c97161226183985152171da7459d1d7b87bd08abe814fa4",
+      "preprocess_version": "uniform-stage1-raster-v1",
+      "split": "train",
+      "unknown_provenance": true
+    },
+    {
+      "category": "campus_uniform",
+      "class_index": 0,
+      "crop": [
+        10,
+        10,
+        210,
+        170
+      ],
+      "crop_source": "manual",
+      "group_ids": [
+        "fixture-session-0"
+      ],
+      "image_id": "7373a9173378eb9e1adf5827946fdd746e6b26718ca5a017508550bd0260b883",
+      "near_duplicate_ids": [],
+      "original_sha256": "7373a9173378eb9e1adf5827946fdd746e6b26718ca5a017508550bd0260b883",
+      "prepared_path": "prepared/7373a9173378eb9e1adf5827946fdd746e6b26718ca5a017508550bd0260b883.npy",
+      "prepared_sha256": "3b2be3156f4a030b1b46de2bf7ce5042dd20289fc86928dc2ca2442459fdc0fc",
+      "preprocess_version": "uniform-stage1-raster-v1",
+      "split": "train",
+      "unknown_provenance": false
+    },
+    {
+      "category": "campus_uniform",
+      "class_index": 0,
+      "crop": [
+        10,
+        10,
+        210,
+        170
+      ],
+      "crop_source": "manual",
+      "group_ids": [
+        "fixture-session-0"
+      ],
+      "image_id": "7760149e3410b8787df0e031663d2c26b839ad722a15414ef53d51c7feacc7ca",
+      "near_duplicate_ids": [],
+      "original_sha256": "7760149e3410b8787df0e031663d2c26b839ad722a15414ef53d51c7feacc7ca",
+      "prepared_path": "prepared/7760149e3410b8787df0e031663d2c26b839ad722a15414ef53d51c7feacc7ca.npy",
+      "prepared_sha256": "91f84f53fdb150876c966570ad8db85cb3b7831b69a97a43e26efe19514f638b",
+      "preprocess_version": "uniform-stage1-raster-v1",
+      "split": "train",
+      "unknown_provenance": false
+    },
+    {
+      "category": "other_clothing",
+      "class_index": 2,
+      "crop": [
+        10,
+        10,
+        210,
+        170
+      ],
+      "crop_source": "manual",
+      "group_ids": [
+        "fixture-session-2"
+      ],
+      "image_id": "7d4c2e7152df92ed2ed2252b2ff227ef864e12fa6d6ad082f23b7a972fa16d02",
+      "near_duplicate_ids": [],
+      "original_sha256": "7d4c2e7152df92ed2ed2252b2ff227ef864e12fa6d6ad082f23b7a972fa16d02",
+      "prepared_path": "prepared/7d4c2e7152df92ed2ed2252b2ff227ef864e12fa6d6ad082f23b7a972fa16d02.npy",
+      "prepared_sha256": "a97d83b6aee40cfece95a9df953bb6e7aef2d13bf414f1725d24146b810f2b49",
+      "preprocess_version": "uniform-stage1-raster-v1",
+      "split": "train",
+      "unknown_provenance": false
+    },
+    {
+      "category": "campus_uniform",
+      "class_index": 0,
+      "crop": [
+        10,
+        10,
+        210,
+        170
+      ],
+      "crop_source": "manual",
+      "group_ids": [
+        "fixture-session-0"
+      ],
+      "image_id": "8bb2d187ace78141b2008a2ceee19a1b03856c34bed24e4c63d45025ef5b58de",
+      "near_duplicate_ids": [],
+      "original_sha256": "8bb2d187ace78141b2008a2ceee19a1b03856c34bed24e4c63d45025ef5b58de",
+      "prepared_path": "prepared/8bb2d187ace78141b2008a2ceee19a1b03856c34bed24e4c63d45025ef5b58de.npy",
+      "prepared_sha256": "b574d81b0d61ade1a23147ab2bb8957b69d6b78fb0e6a86e51a243267f38027f",
+      "preprocess_version": "uniform-stage1-raster-v1",
+      "split": "train",
+      "unknown_provenance": false
+    },
+    {
+      "category": "campus_uniform",
+      "class_index": 0,
+      "crop": [
+        10,
+        10,
+        210,
+        170
+      ],
+      "crop_source": "manual",
+      "group_ids": [
+        "fixture-session-0"
+      ],
+      "image_id": "8d54e12c523c2aa0fa3389c4d54bab1373783bba08d467511887196d7bcf3103",
+      "near_duplicate_ids": [],
+      "original_sha256": "8d54e12c523c2aa0fa3389c4d54bab1373783bba08d467511887196d7bcf3103",
+      "prepared_path": "prepared/8d54e12c523c2aa0fa3389c4d54bab1373783bba08d467511887196d7bcf3103.npy",
+      "prepared_sha256": "c35f8cf62130dbd06de36a6fb81d02e2e74a82700752e96a432fac1e6cc0a8f5",
+      "preprocess_version": "uniform-stage1-raster-v1",
+      "split": "train",
+      "unknown_provenance": false
+    },
+    {
+      "category": "organizational_shirt",
+      "class_index": 1,
+      "crop": [
+        10,
+        10,
+        210,
+        170
+      ],
+      "crop_source": "manual",
+      "group_ids": [
+        "fixture-session-1"
+      ],
+      "image_id": "8f82934cf2ba382ddfb3c0992543bf167679fe9ffffb4f3d3d085012d9057631",
+      "near_duplicate_ids": [],
+      "original_sha256": "8f82934cf2ba382ddfb3c0992543bf167679fe9ffffb4f3d3d085012d9057631",
+      "prepared_path": "prepared/8f82934cf2ba382ddfb3c0992543bf167679fe9ffffb4f3d3d085012d9057631.npy",
+      "prepared_sha256": "dde3f5697ded73d21f065e7d080a81b617f40acef97d719412f34fcd111dd7b3",
+      "preprocess_version": "uniform-stage1-raster-v1",
+      "split": "train",
+      "unknown_provenance": false
+    },
+    {
+      "category": "organizational_shirt",
+      "class_index": 1,
+      "crop": [
+        10,
+        10,
+        210,
+        170
+      ],
+      "crop_source": "manual",
+      "group_ids": [
+        "fixture-session-1"
+      ],
+      "image_id": "90962e7c0005a5aa58ac9267795f6268111dfb8b9eeda55983a630aad95d0592",
+      "near_duplicate_ids": [],
+      "original_sha256": "90962e7c0005a5aa58ac9267795f6268111dfb8b9eeda55983a630aad95d0592",
+      "prepared_path": "prepared/90962e7c0005a5aa58ac9267795f6268111dfb8b9eeda55983a630aad95d0592.npy",
+      "prepared_sha256": "8d081016c2d35edcbe14b508a5dcba417c917269e07c13522871e92bbe732cd4",
+      "preprocess_version": "uniform-stage1-raster-v1",
+      "split": "train",
+      "unknown_provenance": false
+    },
+    {
+      "category": "organizational_shirt",
+      "class_index": 1,
+      "crop": [
+        10,
+        10,
+        210,
+        170
+      ],
+      "crop_source": "manual",
+      "group_ids": [
+        "fixture-session-1"
+      ],
+      "image_id": "9bd89ccf40b377fbcb80349770f3e06f65f0c9957563295603e2ae9ccc1dc8b0",
+      "near_duplicate_ids": [],
+      "original_sha256": "9bd89ccf40b377fbcb80349770f3e06f65f0c9957563295603e2ae9ccc1dc8b0",
+      "prepared_path": "prepared/9bd89ccf40b377fbcb80349770f3e06f65f0c9957563295603e2ae9ccc1dc8b0.npy",
+      "prepared_sha256": "d2226bbae7d6ddce6571735af739b23466d748d90a6f4bc633ada4fd15852c4e",
+      "preprocess_version": "uniform-stage1-raster-v1",
+      "split": "train",
+      "unknown_provenance": false
+    },
+    {
+      "category": "campus_uniform",
+      "class_index": 0,
+      "crop": [
+        10,
+        10,
+        210,
+        170
+      ],
+      "crop_source": "manual",
+      "group_ids": [
+        "fixture-session-0"
+      ],
+      "image_id": "9da22bc02bb3417e1b17ea834c17ea1a479bc7c2e6472cda90e2f08dbc7dad2c",
+      "near_duplicate_ids": [],
+      "original_sha256": "9da22bc02bb3417e1b17ea834c17ea1a479bc7c2e6472cda90e2f08dbc7dad2c",
+      "prepared_path": "prepared/9da22bc02bb3417e1b17ea834c17ea1a479bc7c2e6472cda90e2f08dbc7dad2c.npy",
+      "prepared_sha256": "00fb320182ef4400270b1758bee7faf9440d77d48164513ddfd8c6cfc2e6a44a",
+      "preprocess_version": "uniform-stage1-raster-v1",
+      "split": "train",
+      "unknown_provenance": false
+    },
+    {
+      "category": "other_clothing",
+      "class_index": 2,
+      "crop": [
+        10,
+        10,
+        210,
+        170
+      ],
+      "crop_source": "manual",
+      "group_ids": [
+        "fixture-session-2"
+      ],
+      "image_id": "9dadceb03e6d88a2b571b2fb782da2ef8c4e696d0cf81537e1b9a6a35e1314b1",
+      "near_duplicate_ids": [],
+      "original_sha256": "9dadceb03e6d88a2b571b2fb782da2ef8c4e696d0cf81537e1b9a6a35e1314b1",
+      "prepared_path": "prepared/9dadceb03e6d88a2b571b2fb782da2ef8c4e696d0cf81537e1b9a6a35e1314b1.npy",
+      "prepared_sha256": "4ed6d88addb28903b684de0826016d1ef1e110c250136ef1d278328d50644183",
+      "preprocess_version": "uniform-stage1-raster-v1",
+      "split": "train",
+      "unknown_provenance": false
+    },
+    {
+      "category": "organizational_shirt",
+      "class_index": 1,
+      "crop": [
+        10,
+        10,
+        210,
+        170
+      ],
+      "crop_source": "manual",
+      "group_ids": [
+        "fixture-session-1"
+      ],
+      "image_id": "a2752d9c07850faf709902f674dd33353329f49e5ff1b3b5073fd7708603c441",
+      "near_duplicate_ids": [],
+      "original_sha256": "a2752d9c07850faf709902f674dd33353329f49e5ff1b3b5073fd7708603c441",
+      "prepared_path": "prepared/a2752d9c07850faf709902f674dd33353329f49e5ff1b3b5073fd7708603c441.npy",
+      "prepared_sha256": "e3a475d17555eb403507452e142837d3fe8eefa0cd2989581a3c1dadc40e03ca",
+      "preprocess_version": "uniform-stage1-raster-v1",
+      "split": "train",
+      "unknown_provenance": false
+    },
+    {
+      "category": "organizational_shirt",
+      "class_index": 1,
+      "crop": [
+        10,
+        10,
+        210,
+        170
+      ],
+      "crop_source": "manual",
+      "group_ids": [
+        "fixture-session-1"
+      ],
+      "image_id": "ac7f211d1686d71ed546966e244bbb538a7f2275466620fbab7c18f7976b77cf",
+      "near_duplicate_ids": [],
+      "original_sha256": "ac7f211d1686d71ed546966e244bbb538a7f2275466620fbab7c18f7976b77cf",
+      "prepared_path": "prepared/ac7f211d1686d71ed546966e244bbb538a7f2275466620fbab7c18f7976b77cf.npy",
+      "prepared_sha256": "1e28ebf729ffbb9198044d61bec94aa4dcb0b071dfc278a822bb54d3886bf61f",
+      "preprocess_version": "uniform-stage1-raster-v1",
+      "split": "train",
+      "unknown_provenance": false
+    },
+    {
+      "category": "campus_uniform",
+      "class_index": 0,
+      "crop": [
+        10,
+        10,
+        210,
+        170
+      ],
+      "crop_source": "manual",
+      "group_ids": [
+        "fixture-session-0"
+      ],
+      "image_id": "c2392f6a13447e38969da77cbb117b6f4e7c0ec806add7ae254be325f7128cc0",
+      "near_duplicate_ids": [],
+      "original_sha256": "c2392f6a13447e38969da77cbb117b6f4e7c0ec806add7ae254be325f7128cc0",
+      "prepared_path": "prepared/c2392f6a13447e38969da77cbb117b6f4e7c0ec806add7ae254be325f7128cc0.npy",
+      "prepared_sha256": "711b6e325eaf0a31ca2fa77007f63e20168926dd5d5af6d5fbf5f2d2e285ded3",
+      "preprocess_version": "uniform-stage1-raster-v1",
+      "split": "train",
+      "unknown_provenance": false
+    },
+    {
+      "category": "organizational_shirt",
+      "class_index": 1,
+      "crop": [
+        10,
+        10,
+        210,
+        170
+      ],
+      "crop_source": "manual",
+      "group_ids": [
+        "fixture-session-1"
+      ],
+      "image_id": "c8ab09905450992a7a827a8b6d7c8c68fefca01ce2e03960e2424f78847afe58",
+      "near_duplicate_ids": [],
+      "original_sha256": "c8ab09905450992a7a827a8b6d7c8c68fefca01ce2e03960e2424f78847afe58",
+      "prepared_path": "prepared/c8ab09905450992a7a827a8b6d7c8c68fefca01ce2e03960e2424f78847afe58.npy",
+      "prepared_sha256": "77bf74dbec4605fc9ec39b911ee56d155a24049f8d92158458e51b9a5204ad77",
+      "preprocess_version": "uniform-stage1-raster-v1",
+      "split": "train",
+      "unknown_provenance": false
+    },
+    {
+      "category": "other_clothing",
+      "class_index": 2,
+      "crop": [
+        10,
+        10,
+        210,
+        170
+      ],
+      "crop_source": "manual",
+      "group_ids": [
+        "fixture-session-2"
+      ],
+      "image_id": "d4044ed6c1e381e7093e2406efc690e5c6b19bd7dde4d9f87223f2b9edb5d1fe",
+      "near_duplicate_ids": [],
+      "original_sha256": "d4044ed6c1e381e7093e2406efc690e5c6b19bd7dde4d9f87223f2b9edb5d1fe",
+      "prepared_path": "prepared/d4044ed6c1e381e7093e2406efc690e5c6b19bd7dde4d9f87223f2b9edb5d1fe.npy",
+      "prepared_sha256": "89bd29044aaa9de39616364fc3a07d9357b31b02f4ff703a4205207223eb5642",
+      "preprocess_version": "uniform-stage1-raster-v1",
+      "split": "train",
+      "unknown_provenance": false
+    },
+    {
+      "category": "other_clothing",
+      "class_index": 2,
+      "crop": [
+        10,
+        10,
+        210,
+        170
+      ],
+      "crop_source": "manual",
+      "group_ids": [
+        "fixture-session-2"
+      ],
+      "image_id": "df2207c523414f515c2485db5142d2decd916dc3879f57ac2f22dc3ca2911a59",
+      "near_duplicate_ids": [],
+      "original_sha256": "df2207c523414f515c2485db5142d2decd916dc3879f57ac2f22dc3ca2911a59",
+      "prepared_path": "prepared/df2207c523414f515c2485db5142d2decd916dc3879f57ac2f22dc3ca2911a59.npy",
+      "prepared_sha256": "55f74556b9088e7542a95368f350810a229dbe51cb6994a9c3ec9bfc86dd34c2",
+      "preprocess_version": "uniform-stage1-raster-v1",
+      "split": "train",
+      "unknown_provenance": false
+    },
+    {
+      "category": "organizational_shirt",
+      "class_index": 1,
+      "crop": [
+        10,
+        10,
+        210,
+        170
+      ],
+      "crop_source": "manual",
+      "group_ids": [
+        "fixture-session-1"
+      ],
+      "image_id": "e0eaf803446a954e186d0b71d782c3ca96147182e0a46da828be40a9617150fa",
+      "near_duplicate_ids": [],
+      "original_sha256": "e0eaf803446a954e186d0b71d782c3ca96147182e0a46da828be40a9617150fa",
+      "prepared_path": "prepared/e0eaf803446a954e186d0b71d782c3ca96147182e0a46da828be40a9617150fa.npy",
+      "prepared_sha256": "bc7583c32b7396aec594c7df53f0d7f2a8c0794afb600416638e1cc88fb55085",
+      "preprocess_version": "uniform-stage1-raster-v1",
+      "split": "train",
+      "unknown_provenance": false
+    },
+    {
+      "category": "campus_uniform",
+      "class_index": 0,
+      "crop": [
+        10,
+        10,
+        210,
+        170
+      ],
+      "crop_source": "manual",
+      "group_ids": [
+        "fixture-session-0"
+      ],
+      "image_id": "e4eb3cc501912c04b905fbfe10b12cbccba6d91c1a27eec7d8b4dba5c4daecb7",
+      "near_duplicate_ids": [],
+      "original_sha256": "e4eb3cc501912c04b905fbfe10b12cbccba6d91c1a27eec7d8b4dba5c4daecb7",
+      "prepared_path": "prepared/e4eb3cc501912c04b905fbfe10b12cbccba6d91c1a27eec7d8b4dba5c4daecb7.npy",
+      "prepared_sha256": "0bee24bf52fb615af1441ab7a60064c6812aca32092b233c3396589543ffe0bd",
+      "preprocess_version": "uniform-stage1-raster-v1",
+      "split": "train",
+      "unknown_provenance": false
+    },
+    {
+      "category": "campus_uniform",
+      "class_index": 0,
+      "crop": [
+        10,
+        10,
+        210,
+        170
+      ],
+      "crop_source": "manual",
+      "group_ids": [
+        "fixture-session-0"
+      ],
+      "image_id": "e79abed7b5ed6add0319912a61e8db27075ae24e8a0ed5d7028593127dcda454",
+      "near_duplicate_ids": [],
+      "original_sha256": "e79abed7b5ed6add0319912a61e8db27075ae24e8a0ed5d7028593127dcda454",
+      "prepared_path": "prepared/e79abed7b5ed6add0319912a61e8db27075ae24e8a0ed5d7028593127dcda454.npy",
+      "prepared_sha256": "3de2cf4c22a801201f4f1e99c9e1387114ffbd41abcaddc614ad1f0b9e5577c7",
+      "preprocess_version": "uniform-stage1-raster-v1",
+      "split": "train",
+      "unknown_provenance": false
+    },
+    {
+      "category": "organizational_shirt",
+      "class_index": 1,
+      "crop": [
+        10,
+        10,
+        210,
+        170
+      ],
+      "crop_source": "manual",
+      "group_ids": [
+        "fixture-session-1"
+      ],
+      "image_id": "f42d762764241e97ea00a36ac70c04592dc750785620c861c042a204c9bc2d16",
+      "near_duplicate_ids": [],
+      "original_sha256": "f42d762764241e97ea00a36ac70c04592dc750785620c861c042a204c9bc2d16",
+      "prepared_path": "prepared/f42d762764241e97ea00a36ac70c04592dc750785620c861c042a204c9bc2d16.npy",
+      "prepared_sha256": "4ab8a0def68488907ad50bbd01af4a7bef76c8e69e17ab8e9a4b57b1ba70a0b5",
+      "preprocess_version": "uniform-stage1-raster-v1",
+      "split": "train",
+      "unknown_provenance": false
+    },
+    {
+      "category": "other_clothing",
+      "class_index": 2,
+      "crop": [
+        10,
+        10,
+        210,
+        170
+      ],
+      "crop_source": "manual",
+      "group_ids": [
+        "fixture-session-2"
+      ],
+      "image_id": "f89ad6cce77f706a9542c3d1fba90c231a0fc6eeda2484676255e61fa80b1532",
+      "near_duplicate_ids": [],
+      "original_sha256": "f89ad6cce77f706a9542c3d1fba90c231a0fc6eeda2484676255e61fa80b1532",
+      "prepared_path": "prepared/f89ad6cce77f706a9542c3d1fba90c231a0fc6eeda2484676255e61fa80b1532.npy",
+      "prepared_sha256": "da84182ce341bff08610fd61764662db5d7f9737f62ecb22718d51468ebc6aea",
+      "preprocess_version": "uniform-stage1-raster-v1",
+      "split": "train",
+      "unknown_provenance": false
+    }
+  ],
+  "limitations": [
+    "Experimental train-only bundle; no validation or evaluation metrics.",
+    "Train loss does not establish accuracy or deployment readiness."
+  ],
+  "mapping_version": "uniform-garments-v1",
+  "model_preprocess": {
+    "augmentation": "none",
+    "color": "RGB",
+    "range": [
+      0.0,
+      1.0
+    ],
+    "size": 224,
+    "version": "trainer-letterbox-rgb-0-1-v1"
+  },
+  "schema_version": 1,
+  "split_policy": "experimental_train_only_no_validation_or_evaluation"
+}

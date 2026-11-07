@@ -1,0 +1,9 @@
+{
+  "wrapper_pid": 57777,
+  "wrapper_command": "output/uniform-walkthrough-evaluation/run_owned_check.py replay-telemetry-smoke .venv/bin/python scripts/replay_camera_assessment.py --video output/uniform-walkthrough-evaluation/generated-still-smoke.avi --annotations output/uniform-walkthrough-evaluation/generated-still-smoke.jsonl --mode candidate --uniform-observation-config output/uniform-walkthrough-evaluation/observation-synthetic-cpu.json --body-backend cpu --camera-label 'generated public-still fixture' --camera-mode color --max-frames 12 --output output/uniform-walkthrough-evaluation/replay-telemetry-smoke.json",
+  "started_at_utc": "2026-11-06T04:00:09.309346+00:00",
+  "command": ".venv/bin/python scripts/replay_camera_assessment.py --video output/uniform-walkthrough-evaluation/generated-still-smoke.avi --annotations output/uniform-walkthrough-evaluation/generated-still-smoke.jsonl --mode candidate --uniform-observation-config output/uniform-walkthrough-evaluation/observation-synthetic-cpu.json --body-backend cpu --camera-label 'generated public-still fixture' --camera-mode color --max-frames 12 --output output/uniform-walkthrough-evaluation/replay-telemetry-smoke.json",
+  "pid": 57778,
+  "returncode": 0,
+  "finished_at_utc": "2026-11-06T04:00:14.325872+00:00"
+}

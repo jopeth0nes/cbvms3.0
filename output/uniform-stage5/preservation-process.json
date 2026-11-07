@@ -1,0 +1,9 @@
+{
+  "wrapper_pid": 49490,
+  "wrapper_command": "output/uniform-stage5/run_owned_check.py preservation .venv/bin/python output/uniform-stage5/verify_preservation.py",
+  "started_at_utc": "2026-11-05T06:27:07.041602+00:00",
+  "command": ".venv/bin/python output/uniform-stage5/verify_preservation.py",
+  "pid": 49492,
+  "returncode": 1,
+  "finished_at_utc": "2026-11-05T06:27:07.368367+00:00"
+}

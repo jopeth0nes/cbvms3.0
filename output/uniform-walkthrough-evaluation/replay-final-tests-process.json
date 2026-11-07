@@ -1,0 +1,9 @@
+{
+  "wrapper_pid": 57600,
+  "wrapper_command": "output/uniform-walkthrough-evaluation/run_owned_check.py replay-final-tests .venv/bin/python -m unittest tests.test_uniform_walkthrough tests.test_camera_replay -v",
+  "started_at_utc": "2026-11-06T03:58:07.866860+00:00",
+  "command": ".venv/bin/python -m unittest tests.test_uniform_walkthrough tests.test_camera_replay -v",
+  "pid": 57601,
+  "returncode": 0,
+  "finished_at_utc": "2026-11-06T03:58:08.269805+00:00"
+}

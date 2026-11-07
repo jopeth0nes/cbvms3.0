@@ -1,0 +1,29 @@
+test_four_outcomes_update_same_widget_and_never_imply_policy_violation (tests.test_uniform_observation_ui.UniformObservationUITests.test_four_outcomes_update_same_widget_and_never_imply_policy_violation) ... ok
+test_dashboard_start_navigation_and_shutdown_with_synthetic_camera (tests.test_live_monitor_native_ui.DashboardNativeLifecycleTests.test_dashboard_start_navigation_and_shutdown_with_synthetic_camera) ... ok
+test_native_cards_wrap_update_in_place_and_clear_display_only (tests.test_live_monitor_native_ui.LiveMonitorNativeUITests.test_native_cards_wrap_update_in_place_and_clear_display_only) ... ok
+test_native_frame_fits_canvas_and_placeholder_reuses_items (tests.test_live_monitor_native_ui.LiveMonitorNativeUITests.test_native_frame_fits_canvas_and_placeholder_reuses_items) ... ok
+test_native_reused_photo_updates_pixels_without_accumulating_images (tests.test_live_monitor_native_ui.LiveMonitorNativeUITests.test_native_reused_photo_updates_pixels_without_accumulating_images) ... ok
+test_session_activity_fits_280px_sidebar_and_routes_exact_id (tests.test_live_monitor_native_ui.LiveMonitorNativeUITests.test_session_activity_fits_280px_sidebar_and_routes_exact_id) ... /Users/jopethones/Documents/GitHub/cbvms3.0/.venv/lib/python3.12/site-packages/customtkinter/windows/widgets/core_widget_classes/ctk_base_class.py:179: UserWarning: CTkLabel Warning: Given image is not CTkImage but <class 'PIL.ImageTk.PhotoImage'>. Image can not be scaled on HighDPI displays, use CTkImage instead.
+
+  warnings.warn(f"{type(self).__name__} Warning: Given image is not CTkImage but {type(image)}. Image can not be scaled on HighDPI displays, use CTkImage instead.\n")
+ok
+test_unknown_record_refresh_reuses_widget_and_image_without_transient_cards (tests.test_live_monitor_native_ui.LiveMonitorNativeUITests.test_unknown_record_refresh_reuses_widget_and_image_without_transient_cards) ... ok
+test_closed_popup_leaves_no_tk_font_finalizer_for_capture_thread (tests.test_monitor_workspace_native_ui.WorkspaceNativeTests.test_closed_popup_leaves_no_tk_font_finalizer_for_capture_thread) ... ok
+test_layout_popup_labels_and_shared_owner (tests.test_monitor_workspace_native_ui.WorkspaceNativeTests.test_layout_popup_labels_and_shared_owner) ... ok
+test_delayed_open_read_release_and_navigation_keep_heartbeat_alive (tests.test_camera_transition_native_ui.NativeTransitionTests.test_delayed_open_read_release_and_navigation_keep_heartbeat_alive) ... ok
+test_signed_axes (tests.test_scrolling.DeltaTests.test_signed_axes) ... ok
+test_small_deltas_and_reversal (tests.test_scrolling.DeltaTests.test_small_deltas_and_reversal) ... ok
+test_camera_canvas_inert_and_windows_linux_normalization (tests.test_scrolling.NativeScrollTests.test_camera_canvas_inert_and_windows_linux_normalization) ... ok
+test_dialog_isolation_and_grab (tests.test_scrolling.NativeScrollTests.test_dialog_isolation_and_grab) ... ok
+test_dynamic_ctk_children_cleanup_and_no_global_wheel (tests.test_scrolling.NativeScrollTests.test_dynamic_ctk_children_cleanup_and_no_global_wheel) ... ok
+test_native_handler_runs_once (tests.test_scrolling.NativeScrollTests.test_native_handler_runs_once) ... ok
+test_native_table_boundary_hands_off_once (tests.test_scrolling.NativeScrollTests.test_native_table_boundary_hands_off_once) ... ok
+test_overflowing_ctk_cards_and_dialog (tests.test_scrolling.NativeScrollTests.test_overflowing_ctk_cards_and_dialog) ... ok
+test_pointer_child_nested_handoff_and_no_overflow (tests.test_scrolling.NativeScrollTests.test_pointer_child_nested_handoff_and_no_overflow) ... ok
+test_real_tk_touchpad_binding_and_horizontal (tests.test_scrolling.NativeScrollTests.test_real_tk_touchpad_binding_and_horizontal) ... ok
+test_small_canvas_deltas_reversal_and_pointer_not_focus (tests.test_scrolling.NativeScrollTests.test_small_canvas_deltas_reversal_and_pointer_not_focus) ... ok
+
+----------------------------------------------------------------------
+Ran 21 tests in 7.388s
+
+OK

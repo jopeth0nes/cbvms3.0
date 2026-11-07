@@ -1,0 +1,45 @@
+{
+  "archive_members": 116,
+  "archive_unique": 36,
+  "legacy_audit": {
+    "found": 928,
+    "imported": 927,
+    "root": "/Users/jopethones/Documents/GitHub/cbvms3.0/data/training/uniform"
+  },
+  "counts": {
+    "total": 963,
+    "by_category": {
+      "campus_uniform": 0,
+      "organizational_shirt": 36,
+      "other_clothing": 0,
+      "unassigned": 927
+    },
+    "by_status": {
+      "pending_review": 963,
+      "approved": 0,
+      "excluded": 0
+    },
+    "approved_by_category": {
+      "campus_uniform": 0,
+      "organizational_shirt": 0,
+      "other_clothing": 0,
+      "unassigned": 0
+    },
+    "exact_duplicate_occurrences": 81,
+    "near_duplicate_pairs": 31729,
+    "unknown_provenance": 963
+  },
+  "readiness": {
+    "review_complete": false,
+    "experimental_training_eligible": false,
+    "experimental_training_reasons": [
+      "No records have explicit approval.",
+      "Pending-review records are excluded from experimental eligibility."
+    ],
+    "group_safe_splits_available": false,
+    "independent_evaluation_ready": false,
+    "model_activation_allowed": false
+  },
+  "protected_files_unchanged": 1772,
+  "preprocess_version": "uniform-stage1-raster-v1"
+}

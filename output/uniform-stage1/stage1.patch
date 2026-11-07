@@ -1,0 +1,1609 @@
+--- a/ui/training_panel.py
++++ b/ui/training_panel.py
+@@ -8,6 +8,7 @@
+ import sys
+ import threading
+ import time
++import uuid
+ from datetime import datetime
+ from pathlib import Path
+ from tkinter import filedialog
+@@ -70,21 +71,11 @@
+ ]
+ 
+ _HELP_TEXT = (
+-    "Photos you upload or capture build the reference set for each check.\n\n"
+-    f"Minimum {MIN_SAMPLES_PER_CLASS} photos per class is recommended. "
+-    "More diverse photos (different angles, lighting, people) = better accuracy.\n\n"
+-    "UNIFORM: live detection uses a pretrained-image-embedding 'fingerprint' built "
+-    "automatically from your CORRECT-uniform photos (no gradient training needed — just add "
+-    "good correct photos and it rebuilds), cross-checked by a uniform-colour match.\n"
+-    "IMPORTANT: reference photos must look like the LIVE view — a CHEST/TORSO close-up of the "
+-    "shirt (like a webcam selfie), NOT full-body shots where the uniform is tiny and the "
+-    "background fills the frame. The most reliable way is 'Capture from Camera' here, framed on "
+-    "your chest. A few dozen good chest-framed photos beat hundreds of full-body ones. A few "
+-    "'wrong uniform' photos help calibrate the threshold.\n\n"
+-    "EARRING: trains a YOLOv8 image classifier — provide a BALANCED set (roughly as many "
+-    "'with' as 'without' photos). 'Evaluate Model' tests on held-out photos the model never "
+-    "trained on, so its accuracy reflects real-world performance. Everything runs on your "
+-    "machine."
++    "Uniform Check uses a separate review dataset in Stage 1. Uploads do not rebuild "
++    "or replace the active model. Review labels, crops, provenance and quality first.\n\n"
++    "Earring Check retains its existing training workflow. A minimum photo count is "
++    "only a software requirement, not evidence of accuracy. Independent people, "
++    "capture sessions and conditions are needed for meaningful evaluation."
+ )
+ 
+ 
+@@ -134,6 +125,7 @@
+         super().__init__(master, fg_color=COLOR_BG, **kwargs)
+         self.trainer = trainer
+         self.get_frame = get_frame
++        self._uniform_capture_group = "camera-session:" + uuid.uuid4().hex
+ 
+         # Per-module widget references and runtime state
+         self._ui: dict[str, dict] = {}
+@@ -173,8 +165,16 @@
+             tab = tabview.add(title)
+             self._ui[module] = {}
+             self._training[module] = False
+-            self._build_module_tab(tab, module)
+-            self._refresh_counts(module)
++            if module == "uniform":
++                from ui.uniform_workspace import UniformWorkspace
++                tab.grid_columnconfigure(0, weight=1)
++                tab.grid_rowconfigure(0, weight=1)
++                self._uniform_workspace = UniformWorkspace(tab,
++                    capture=lambda category: self._open_capture_screen("uniform_stage1", category))
++                self._uniform_workspace.grid(row=0, column=0, sticky="nsew")
++            else:
++                self._build_module_tab(tab, module)
++                self._refresh_counts(module)
+ 
+         references = tabview.add('DYCI Logo & Digital Shirts')
+         self._reference_task = BackgroundTask(self)
+@@ -1067,6 +1067,24 @@
+ 
+     def _save_changes(self, state: dict) -> None:
+         module, label = state["module"], state["label"]
++        if module == "uniform_stage1":
++            if state.get("saving"):
++                return
++            frames = tuple(state["buffer"])
++            state["saving"] = True
++            def done(_value):
++                state["buffer"] = []
++                state["saving"] = False
++                if self._capture_state is state:
++                    self._close_capture_screen()
++            def error(message):
++                if not self._uniform_workspace.task.busy:
++                    state["saving"] = False
++                show_toast(self, message, type="error")
++            accepted = self._uniform_workspace.import_frames(frames, label, self._uniform_capture_group, done, error)
++            if not accepted:
++                state["saving"] = False
++            return
+         n = 0
+         for frame in state["buffer"]:
+             try:
+@@ -1118,12 +1136,14 @@
+         self._capture_state = None
+         if self._tabview is not None:
+             self._tabview.grid()
+-        if module is not None:
++        if module == "uniform_stage1":
++            self._uniform_workspace.refresh()
++        elif module is not None:
+             self._refresh_thumbnails(module, label)
+             self._refresh_counts(module)
+ 
+     def on_show(self) -> None:
+-        return
++        self._uniform_workspace.refresh()
+ 
+     def on_hide(self) -> None:
+         # Leaving Training mid-capture: stop the camera loop and restore the tabs.
+diff --git a/core/uniform_dataset.py b/core/uniform_dataset.py
+new file mode 100644
+index 0000000..02fce84
+--- /dev/null
++++ b/core/uniform_dataset.py
+@@ -0,0 +1,611 @@
++"""Isolated, review-first uniform image catalog for Stage 1 data preparation.
++
++This module never writes to the active trainer, production database, or model
++artifacts. Originals are content-addressed and retained byte-for-byte.
++"""
++from __future__ import annotations
++
++import hashlib
++import io
++import json
++import os
++import re
++import stat
++import tempfile
++import threading
++import time
++import zipfile
++from pathlib import Path, PurePosixPath
++from typing import Iterable
++
++import cv2
++import numpy as np
++from PIL import Image, UnidentifiedImageError
++
++from core.trainer import TRAIN_DIR
++
++PREPROCESS_VERSION = "uniform-stage1-raster-v1"
++CATEGORIES = {
++    "campus_uniform": "Campus Uniform",
++    "organizational_shirt": "Organizational Shirt",
++    "other_clothing": "Other Clothing",
++    "unassigned": "Unassigned (Legacy Review)",
++}
++MAX_FILE_BYTES = 20 * 1024 * 1024
++MAX_IMAGE_PIXELS = 40_000_000
++MAX_DIMENSION = 12_000
++MAX_ZIP_FILES = 500
++MAX_ZIP_EXPANDED = 200 * 1024 * 1024
++MAX_ZIP_ARCHIVE_BYTES = 200 * 1024 * 1024
++MAX_COMPRESSION_RATIO = 200
++ALLOWED_FORMATS = {"JPEG", "PNG", "WEBP", "BMP", "TIFF"}
++_PROCESS_LOCKS: dict[str, threading.RLock] = {}
++_LOCKS_GUARD = threading.Lock()
++
++
++def _now() -> str:
++    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
++
++
++def _validate_category(category: str) -> None:
++    if category not in CATEGORIES:
++        raise ValueError(f"Unknown category: {category}")
++
++
++def _image_info(data: bytes) -> tuple[str, int, int, str, int]:
++    if not data or len(data) > MAX_FILE_BYTES:
++        raise ValueError("Image is empty or exceeds the file size limit")
++    try:
++        with Image.open(io.BytesIO(data)) as im:
++            fmt = (im.format or "").upper()
++            width, height = im.size
++            if fmt not in ALLOWED_FORMATS:
++                raise ValueError("Unsupported image format")
++            if width < 16 or height < 16 or width > MAX_DIMENSION or height > MAX_DIMENSION:
++                raise ValueError("Image dimensions are outside the supported bounds")
++            if width * height > MAX_IMAGE_PIXELS:
++                raise ValueError("Image pixel count exceeds the supported limit")
++            im.verify()
++        # Force decode too; verify() alone does not prove all pixel data is readable.
++        with Image.open(io.BytesIO(data)) as im:
++            im.load()
++            orientation = int(im.getexif().get(274, 1) or 1)
++            gray = im.convert("L").resize((9, 8), Image.Resampling.LANCZOS)
++            px = np.asarray(gray, dtype=np.uint8)
++            bits = px[:, 1:] > px[:, :-1]
++            dhash = f"{int.from_bytes(np.packbits(bits).tobytes(), 'big'):016x}"
++        return fmt, width, height, dhash, orientation
++    except (UnidentifiedImageError, OSError, Image.DecompressionBombError) as exc:
++        raise ValueError("Invalid or unreadable image") from exc
++
++
++def _blur_flag(data: bytes) -> list[str]:
++    try:
++        with Image.open(io.BytesIO(data)) as im:
++            w, h = im.size
++            im.thumbnail((512, 512), Image.Resampling.LANCZOS)
++            arr = np.asarray(im.convert("RGB"))
++        gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
++        blur = float(cv2.Laplacian(gray, cv2.CV_32F).var())
++        flags = []
++        if min(w, h) < 160:
++            flags.append("low_resolution")
++        if blur < 25:
++            flags.append("possible_blur")
++        return flags
++    except Exception:
++        return ["image_quality_check_failed"]
++
++
++class UniformDataset:
++    """JSON catalog backed by immutable originals beneath ``root``."""
++
++    def __init__(self, root: str | Path | None = None):
++        self.root = Path(root) if root is not None else Path(__file__).resolve().parents[1] / "data" / "uniform_stage1"
++        self.root.mkdir(parents=True, exist_ok=True)
++        self.images_dir = self.root / "originals"
++        self.images_dir.mkdir(exist_ok=True)
++        self.index_path = self.root / "catalog.json"
++        self.lock_path = self.root / ".catalog.lock"
++        with _LOCKS_GUARD:
++            self._thread_lock = _PROCESS_LOCKS.setdefault(str(self.root.resolve()), threading.RLock())
++
++    def _locked(self):
++        return _CatalogLock(self._thread_lock, self.lock_path)
++
++    def _load(self) -> dict:
++        if not self.index_path.exists():
++            return {"schema_version": 1, "preprocess_version": PREPROCESS_VERSION, "records": []}
++        try:
++            value = json.loads(self.index_path.read_text("utf-8"))
++        except (OSError, json.JSONDecodeError) as exc:
++            raise RuntimeError("Uniform dataset catalog is unreadable; refusing to overwrite it") from exc
++        if value.get("schema_version") != 1 or not isinstance(value.get("records"), list):
++            raise RuntimeError("Unsupported uniform dataset catalog schema")
++        return value
++
++    def _save(self, catalog: dict) -> None:
++        fd, name = tempfile.mkstemp(prefix=".catalog-", suffix=".tmp", dir=self.root)
++        try:
++            with os.fdopen(fd, "w", encoding="utf-8") as f:
++                json.dump(catalog, f, ensure_ascii=False, sort_keys=True, indent=2)
++                f.flush()
++                os.fsync(f.fileno())
++            os.replace(name, self.index_path)
++            try:
++                dfd = os.open(self.root, os.O_RDONLY)
++                try:
++                    os.fsync(dfd)
++                finally:
++                    os.close(dfd)
++            except OSError:
++                pass
++        finally:
++            try:
++                os.unlink(name)
++            except FileNotFoundError:
++                pass
++
++    def _import_bytes(self, data: bytes, source_path: str, kind: str, category: str,
++                      capture_group: str | None, legacy_label: str | None = None,
++                      archive_sha256: str | None = None) -> str:
++        _validate_category(category)
++        fmt, width, height, dhash, orientation = _image_info(data)
++        digest = hashlib.sha256(data).hexdigest()
++        ext = {"JPEG": ".jpg", "PNG": ".png", "WEBP": ".webp", "BMP": ".bmp", "TIFF": ".tiff"}[fmt]
++        group = str(capture_group).strip() if capture_group is not None and str(capture_group).strip() else None
++        source = {"path": source_path, "kind": kind, "capture_group": group, "category": category}
++        if kind == "zip":
++            source["archive_sha256"] = archive_sha256
++        if legacy_label is not None:
++            source["legacy_label"] = legacy_label
++        with self._locked():
++            catalog = self._load()
++            records = catalog["records"]
++            record = next((r for r in records if r["sha256"] == digest), None)
++            if record is not None:
++                same_source = source in record["sources"]
++                if not same_source:
++                    record["sources"].append(source)
++                source_categories = {s.get("category") for s in record["sources"] if s.get("category")}
++                source_legacy_labels = {s.get("legacy_label") for s in record["sources"] if s.get("legacy_label")}
++                conflict = (not same_source and (category != record.get("category")
++                            or len(source_categories) > 1 or len(source_legacy_labels) > 1))
++                if conflict:
++                    record["flags"] = sorted(set(record.get("flags", [])) | {"label_conflict"})
++                    record["status"] = "pending_review"
++                if legacy_label is not None and not same_source:
++                    source["legacy_label"] = legacy_label
++                record["capture_groups"] = sorted({s["capture_group"] for s in record["sources"] if s.get("capture_group")})
++                record["has_unknown_provenance"] = any(not s.get("capture_group") for s in record["sources"])
++                self._save(catalog)
++                return record["image_id"]
++            rel = f"originals/{digest}{ext}"
++            dest = self.root / rel
++            if not dest.exists():
++                fd, temp_name = tempfile.mkstemp(prefix=".original-", dir=self.images_dir)
++                try:
++                    with os.fdopen(fd, "wb") as f:
++                        f.write(data)
++                        f.flush()
++                        os.fsync(f.fileno())
++                    os.replace(temp_name, dest)
++                finally:
++                    try:
++                        os.unlink(temp_name)
++                    except FileNotFoundError:
++                        pass
++            record = {
++                "image_id": digest, "sha256": digest, "original_path": rel,
++                "format": fmt, "width": width, "height": height, "exif_orientation": orientation,
++                "preprocess_version": PREPROCESS_VERSION, "crop_source": None, "imported_at": _now(),
++                "sources": [source], "category": category, "status": "pending_review",
++                "crop": None, "logo_visibility": "unknown", "logo_box": None,
++                "flags": _blur_flag(data) + ["provenance_association_uncertain"], "notes": "",
++                "capture_group": group, "provenance_group": group or "unknown-provenance",
++                "capture_groups": [group] if group else [], "has_unknown_provenance": group is None,
++                "dhash": dhash, "duplicate_of": [], "review_history": [], "crop_proposal_history": [],
++            }
++            records.append(record)
++            self._refresh_duplicates(records, record)
++            self._save(catalog)
++        return digest
++
++    @staticmethod
++    def _refresh_duplicates(records: list[dict], new_record: dict) -> None:
++        try:
++            a = int(new_record["dhash"], 16)
++        except (TypeError, ValueError):
++            return
++        near = []
++        for other in records:
++            if other is new_record:
++                continue
++            try:
++                if (a ^ int(other["dhash"], 16)).bit_count() <= 4:
++                    near.append(other)
++            except (TypeError, ValueError):
++                continue
++        new_record["duplicate_of"] = sorted(r["image_id"] for r in near)
++        if near:
++            new_record["flags"] = sorted(set(new_record.get("flags", [])) | {"near_duplicate_review"})
++        for other in near:
++            other["duplicate_of"] = sorted(set(other.get("duplicate_of", [])) | {new_record["image_id"]})
++            other["flags"] = sorted(set(other.get("flags", [])) | {"near_duplicate_review"})
++
++    def import_paths(self, paths: Iterable[str | Path], category: str, *, capture_group: str | None = None,
++                     legacy_label: str | None = None) -> list[str]:
++        _validate_category(category)
++        ids = []
++        total = 0
++        count = 0
++        for path in paths:
++            p = Path(path)
++            if p.is_symlink() or not p.is_file():
++                raise ValueError(f"Not a regular image file: {p}")
++            size = p.stat().st_size
++            if size > MAX_FILE_BYTES:
++                raise ValueError("Image exceeds the file size limit")
++            total += size
++            count += 1
++            if count > MAX_ZIP_FILES or total > MAX_ZIP_EXPANDED:
++                raise ValueError("Import exceeds file count or total size limit")
++            with p.open("rb") as f:
++                data = f.read(MAX_FILE_BYTES + 1)
++            if len(data) != size or len(data) > MAX_FILE_BYTES:
++                raise ValueError("Image changed while being read or exceeds the file size limit")
++            ids.append(self._import_bytes(data, str(p), "file", category, capture_group, legacy_label))
++        return ids
++
++    def import_zip(self, path: str | Path, category: str, *, capture_group: str | None = None) -> list[str]:
++        _validate_category(category)
++        p = Path(path)
++        if p.is_symlink() or not p.is_file():
++            raise ValueError("ZIP must be a regular file")
++        if p.stat().st_size > MAX_ZIP_ARCHIVE_BYTES:
++            raise ValueError("ZIP archive exceeds compressed size limit")
++        archive_hash = hashlib.sha256()
++        compressed_read = 0
++        with p.open("rb") as archive_file:
++            while chunk := archive_file.read(1024 * 1024):
++                compressed_read += len(chunk)
++                if compressed_read > MAX_ZIP_ARCHIVE_BYTES:
++                    raise ValueError("ZIP archive exceeds compressed size limit")
++                archive_hash.update(chunk)
++        archive_digest = archive_hash.hexdigest()
++        ids = []
++        with zipfile.ZipFile(p) as archive:
++            infos = archive.infolist()
++            files = [i for i in infos if not i.is_dir()]
++            if len(infos) > MAX_ZIP_FILES or sum(i.file_size for i in infos) > MAX_ZIP_EXPANDED:
++                raise ValueError("ZIP exceeds entry count or expanded size limit")
++            for info in infos:
++                name = PurePosixPath(info.filename)
++                mode = (info.external_attr >> 16) & 0xFFFF
++                if (name.is_absolute() or ".." in name.parts or "\\" in info.filename
++                        or re.match(r"^[a-zA-Z]:", info.filename)):
++                    raise ValueError("ZIP contains an unsafe path")
++                if stat.S_ISLNK(mode):
++                    raise ValueError("ZIP contains a symlink")
++                if info.flag_bits & 1:
++                    raise ValueError("Encrypted ZIP entries are not supported")
++                if info.file_size > MAX_FILE_BYTES:
++                    raise ValueError("ZIP image exceeds per-file size limit")
++                if info.file_size and (info.compress_size == 0 or info.file_size / info.compress_size > MAX_COMPRESSION_RATIO):
++                    raise ValueError("ZIP entry compression ratio exceeds the limit")
++                if info.is_dir():
++                    continue
++            for info in files:
++                if "__MACOSX" in PurePosixPath(info.filename).parts:
++                    continue
++                if Path(info.filename).suffix.lower() not in {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}:
++                    continue
++                with archive.open(info) as member:
++                    data = member.read(MAX_FILE_BYTES + 1)
++                if len(data) > MAX_FILE_BYTES or len(data) != info.file_size:
++                    raise ValueError("ZIP image exceeds bounds or has inconsistent size")
++                ids.append(self._import_bytes(data, f"{p}!/{info.filename}", "zip", category, capture_group,
++                                              archive_sha256=archive_digest))
++        return ids
++
++    def import_folder(self, path: str | Path, category: str, *, capture_group: str | None = None) -> list[str]:
++        p = Path(path)
++        if p.is_symlink() or not p.is_dir():
++            raise ValueError("Folder must be a regular directory")
++        paths = []
++        for candidate in sorted(p.rglob("*")):
++            if candidate.is_symlink():
++                continue
++            try:
++                if "__MACOSX" in candidate.relative_to(p).parts:
++                    continue
++            except ValueError:
++                continue
++            if candidate.is_file() and candidate.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}:
++                if len(paths) >= MAX_ZIP_FILES:
++                    raise ValueError("Folder exceeds file count limit")
++                paths.append(candidate)
++        return self.import_paths(paths, category, capture_group=capture_group)
++
++    def import_capture(self, frame_bgr: np.ndarray, category: str, capture_group: str) -> str:
++        _validate_category(category)
++        if not isinstance(frame_bgr, np.ndarray) or frame_bgr.ndim != 3 or frame_bgr.shape[2] != 3 or frame_bgr.size == 0:
++            raise ValueError("Capture must be a non-empty BGR image")
++        h, w = frame_bgr.shape[:2]
++        if h > MAX_DIMENSION or w > MAX_DIMENSION or h * w > MAX_IMAGE_PIXELS:
++            raise ValueError("Capture dimensions exceed supported bounds")
++        ok, encoded = cv2.imencode(".png", frame_bgr)
++        if not ok:
++            raise ValueError("Capture could not be encoded")
++        return self._import_bytes(encoded.tobytes(), f"capture:{_now()}", "capture", category, capture_group)
++
++    def audit_legacy(self, root: str | Path | None = None) -> dict:
++        legacy_root = Path(root) if root is not None else TRAIN_DIR / "uniform"
++        imported = 0
++        found = 0
++        if not legacy_root.exists():
++            return {"found": 0, "imported": 0, "root": str(legacy_root)}
++        existing_ids = {r["image_id"] for r in self.snapshot()["records"]}
++        for label_dir in sorted(legacy_root.iterdir()):
++            if not label_dir.is_dir() or label_dir.is_symlink():
++                continue
++            for p in sorted(label_dir.iterdir()):
++                if p.is_symlink() or not p.is_file() or p.suffix.lower() not in {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}:
++                    continue
++                found += 1
++                image_id = self.import_paths([p], "unassigned", legacy_label=label_dir.name)[0]
++                if image_id not in existing_ids:
++                    imported += 1
++                    existing_ids.add(image_id)
++        return {"found": found, "imported": imported, "root": str(legacy_root)}
++
++    def snapshot(self) -> dict:
++        with self._locked():
++            catalog = self._load()
++        records = catalog["records"]
++        by_category = {key: sum(r.get("category") == key for r in records) for key in CATEGORIES}
++        by_status = {key: sum(r.get("status") == key for r in records) for key in ("pending_review", "approved", "excluded")}
++        approved_by_category = {key: sum(r.get("status") == "approved" and r.get("category") == key
++                                          for r in records) for key in CATEGORIES}
++        near_pairs = {(min(r["image_id"], other), max(r["image_id"], other)) for r in records for other in r.get("duplicate_of", [])}
++        exact = sum(max(0, len(r.get("sources", [])) - 1) for r in records)
++        # Conservative connected components over exact identity, near matches, and capture groups.
++        parent = {r["image_id"]: r["image_id"] for r in records}
++        def find(x):
++            while parent[x] != x:
++                parent[x] = parent[parent[x]]
++                x = parent[x]
++            return x
++        def union(a, b):
++            if a in parent and b in parent:
++                parent[find(a)] = find(b)
++        group_first = {}
++        for r in records:
++            source_groups = {s.get("capture_group") for s in r.get("sources", [])}
++            source_groups.discard(None)
++            source_groups.update(r.get("capture_groups", []))
++            if r.get("has_unknown_provenance", not source_groups):
++                source_groups.add("unknown-provenance")
++            for g in source_groups:
++                if g in group_first:
++                    union(r["image_id"], group_first[g])
++                else:
++                    group_first[g] = r["image_id"]
++            for other in r.get("duplicate_of", []):
++                union(r["image_id"], other)
++        groups: dict[str, list[str]] = {}
++        for iid in parent:
++            groups.setdefault(find(iid), []).append(iid)
++        proposed = None
++        approved_ids = {r["image_id"] for r in records if r.get("status") == "approved"}
++        approved_groups = []
++        group_provenance_complete = True
++        for ids in groups.values():
++            approved_members = sorted(approved_ids.intersection(ids))
++            if not approved_members:
++                continue
++            approved_groups.append(approved_members)
++            if any(r["image_id"] in ids and (r.get("has_unknown_provenance", False) or not r.get("capture_groups"))
++                   for r in records):
++                group_provenance_complete = False
++        if len(approved_groups) >= 3 and group_provenance_complete:
++            ordered = sorted(approved_groups, key=lambda ids: ids[0])
++            proposed = {"train": [], "validation": [], "evaluation": [], "grouping": ordered}
++            for i, group in enumerate(ordered):
++                proposed[("train", "validation", "evaluation")[i % 3]].extend(group)
++        ambiguous_markers = ("ambiguous", "conflict", "association_uncertain", "multiple_people")
++        def ambiguous(record):
++            return any(any(marker in flag for marker in ambiguous_markers) for flag in record.get("flags", []))
++        eligible_rows = [r for r in records if r.get("status") == "approved"
++                         and r.get("category") in CATEGORIES and r.get("category") != "unassigned"
++                         and not ambiguous(r)]
++        eligibility_reasons = []
++        if not any(r.get("status") == "approved" for r in records):
++            eligibility_reasons.append("No records have explicit approval.")
++        if any(r.get("status") == "approved" and ambiguous(r) for r in records):
++            eligibility_reasons.append("Approved records with ambiguity or label-conflict flags are excluded.")
++        if any(r.get("status") == "approved" and r.get("category") == "unassigned" for r in records):
++            eligibility_reasons.append("Unassigned records are excluded.")
++        if any(r.get("status") == "pending_review" for r in records):
++            eligibility_reasons.append("Pending-review records are excluded from experimental eligibility.")
++        if any(r.get("status") == "excluded" for r in records):
++            eligibility_reasons.append("Excluded records are not eligible for experimental training.")
++        eligible_counts = {c: sum(r['category'] == c for r in eligible_rows)
++                           for c in CATEGORIES if c != 'unassigned'}
++        missing_categories = [CATEGORIES[c] for c, count in eligible_counts.items() if not count]
++        if missing_categories:
++            eligibility_reasons.append('Missing approved, unambiguous examples for: ' + ', '.join(missing_categories) + '.')
++        eligibility_reasons.append('Category coverage is a minimum experimental input check, not evidence of accuracy.')
++        experimental_training_eligible = not missing_categories
++        if not experimental_training_eligible and not eligibility_reasons:
++            eligibility_reasons.append("No approved, assigned, unambiguous records are available.")
++        return {
++            "schema_version": 1, "preprocess_version": PREPROCESS_VERSION, "categories": dict(CATEGORIES),
++            "records": records,
++            "counts": {"total": len(records), "by_category": by_category, "by_status": by_status,
++                       "approved_by_category": approved_by_category, "eligible_by_category": eligible_counts,
++                       "exact_duplicate_occurrences": exact, "near_duplicate_pairs": len(near_pairs),
++                       "unknown_provenance": sum(r.get("has_unknown_provenance", not r.get("capture_group")) for r in records)},
++            "experimental_training_eligible": experimental_training_eligible,
++            "readiness": {"review_complete": bool(records) and all(r.get("status") != "pending_review" for r in records),
++                          "experimental_training_eligible": experimental_training_eligible,
++                          "experimental_training_reasons": eligibility_reasons,
++                          "group_safe_splits_available": proposed is not None,
++                          "independent_evaluation_ready": False, "model_activation_allowed": False},
++            "proposed_splits": proposed,
++        }
++
++    def review(self, image_id: str, *, category: str, crop: list[int], status: str,
++               logo_visibility: str = "unknown", logo_box: list[int] | None = None,
++               flags: list[str] | None = None, notes: str = "",
++               crop_source: str = "manual") -> dict:
++        _validate_category(category)
++        if status not in {"pending_review", "approved", "excluded"}:
++            raise ValueError("Invalid review status")
++        if logo_visibility not in {"unknown", "visible", "occluded", "not_visible"}:
++            raise ValueError("Invalid logo visibility")
++        if crop_source not in {"manual", "detector"}:
++            raise ValueError("Crop source must be manual or detector")
++        with self._locked():
++            catalog = self._load()
++            record = next((r for r in catalog["records"] if r["image_id"] == image_id), None)
++            if record is None:
++                raise KeyError(image_id)
++            if not isinstance(crop, (list, tuple)) or len(crop) != 4 or any(type(x) is not int for x in crop):
++                raise ValueError("Crop must be four integer raster coordinates")
++            x1, y1, x2, y2 = crop
++            if x1 < 0 or y1 < 0 or x2 > record["width"] or y2 > record["height"] or x2 - x1 < 16 or y2 - y1 < 16:
++                raise ValueError("Crop is outside the original image or too small")
++            if logo_box is not None:
++                if not isinstance(logo_box, (list, tuple)) or len(logo_box) != 4 or any(type(x) is not int for x in logo_box):
++                    raise ValueError("Logo box must be four integer raster coordinates")
++                lx1, ly1, lx2, ly2 = logo_box
++                if lx1 < x1 or ly1 < y1 or lx2 > x2 or ly2 > y2 or lx2 <= lx1 or ly2 <= ly1:
++                    raise ValueError("Logo box must be inside the reviewed crop")
++            if status == "approved" and category == "unassigned":
++                raise ValueError("Unassigned records cannot be approved")
++            if crop_source == "detector" and not any(p.get("box") == list(crop)
++                                                        for p in record.get("crop_proposal_history", [])):
++                raise ValueError("Detector crop must match a stored detector proposal")
++            if status == "approved" and (category not in CATEGORIES or not crop):
++                raise ValueError("Approval requires an explicit category and crop")
++            new = {"category": category, "status": status, "crop": list(crop),
++                   "logo_visibility": logo_visibility, "logo_box": list(logo_box) if logo_box else None,
++                   "flags": list(dict.fromkeys(flags or [])), "notes": str(notes),
++                   "preprocess_version": PREPROCESS_VERSION, "crop_source": crop_source}
++            record.update(new)
++            record["preprocess_version"] = PREPROCESS_VERSION
++            record["crop_source"] = crop_source
++            record["review_history"].append({"at": _now(), **new})
++            self._save(catalog)
++            return dict(record)
++
++    def image(self, image_id: str, crop: bool = False) -> Image.Image:
++        snap = self.snapshot()
++        record = next((r for r in snap["records"] if r["image_id"] == image_id), None)
++        if record is None:
++            raise KeyError(image_id)
++        path = self.root / record["original_path"]
++        with Image.open(path) as im:
++            result = im.convert("RGB")
++        if crop:
++            box = record.get("crop")
++            if not box:
++                raise ValueError("Image has no reviewed crop")
++            return result.crop(tuple(box))
++        return result
++
++    def propose_crop(self, image_id: str) -> list[int] | None:
++        """Try local PersonDetector weights and persist a non-approving proposal."""
++        with self._locked():
++            catalog = self._load()
++            record = next((r for r in catalog["records"] if r["image_id"] == image_id), None)
++            if record is None:
++                raise KeyError(image_id)
++        proposal = {"at": _now(), "source": "detector", "preprocess_version": PREPROCESS_VERSION,
++                    "box": None, "reason": None, "person_count": 0}
++        try:
++            from core.person_detector import PersonDetector
++            rgb = np.asarray(self.image(image_id))
++            bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
++            detector = PersonDetector(backend="cpu")
++            persons = detector.detect_persons(bgr)
++            if not persons:
++                reason = detector.last_error or "No person was detected in the image."
++                proposal["reason"] = reason
++                raise ValueError(reason)
++            proposal["person_count"] = len(persons)
++            box = detector.pose_torso_box(bgr, persons[0]) if detector.use_pose else None
++            if box is None:
++                # Only local detector geometry; no guessed or generated detection.
++                box = detector.get_torso_box(persons[0])
++            x1, y1, x2, y2 = [int(v) for v in box]
++            x1, y1 = max(0, x1), max(0, y1)
++            x2, y2 = min(record["width"], x2), min(record["height"], y2)
++            if x2 - x1 < 16 or y2 - y1 < 16:
++                reason = "Detected torso box is outside the image or too small."
++                proposal["reason"] = reason
++                raise ValueError(reason)
++            result = [x1, y1, x2, y2]
++            proposal["box"] = result
++            if len(persons) > 1:
++                proposal["association_uncertain"] = True
++            self._store_crop_proposal(image_id, proposal)
++            return result
++        except ValueError:
++            if proposal["reason"] is None:
++                proposal["reason"] = "Detector could not propose a crop."
++            self._store_crop_proposal(image_id, proposal)
++            raise
++        except Exception as exc:
++            reason = f"Detector crop proposal failed: {type(exc).__name__}: {exc}"
++            proposal["reason"] = reason
++            self._store_crop_proposal(image_id, proposal)
++            raise ValueError(reason) from exc
++
++    def _store_crop_proposal(self, image_id: str, proposal: dict) -> None:
++        with self._locked():
++            catalog = self._load()
++            record = next((r for r in catalog["records"] if r["image_id"] == image_id), None)
++            if record is None:
++                raise KeyError(image_id)
++            history = record.setdefault("crop_proposal_history", [])
++            history.append(dict(proposal))
++            record["crop_proposal"] = dict(proposal)
++            if proposal.get("association_uncertain"):
++                record["flags"] = sorted(set(record.get("flags", [])) |
++                                          {"person_association_uncertain", "multiple_people"})
++            self._save(catalog)
++
++
++class _CatalogLock:
++    def __init__(self, thread_lock, path):
++        self.thread_lock, self.path, self.file = thread_lock, path, None
++    def __enter__(self):
++        self.thread_lock.acquire()
++        try:
++            self.file = self.path.open("a+")
++            try:
++                import fcntl
++                fcntl.flock(self.file.fileno(), fcntl.LOCK_EX)
++            except ImportError:
++                pass
++        except Exception:
++            if self.file:
++                self.file.close()
++                self.file = None
++            self.thread_lock.release()
++            raise
++        return self
++    def __exit__(self, *_):
++        try:
++            if self.file:
++                try:
++                    import fcntl
++                    fcntl.flock(self.file.fileno(), fcntl.LOCK_UN)
++                except ImportError:
++                    pass
++                finally:
++                    self.file.close()
++        finally:
++            self.thread_lock.release()
+diff --git a/ui/uniform_workspace.py b/ui/uniform_workspace.py
+new file mode 100644
+index 0000000..c34433c
+--- /dev/null
++++ b/ui/uniform_workspace.py
+@@ -0,0 +1,372 @@
++"""Stage 1 uniform dataset review. All disk/decode/detector work uses BackgroundTask."""
++from pathlib import Path
++import hashlib
++import tkinter as tk
++from tkinter import filedialog
++
++import customtkinter as ctk
++from PIL import Image, ImageTk
++
++from core.uniform_dataset import UniformDataset, CATEGORIES
++from core.trainer import ROOT, TRAIN_DIR
++from ui.background_task import BackgroundTask
++from ui.scrolling import ScrollableFrame
++from ui.components import COLOR_BG, COLOR_SURFACE, COLOR_ACCENT, COLOR_TEXT_MUTED, heading_font
++
++GARMENTS = ('campus_uniform', 'organizational_shirt', 'other_clothing')
++PAGE_SIZE = 12
++
++
++class UniformWorkspace(ctk.CTkFrame):
++    def __init__(self, master, *, capture, dataset=None):
++        super().__init__(master, fg_color=COLOR_BG)
++        self.dataset = dataset or UniformDataset()
++        self.capture = capture
++        self.task = BackgroundTask(self)
++        self.page = 0
++        self._images = []
++        self._review = None
++        self._refresh_again = False
++        self.grid_columnconfigure(0, weight=1)
++        self.grid_rowconfigure(1, weight=1)
++        self.status = ctk.CTkLabel(self, text='Loading review dataset…', anchor='w', wraplength=950)
++        self.status.grid(row=0, column=0, sticky='ew', padx=12, pady=6)
++        self.tabs = ctk.CTkTabview(self, command=self._tab_changed)
++        self.tabs.grid(row=1, column=0, sticky='nsew')
++        self.views = {}
++        for category in (*GARMENTS, 'unassigned'):
++            title = CATEGORIES[category] if category in GARMENTS else 'Evaluation & Models'
++            tab = self.tabs.add(title)
++            tab.grid_columnconfigure(0, weight=1)
++            tab.grid_rowconfigure(3, weight=1)
++            if category == 'unassigned':
++                self.readiness = ctk.CTkLabel(tab, text='Reading readiness…', justify='left', anchor='w', wraplength=900)
++                self.readiness.grid(row=0, column=0, sticky='ew', padx=8)
++                actions = ctk.CTkFrame(tab, fg_color='transparent')
++                actions.grid(row=1, column=0, sticky='ew')
++                ctk.CTkButton(actions, text='Audit legacy labels', command=self.audit_legacy).pack(side='left', padx=4)
++                for title in ('Train candidate', 'Evaluate candidate', 'Activate model'):
++                    ctk.CTkButton(actions, text=title, state='disabled', width=140).pack(side='left', padx=4)
++                text = 'Legacy review required • Correct/Wrong labels are not garment categories'
++            else:
++                ctk.CTkLabel(tab, text=CATEGORIES[category] + ' • review gallery', font=heading_font()).grid(row=0, column=0, sticky='w', padx=8)
++                actions = ctk.CTkFrame(tab, fg_color='transparent')
++                actions.grid(row=1, column=0, sticky='ew')
++                for title, action in (
++                    ('Upload Photos', lambda c=category: self.upload(c)),
++                    ('Import Folder', lambda c=category: self.import_folder(c)),
++                    ('Import ZIP', lambda c=category: self.import_zip(c)),
++                    ('Capture from Camera', lambda c=category: self.capture(c))):
++                    ctk.CTkButton(actions, text=title, command=action, width=145).pack(side='left', padx=4, pady=6)
++                text = 'Each original is preserved. Imports need crop and label review before approval.'
++            counts = ctk.CTkLabel(tab, text=text, anchor='w', wraplength=900)
++            counts.grid(row=2, column=0, sticky='ew', padx=8, pady=4)
++            gallery = ScrollableFrame(tab, fg_color=COLOR_BG)
++            gallery.grid(row=3, column=0, sticky='nsew')
++            for col in range(3):
++                gallery.grid_columnconfigure(col, weight=1)
++            footer = ctk.CTkFrame(tab, fg_color='transparent')
++            footer.grid(row=4, column=0, sticky='ew')
++            ctk.CTkButton(footer, text='Previous', width=95, command=lambda: self.move_page(-1)).pack(side='left', padx=4)
++            page = ctk.CTkLabel(footer, text='')
++            page.pack(side='left', padx=12)
++            ctk.CTkButton(footer, text='Next', width=95, command=lambda: self.move_page(1)).pack(side='left', padx=4)
++            self.views[category] = (gallery, counts, page)
++        self.refresh()
++
++    def category(self):
++        title = self.tabs.get()
++        return next((c for c in GARMENTS if CATEGORIES[c] == title), 'unassigned')
++
++    def _tab_changed(self):
++        self.page = 0
++        self.refresh()
++
++    def show_category(self, category):
++        self.tabs.set(CATEGORIES[category])
++        self._tab_changed()
++
++    def _error(self, error):
++        self.status.configure(text=str(error) + ' Any examples already saved remain available for review.')
++
++    def run(self, operation, message, done=None, error=None):
++        if self.task.busy:
++            self.status.configure(text='An operation is still running. Please wait.')
++            return False
++        self.status.configure(text=message)
++        def finished(value):
++            self.status.configure(text='Saved to the review dataset. The active model is unchanged.')
++            if done:
++                done(value)
++            self.refresh()
++        def failed(message):
++            self._error(message)
++            if error:
++                error(message)
++        return self.task.run(operation, finished, failed)
++
++    def refresh(self):
++        if self.task.busy:
++            self._refresh_again = True
++            return
++        category, page = self.category(), self.page
++        dataset = self.dataset
++        def load():
++            snapshot = dataset.snapshot()
++            records = [r for r in snapshot['records'] if r['category'] == category]
++            max_page = max(0, (len(records) - 1) // PAGE_SIZE)
++            actual = min(page, max_page)
++            rows = []
++            for record in records[actual * PAGE_SIZE:(actual + 1) * PAGE_SIZE]:
++                image = dataset.image(record['image_id'])
++                image.thumbnail((190, 125))
++                rows.append((record, image))
++            models = []
++            for name in ('uniform_cls.pt', 'uniform_embed_ref.npz', 'uniform_color_ref.json'):
++                path = ROOT / 'models' / name
++                models.append(f'{name}: SHA256 {hashlib.sha256(path.read_bytes()).hexdigest()[:12]}' if path.is_file() else f'{name}: not present')
++            return snapshot, records, rows, actual, models
++        def loaded(value):
++            snapshot, records, rows, actual, models = value
++            if category != self.category() or page != self.page:
++                self._refresh_again = False
++                self.refresh()
++                return
++            self.page = actual
++            gallery, counts, page_label = self.views[category]
++            for widget in gallery.winfo_children():
++                widget.destroy()
++            self._images.clear()
++            totals = {s: sum(r['status'] == s for r in records) for s in ('approved', 'pending_review', 'excluded')}
++            counts.configure(text=f"{len(records)} unique images • {totals['approved']} approved • {totals['pending_review']} pending review • {totals['excluded']} excluded\n"
++                + f"{sum(max(0, len(r.get('sources', []))-1) for r in records)} exact duplicate occurrences • {sum(bool(r.get('duplicate_of')) for r in records)} images flagged as near-duplicates")
++            page_label.configure(text=f'Page {actual + 1} • showing {len(rows)} of {len(records)}')
++            for i, (record, picture) in enumerate(rows):
++                card = ctk.CTkFrame(gallery, fg_color=COLOR_SURFACE)
++                card.grid(row=i//3, column=i%3, sticky='nsew', padx=5, pady=5)
++                img = ctk.CTkImage(light_image=picture, dark_image=picture, size=picture.size)
++                self._images.append(img)
++                ctk.CTkLabel(card, text='', image=img).pack(pady=6)
++                ctk.CTkLabel(card, text=f"{record['status'].replace('_', ' ')} • {record['width']} × {record['height']}\n{len(record.get('sources', []))} source occurrence(s)", wraplength=200).pack(padx=6)
++                ctk.CTkButton(card, text='Review original & crop', command=lambda r=record: self.open_review(r)).pack(padx=6, pady=6)
++            if not rows:
++                ctk.CTkLabel(gallery, text='No examples yet. Import photos to begin review.', text_color=COLOR_TEXT_MUTED).grid(row=0, column=0, columnspan=3, pady=25)
++            ready = snapshot.get('readiness', {})
++            self.readiness.configure(text='Current model artifacts (unchanged): ' + ' • '.join(models) + '\n'
++                + 'Experimental training: ' + str(ready.get('experimental_training_eligible', False)) +
++                ' (minimum category coverage only) • Independent evaluation: ' + str(ready.get('independent_evaluation_ready', False)) + '\n'
++                + 'Training and evaluation are future stages. Activation is disabled in Stage 1.\n'
++                + 'Readiness: ' + '; '.join(ready.get('experimental_training_reasons', [])) + '\n'
++                + 'Photo count alone does not establish accuracy. Unknown provenance stays grouped; no independent evaluation claims.\n'
++                + f"Dataset: {snapshot.get('counts', {}).get('total', len(snapshot['records']))} unique originals. "
++                + 'Review legacy examples below; confirm each garment category.')
++            self.status.configure(text='Stage 1 • originals and review metadata only • active model unchanged')
++            if self._refresh_again:
++                self._refresh_again = False
++                self.refresh()
++        self.task.run(load, loaded, self._error)
++
++    def move_page(self, delta):
++        self.page = max(0, self.page + delta)
++        self.refresh()
++
++    def upload(self, category):
++        dataset = self.dataset
++        paths = filedialog.askopenfilenames(parent=self, title=f'Upload {CATEGORIES[category]} photos', filetypes=[('Images', '*.jpg *.jpeg *.png *.bmp *.webp *.tif *.tiff')])
++        if paths:
++            self.run(lambda: dataset.import_paths(paths, category), 'Validating and importing photos…')
++
++    def import_folder(self, category):
++        dataset = self.dataset
++        path = filedialog.askdirectory(parent=self, title='Import image folder')
++        if path:
++            self.run(lambda: dataset.import_folder(path, category), 'Validating folder and preserving originals…')
++
++    def import_zip(self, category):
++        dataset = self.dataset
++        path = filedialog.askopenfilename(parent=self, title='Import image ZIP', filetypes=[('ZIP archive', '*.zip')])
++        if path:
++            self.run(lambda: dataset.import_zip(path, category), 'Validating ZIP and deduplicating images…')
++
++    def audit_legacy(self):
++        dataset = self.dataset
++        self.run(lambda: dataset.audit_legacy(TRAIN_DIR / 'uniform'), 'Auditing legacy labels without mapping or changing originals…')
++
++    def import_frames(self, frames, category, capture_group, done, error=None):
++        dataset = self.dataset
++        return self.run(lambda: [dataset.import_capture(f, category, capture_group) for f in frames],
++                        'Saving captured originals for review…', done, error)
++
++    def open_review(self, record):
++        if self._review is not None and self._review.winfo_exists():
++            self._review.lift()
++            return
++        self._review = ReviewWindow(self, self.dataset, record, self.refresh)
++
++
++class ReviewWindow(ctk.CTkToplevel):
++    def __init__(self, master, dataset, record, changed):
++        super().__init__(master)
++        self.title('Review uniform example')
++        self.geometry('880x760')
++        self.minsize(880, 500)
++        self.transient(master.winfo_toplevel())
++        self.dataset, self.record, self.changed = dataset, record, changed
++        self.task = BackgroundTask(self)
++        self._photo = None
++        self._crop_photo = None
++        self.scale = 1.0
++        self._proposal_box = record.get('crop_proposal', {}).get('box')
++        self.bind('<Escape>', lambda e: self.destroy())
++        body = ScrollableFrame(self, fg_color=COLOR_BG)
++        body.pack(fill='both', expand=True)
++        self.message = ctk.CTkLabel(body, text='Loading original…', wraplength=780, justify='left')
++        self.message.pack(fill='x', padx=10, pady=8)
++        previews = ctk.CTkFrame(body)
++        previews.pack(fill='x', padx=10)
++        self.canvas = tk.Canvas(previews, width=390, height=300, bg='#101828', highlightthickness=0)
++        self.canvas.pack(side='left', padx=4, pady=4)
++        self.crop_preview = ctk.CTkLabel(previews, text='Proposed torso crop')
++        self.crop_preview.pack(side='left', padx=8)
++        self.canvas.bind('<ButtonPress-1>', self.start_crop)
++        self.canvas.bind('<B1-Motion>', self.drag_crop)
++        ctk.CTkLabel(body, text='Original raster • drag to correct the crop. Keep collar, sleeves, garment and emblem visible.\nNo mirror correction is applied automatically.', wraplength=780, justify='left').pack(padx=10, pady=6)
++        self.category = ctk.CTkOptionMenu(body, values=list(CATEGORIES.values()))
++        self.category.set(CATEGORIES[record['category']])
++        self.category.pack(fill='x', padx=10, pady=4)
++        coords = ctk.CTkFrame(body)
++        coords.pack(fill='x', padx=10)
++        self.coords = []
++        for name, value in zip(('Left', 'Top', 'Right', 'Bottom'), record.get('crop') or self._proposal_box or [0, 0, record['width'], record['height']]):
++            ctk.CTkLabel(coords, text=name).pack(side='left', padx=4)
++            entry = ctk.CTkEntry(coords, width=82)
++            entry.insert(0, str(value))
++            entry.pack(side='left')
++            self.coords.append(entry)
++        buttons = ctk.CTkFrame(body, fg_color='transparent')
++        buttons.pack(fill='x', padx=10, pady=4)
++        ctk.CTkButton(buttons, text='Preview corrected crop', command=self.preview).pack(side='left', padx=4)
++        ctk.CTkButton(buttons, text='Propose torso crop', command=self.propose).pack(side='left', padx=4)
++        self.visibility = ctk.CTkOptionMenu(body, values=['unknown', 'visible', 'occluded', 'not_visible'])
++        ctk.CTkLabel(body, text='Logo visibility').pack(anchor='w', padx=10)
++        self.visibility.set(record.get('logo_visibility', 'unknown'))
++        self.visibility.pack(fill='x', padx=10)
++        ctk.CTkLabel(body, text='Optional logo box in original pixels: left, top, right, bottom (blank = none)').pack(anchor='w', padx=10)
++        self.logo_box = ctk.CTkEntry(body)
++        self.logo_box.pack(fill='x', padx=10)
++        self.logo_box.insert(0, ', '.join(map(str, record.get('logo_box') or [])))
++        self.flags = {}
++        for flag, label in [('possible_blur', 'Possible blur'), ('obstruction', 'Garment obstructed'), ('low_resolution', 'Insufficient resolution'), ('incorrect_association', 'Wrong person / garment association'), ('provenance_association_uncertain', 'Association still needs review'), ('label_conflict', 'Conflicting labels still unresolved'), ('multiple_people', 'Multiple people: association unresolved'), ('person_association_uncertain', 'Detected person association needs review')]:
++            check = ctk.CTkCheckBox(body, text=label)
++            check.pack(anchor='w', padx=10, pady=3)
++            if flag in record.get('flags', []):
++                check.select()
++            self.flags[flag] = check
++        ctk.CTkLabel(body, text='Review notes / capture provenance (unknown stays grouped)').pack(anchor='w', padx=10)
++        self.notes = ctk.CTkEntry(body)
++        self.notes.insert(0, record.get('notes', ''))
++        self.notes.pack(fill='x', padx=10, pady=4)
++        self.confirm = ctk.CTkCheckBox(body, text='I checked the category, crop, association and quality warnings.')
++        self.confirm.pack(anchor='w', padx=10, pady=8)
++        actions = ctk.CTkFrame(body)
++        actions.pack(fill='x', padx=10, pady=10)
++        for title, status in [('Save pending review', 'pending_review'), ('Approve example', 'approved'), ('Exclude example', 'excluded')]:
++            ctk.CTkButton(actions, text=title, command=lambda s=status: self.save(s)).pack(side='left', padx=4, pady=6)
++        self.preview()
++
++    def crop(self):
++        box = [int(e.get()) for e in self.coords]
++        w, h = self.record['width'], self.record['height']
++        if not (0 <= box[0] < box[2] <= w and 0 <= box[1] < box[3] <= h):
++            raise ValueError('Crop must be inside the original with positive width and height.')
++        return box
++
++    def set_crop(self, box):
++        for entry, value in zip(self.coords, box):
++            entry.delete(0, 'end')
++            entry.insert(0, str(int(value)))
++        self.draw_box()
++
++    def draw_box(self):
++        try:
++            self.canvas.delete('crop')
++            self.canvas.create_rectangle(*(v * self.scale for v in self.crop()), outline='#26c6b0', width=2, tags='crop')
++        except ValueError:
++            pass
++
++    def start_crop(self, event):
++        self.origin = (event.x, event.y)
++
++    def drag_crop(self, event):
++        x, y = getattr(self, 'origin', (event.x, event.y))
++        w, h = self.record['width'], self.record['height']
++        box = [max(0, min(w, round(min(x, event.x)/self.scale))), max(0, min(h, round(min(y, event.y)/self.scale))),
++               max(0, min(w, round(max(x, event.x)/self.scale))), max(0, min(h, round(max(y, event.y)/self.scale)))]
++        self.set_crop(box)
++
++    def preview(self):
++        try:
++            box = self.crop()
++        except ValueError as exc:
++            self.message.configure(text=str(exc)); return
++        dataset, image_id = self.dataset, self.record['image_id']
++        def load():
++            original = dataset.image(image_id)
++            crop = original.crop(box)
++            original.thumbnail((390, 300))
++            crop.thumbnail((330, 300))
++            return original, crop
++        def loaded(result):
++            original, crop = result
++            self.scale = original.width / self.record['width']
++            self._photo = ImageTk.PhotoImage(original, master=self.canvas)
++            self.canvas.delete('all')
++            self.canvas.create_image(0, 0, image=self._photo, anchor='nw')
++            self.draw_box()
++            self._crop_photo = ctk.CTkImage(light_image=crop, dark_image=crop, size=crop.size)
++            self.crop_preview.configure(image=self._crop_photo, text='')
++            self.message.configure(text=f"Original {self.record['image_id'][:12]} • {self.record['width']}×{self.record['height']}\n"
++                + 'Flags: ' + ', '.join(self.record.get('flags', [])) + '\n'
++                + 'Group: ' + str(self.record.get('capture_group') or 'unknown provenance')
++                + f" • EXIF orientation: {self.record.get('exif_orientation', 1)} (raster preserved)\n"
++                + 'Sources: ' + '; '.join(f"{Path(s['path']).name} [legacy: {s.get('legacy_label', 'none')}]" for s in self.record.get('sources', [])[:3]))
++        self.task.run(load, loaded, lambda e: self.message.configure(text=e))
++
++    def propose(self):
++        dataset, image_id = self.dataset, self.record['image_id']
++        def operation():
++            box = dataset.propose_crop(image_id)
++            record = next(r for r in dataset.snapshot()['records'] if r['image_id'] == image_id)
++            return box, record
++        def done(value):
++            box, record = value
++            self.record = record
++            for flag, check in self.flags.items():
++                if flag in record.get('flags', []):
++                    check.select()
++            if box:
++                self._proposal_box = list(box)
++                self.set_crop(box)
++                self.confirm.deselect()
++                self.preview()
++            else:
++                self.message.configure(text='No reliable torso proposal. Correct the crop manually.')
++        self.task.run(operation, done, lambda e: self.message.configure(text=e))
++
++    def save(self, status):
++        try:
++            if status == 'approved' and not self.confirm.get():
++                raise ValueError('Confirm your review before approval.')
++            box = self.crop()
++            logo = [int(v.strip()) for v in self.logo_box.get().split(',')] if self.logo_box.get().strip() else None
++            category = next(c for c, title in CATEGORIES.items() if title == self.category.get())
++            flags = [f for f in self.record.get('flags', []) if f not in self.flags]
++            flags += [f for f, check in self.flags.items() if check.get()]
++            args = dict(category=category, crop=box, crop_source='detector' if box == self._proposal_box else 'manual', status=status, logo_visibility=self.visibility.get(), logo_box=logo, flags=flags, notes=self.notes.get())
++        except (ValueError, StopIteration) as exc:
++            self.message.configure(text=str(exc)); return
++        dataset, image_id = self.dataset, self.record['image_id']
++        def done(value):
++            self.changed()
++            self.destroy()
++        self.task.run(lambda: dataset.review(image_id, **args), done, lambda e: self.message.configure(text=e))
+diff --git a/tests/test_uniform_dataset.py b/tests/test_uniform_dataset.py
+new file mode 100644
+index 0000000..9e52e6e
+--- /dev/null
++++ b/tests/test_uniform_dataset.py
+@@ -0,0 +1,332 @@
++import hashlib
++import io
++import tempfile
++import unittest
++import zipfile
++from unittest.mock import patch
++from pathlib import Path
++
++import numpy as np
++from PIL import Image
++
++from core.uniform_dataset import CATEGORIES, UniformDataset, _CatalogLock
++
++
++def png_bytes(color=(30, 100, 180), size=(120, 100)):
++    import io
++    stream = io.BytesIO()
++    Image.new("RGB", size, color).save(stream, format="PNG")
++    return stream.getvalue()
++
++
++class UniformDatasetTests(unittest.TestCase):
++    def setUp(self):
++        self.temp = tempfile.TemporaryDirectory()
++        self.root = Path(self.temp.name) / "catalog"
++        self.ds = UniformDataset(self.root)
++
++    def tearDown(self):
++        self.temp.cleanup()
++
++    def image_file(self, name="one.png", data=None):
++        path = Path(self.temp.name) / name
++        path.write_bytes(data or png_bytes())
++        return path
++
++    def test_exact_dedup_keeps_original_bytes_and_source_occurrences(self):
++        data = png_bytes()
++        first = self.image_file("first.png", data)
++        second = self.image_file("second.png", data)
++        iid1 = self.ds.import_paths([first], "campus_uniform", capture_group="session-A")[0]
++        iid2 = self.ds.import_paths([second], "campus_uniform", capture_group="session-A")[0]
++        snap = self.ds.snapshot()
++        self.assertEqual(iid1, hashlib.sha256(data).hexdigest())
++        self.assertEqual(iid1, iid2)
++        self.assertEqual(snap["counts"]["total"], 1)
++        self.assertEqual(snap["counts"]["exact_duplicate_occurrences"], 1)
++        record = snap["records"][0]
++        self.assertEqual((self.root / record["original_path"]).read_bytes(), data)
++        self.assertEqual(len(record["sources"]), 2)
++        self.assertEqual(record["status"], "pending_review")
++        self.assertFalse(snap["readiness"]["model_activation_allowed"])
++
++    def test_incremental_near_duplicate_link_flags_both_records(self):
++        first = Image.new("RGB", (160, 160), (40, 80, 120))
++        second = first.copy()
++        second.putpixel((0, 0), (41, 80, 120))
++        paths = []
++        for name, image in (("near-a.png", first), ("near-b.png", second)):
++            stream = io.BytesIO()
++            image.save(stream, format="PNG")
++            paths.append(self.image_file(name, stream.getvalue()))
++        ids = [self.ds.import_paths([path], "campus_uniform")[0] for path in paths]
++        rows = {r["image_id"]: r for r in self.ds.snapshot()["records"]}
++        self.assertIn(ids[1], rows[ids[0]]["duplicate_of"])
++        self.assertIn(ids[0], rows[ids[1]]["duplicate_of"])
++        self.assertIn("near_duplicate_review", rows[ids[0]]["flags"])
++        self.assertIn("near_duplicate_review", rows[ids[1]]["flags"])
++
++    def test_exact_duplicate_import_bridges_capture_groups_for_split_safety(self):
++        shared = png_bytes()
++        a = self.ds.import_paths([self.image_file("shared-a.png", shared)], "campus_uniform", capture_group="session-A")[0]
++        self.ds.import_paths([self.image_file("shared-b.png", shared)], "campus_uniform", capture_group="session-B")
++        for session, seed in (("session-C", 31), ("session-D", 91)):
++            stream = __import__("io").BytesIO()
++            Image.fromarray(np.random.default_rng(seed).integers(0, 256, (100, 120, 3), dtype=np.uint8)).save(stream, format="PNG")
++            self.ds.import_paths([self.image_file(session + ".png", stream.getvalue())], "campus_uniform", capture_group=session)
++        for record in self.ds.snapshot()["records"]:
++            self.ds.review(record["image_id"], category="campus_uniform", crop=[0, 0, 100, 80], status="approved")
++        snap = self.ds.snapshot()
++        row = next(r for r in snap["records"] if r["image_id"] == a)
++        self.assertEqual(row["capture_groups"], ["session-A", "session-B"])
++        proposed = snap["proposed_splits"]
++        split_for = {iid: split for split in ("train", "validation", "evaluation") for iid in proposed[split]}
++        self.assertIn(a, split_for)
++        self.assertEqual(sum(a in group for group in proposed["grouping"]), 1)
++
++    def test_conflicting_exact_reimport_invalidates_approval_but_same_source_does_not(self):
++        path = self.image_file(data=png_bytes())
++        iid = self.ds.import_paths([path], "campus_uniform")[0]
++        self.ds.review(iid, category="campus_uniform", crop=[0, 0, 100, 80], status="approved")
++        self.ds.import_paths([path], "campus_uniform")
++        self.assertEqual(self.ds.snapshot()["records"][0]["status"], "approved")
++        self.ds.import_paths([path], "other_clothing")
++        record = self.ds.snapshot()["records"][0]
++        self.assertEqual(record["status"], "pending_review")
++        self.assertIn("label_conflict", record["flags"])
++
++    def test_zip_preflight_rejects_traversal_before_import(self):
++        archive_path = Path(self.temp.name) / "unsafe.zip"
++        with zipfile.ZipFile(archive_path, "w") as archive:
++            archive.writestr("../escape.png", png_bytes())
++        with self.assertRaises(ValueError):
++            self.ds.import_zip(archive_path, "campus_uniform")
++        self.assertEqual(self.ds.snapshot()["counts"]["total"], 0)
++        self.assertFalse((Path(self.temp.name) / "escape.png").exists())
++
++    def test_zip_rejects_unsafe_directory_and_drive_paths_and_records_archive_hash(self):
++        for unsafe_name in ("../folder/", "C:/escape.png"):
++            archive_path = Path(self.temp.name) / (str(len(unsafe_name)) + ".zip")
++            with zipfile.ZipFile(archive_path, "w") as archive:
++                archive.writestr(unsafe_name, b"")
++            with self.assertRaises(ValueError):
++                self.ds.import_zip(archive_path, "campus_uniform")
++        archive_path = Path(self.temp.name) / "metadata.zip"
++        with zipfile.ZipFile(archive_path, "w") as archive:
++            archive.writestr("__MACOSX/._photo.png", png_bytes())
++            archive.writestr("photo.png", png_bytes(color=(1, 2, 3)))
++        iid = self.ds.import_zip(archive_path, "campus_uniform")[0]
++        source = self.ds.snapshot()["records"][0]["sources"][0]
++        self.assertEqual(source["archive_sha256"], hashlib.sha256(archive_path.read_bytes()).hexdigest())
++        self.assertNotIn("__MACOSX", source["path"])
++
++    def test_legacy_audit_is_idempotent_and_never_maps_old_labels(self):
++        legacy = Path(self.temp.name) / "old" / "wrong_uniform"
++        legacy.mkdir(parents=True)
++        (legacy / "photo.png").write_bytes(png_bytes())
++        self.assertEqual(self.ds.audit_legacy(legacy.parent)["imported"], 1)
++        self.assertEqual(self.ds.audit_legacy(legacy.parent)["imported"], 0)
++        record = self.ds.snapshot()["records"][0]
++        self.assertEqual(record["category"], "unassigned")
++        self.assertEqual(record["status"], "pending_review")
++        self.assertEqual(record["sources"][0]["legacy_label"], "wrong_uniform")
++
++    def test_review_validation_and_crop_coordinates_preserve_raster(self):
++        original = png_bytes(size=(160, 120))
++        p = self.image_file(data=original)
++        iid = self.ds.import_paths([p], "organizational_shirt")[0]
++        with self.assertRaises(ValueError):
++            self.ds.review(iid, category="campus_uniform", crop=[-1, 0, 80, 80], status="approved")
++        self.ds.review(iid, category="organizational_shirt", crop=[10, 20, 110, 100], status="approved",
++                       logo_visibility="visible", logo_box=[30, 40, 60, 70])
++        self.assertEqual(self.ds.image(iid).size, (160, 120))
++        self.assertEqual(self.ds.image(iid, crop=True).size, (100, 80))
++        row = self.ds.snapshot()["records"][0]
++        self.assertEqual(row["sha256"], hashlib.sha256(original).hexdigest())
++        self.assertEqual(len(row["review_history"]), 1)
++        self.ds.review(iid, category="campus_uniform", crop=[0, 0, 100, 100], status="pending_review")
++        self.assertEqual(self.ds.snapshot()["records"][0]["status"], "pending_review")
++        row = self.ds.snapshot()["records"][0]
++        self.assertEqual(row["preprocess_version"], self.ds.snapshot()["preprocess_version"])
++        self.assertEqual(row["crop_source"], "manual")
++        self.assertEqual(row["review_history"][-1]["crop_source"], "manual")
++
++    def test_unknown_provenance_is_one_group_and_never_claims_eval_readiness(self):
++        paths = [self.image_file(f"{i}.png", png_bytes(color=(i * 30 + 5, 40, 100))) for i in range(3)]
++        for p in paths:
++            self.ds.import_paths([p], "other_clothing")
++        snap = self.ds.snapshot()
++        self.assertEqual(snap["counts"]["unknown_provenance"], 3)
++        self.assertFalse(snap["readiness"]["group_safe_splits_available"])
++        self.assertFalse(snap["readiness"]["independent_evaluation_ready"])
++        self.assertIsNone(snap["proposed_splits"])
++
++    def test_capture_png_is_lossless_and_imports_have_quality_flags(self):
++        frame = np.zeros((96, 128, 3), dtype=np.uint8)
++        frame[:, :64] = (0, 0, 255)
++        frame[:, 64:] = (0, 255, 0)
++        iid = self.ds.import_capture(frame, "campus_uniform", "camera-session")
++        stored = np.asarray(self.ds.image(iid))[:, :, ::-1]
++        self.assertTrue(np.array_equal(stored, frame))
++        record = self.ds.snapshot()["records"][0]
++        self.assertEqual(record["format"], "PNG")
++        self.assertIn("low_resolution", record["flags"])
++        self.assertFalse(self.ds.snapshot()["readiness"]["model_activation_allowed"])
++
++    def test_known_capture_groups_do_not_leak_across_proposed_splits(self):
++        for session, base in (("a", 10), ("b", 80), ("c", 150)):
++            rng = np.random.default_rng(base)
++            pixels = rng.integers(0, 256, (100, 120, 3), dtype=np.uint8)
++            import io
++            stream = io.BytesIO()
++            Image.fromarray(pixels).save(stream, format="PNG")
++            self.ds.import_paths([self.image_file(session + ".png", stream.getvalue())],
++                                 "campus_uniform", capture_group=session)
++            iid = self.ds.snapshot()["records"][-1]["image_id"]
++            self.ds.review(iid, category="campus_uniform", crop=[0, 0, 100, 80], status="approved")
++        proposed = self.ds.snapshot()["proposed_splits"]
++        self.assertIsNotNone(proposed)
++        split_for = {iid: split for split in ("train", "validation", "evaluation") for iid in proposed[split]}
++        for group in proposed["grouping"]:
++            self.assertEqual(len({split_for[iid] for iid in group}), 1)
++        self.assertFalse(self.ds.snapshot()["readiness"]["independent_evaluation_ready"])
++
++    def test_proposed_splits_include_only_approved_rows(self):
++        ids = []
++        for session, seed in (("a", 12), ("b", 34), ("c", 56), ("pending", 78)):
++            stream = io.BytesIO()
++            Image.fromarray(np.random.default_rng(seed).integers(0, 256, (100, 120, 3), dtype=np.uint8)).save(stream, format="PNG")
++            iid = self.ds.import_paths([self.image_file(session + ".png", stream.getvalue())],
++                                       "campus_uniform", capture_group=session)[0]
++            ids.append(iid)
++            if session != "pending":
++                self.ds.review(iid, category="campus_uniform", crop=[0, 0, 100, 80], status="approved")
++        snap = self.ds.snapshot()
++        split_ids = {iid for key in ("train", "validation", "evaluation") for iid in snap["proposed_splits"][key]}
++        self.assertEqual(split_ids, set(ids[:3]))
++        self.assertEqual(snap["counts"]["approved_by_category"]["campus_uniform"], 3)
++
++    def test_eligibility_excludes_ambiguous_approved_records_and_title_case_labels(self):
++        self.assertEqual(CATEGORIES["campus_uniform"], "Campus Uniform")
++        iid = self.ds.import_paths([self.image_file()], "campus_uniform")[0]
++        self.ds.review(iid, category="campus_uniform", crop=[0, 0, 100, 80], status="approved",
++                       flags=["label_conflict"])
++        snap = self.ds.snapshot()
++        self.assertFalse(snap["experimental_training_eligible"])
++        self.assertTrue(snap["readiness"]["experimental_training_reasons"])
++        self.assertFalse(snap["readiness"]["independent_evaluation_ready"])
++
++    def test_human_review_can_resolve_import_association_uncertainty(self):
++        iid = self.ds.import_paths([self.image_file()], "campus_uniform")[0]
++        self.assertIn("provenance_association_uncertain", self.ds.snapshot()["records"][0]["flags"])
++        self.ds.review(iid, category="campus_uniform", crop=[0, 0, 100, 80], status="approved", flags=[])
++        snap = self.ds.snapshot()
++        self.assertFalse(snap["experimental_training_eligible"])
++        self.assertEqual(snap['counts']['eligible_by_category']['campus_uniform'], 1)
++        for i, category in enumerate(('organizational_shirt', 'other_clothing')):
++            path = self.image_file(category+'.png', png_bytes(color=(100+i, 20, 50)))
++            other = self.ds.import_paths([path], category)[0]
++            self.ds.review(other, category=category, crop=[0, 0, 100, 80], status='approved', flags=[])
++        ready = self.ds.snapshot()['readiness']
++        self.assertTrue(ready['experimental_training_eligible'])
++        self.assertFalse(ready['independent_evaluation_ready'])
++        self.assertFalse(ready['model_activation_allowed'])
++
++    def test_crop_proposal_persists_detector_origin_without_approval(self):
++        iid = self.ds.import_paths([self.image_file(data=png_bytes(size=(120, 100)))], "campus_uniform")[0]
++        detector = unittest.mock.Mock()
++        detector.detect_persons.return_value = [[-5, -3, 200, 110], [10, 10, 50, 90]]
++        detector.use_pose = False
++        detector.get_torso_box.return_value = [-5, 19, 200, 68]
++        with patch("core.person_detector.PersonDetector", return_value=detector):
++            crop = self.ds.propose_crop(iid)
++        self.assertEqual(crop, [0, 19, 120, 68])
++        record = self.ds.snapshot()["records"][0]
++        self.assertEqual(record["status"], "pending_review")
++        self.assertEqual(record["crop_proposal"]["source"], "detector")
++        self.assertIn("person_association_uncertain", record["flags"])
++        self.assertIn("multiple_people", record["flags"])
++        self.ds.review(iid, category="campus_uniform", crop=crop, status="approved", crop_source="detector",
++                       flags=[])
++        reviewed = self.ds.snapshot()["records"][0]
++        self.assertEqual(reviewed["status"], "approved")
++        self.assertEqual(reviewed["review_history"][-1]["crop_source"], "detector")
++
++    def test_no_person_proposal_raises_useful_error_and_is_recorded(self):
++        iid = self.ds.import_paths([self.image_file()], "campus_uniform")[0]
++        detector = unittest.mock.Mock()
++        detector.detect_persons.return_value = []
++        detector.last_error = "Local detector weights are unavailable."
++        with patch("core.person_detector.PersonDetector", return_value=detector):
++            with self.assertRaisesRegex(ValueError, "weights are unavailable"):
++                self.ds.propose_crop(iid)
++        record = self.ds.snapshot()["records"][0]
++        self.assertEqual(record["crop_proposal"]["reason"], detector.last_error)
++
++    def test_catalog_lock_open_failure_releases_thread_lock(self):
++        import threading
++        lock = threading.RLock()
++        with self.assertRaises(FileNotFoundError):
++            with _CatalogLock(lock, Path(self.temp.name) / "missing" / "lock"):
++                pass
++        self.assertTrue(lock.acquire(blocking=False))
++        lock.release()
++
++    def test_exif_orientation_is_recorded_without_transforming_raster(self):
++        image = Image.new("RGB", (20, 30), (30, 60, 90))
++        exif = image.getexif()
++        exif[274] = 6
++        stream = io.BytesIO()
++        image.save(stream, format="JPEG", exif=exif)
++        iid = self.ds.import_paths([self.image_file("oriented.jpg", stream.getvalue())], "campus_uniform")[0]
++        record = self.ds.snapshot()["records"][0]
++        self.assertEqual(record["exif_orientation"], 6)
++        self.assertEqual(self.ds.image(iid).size, (20, 30))
++
++    def test_resolved_conflict_survives_same_source_reimport(self):
++        path = self.image_file()
++        iid = self.ds.import_paths([path], 'campus_uniform')[0]
++        self.ds.import_paths([path], 'other_clothing')
++        self.ds.review(iid, category='campus_uniform', crop=[0, 0, 120, 100], status='approved', flags=[])
++        self.ds.import_paths([path], 'other_clothing')
++        row = self.ds.snapshot()['records'][0]
++        self.assertEqual(row['status'], 'approved')
++        self.assertNotIn('label_conflict', row['flags'])
++
++    def test_zip_symlink_and_compression_abuse_rejected_before_write(self):
++        import stat
++        archive = Path(self.temp.name)/'unsafe.zip'
++        info = zipfile.ZipInfo('photo.jpg')
++        info.create_system = 3
++        info.external_attr = (stat.S_IFLNK | 0o777) << 16
++        with zipfile.ZipFile(archive, 'w') as z:
++            z.writestr(info, '../outside')
++        with self.assertRaisesRegex(ValueError, 'symlink'):
++            self.ds.import_zip(archive, 'organizational_shirt')
++        with zipfile.ZipFile(archive, 'w', compression=zipfile.ZIP_DEFLATED) as z:
++            z.writestr('bomb.png', b'0'*1024*1024)
++        with self.assertRaisesRegex(ValueError, 'compression ratio'):
++            self.ds.import_zip(archive, 'organizational_shirt')
++        self.assertEqual(self.ds.snapshot()['counts']['total'], 0)
++
++    def test_archive_and_decoded_image_limits(self):
++        archive = Path(self.temp.name)/'large.zip'
++        with zipfile.ZipFile(archive,'w') as z:
++            z.writestr('one.png', png_bytes())
++        with patch('core.uniform_dataset.MAX_ZIP_ARCHIVE_BYTES', 1):
++            with self.assertRaisesRegex(ValueError, 'compressed size'):
++                self.ds.import_zip(archive, 'organizational_shirt')
++        with patch('core.uniform_dataset.MAX_IMAGE_PIXELS', 100):
++            with self.assertRaisesRegex(ValueError, 'pixel count'):
++                self.ds.import_paths([self.image_file()], 'campus_uniform')
++        self.assertEqual(self.ds.snapshot()['counts']['total'], 0)
++
++    def test_catalog_corruption_fails_closed_without_overwrite(self):
++        self.ds.index_path.write_text("not-json", encoding="utf-8")
++        with self.assertRaises(RuntimeError):
++            self.ds.snapshot()
++        self.assertEqual(self.ds.index_path.read_text("utf-8"), "not-json")
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/tests/test_uniform_workspace.py b/tests/test_uniform_workspace.py
+new file mode 100644
+index 0000000..1c36d5b
+--- /dev/null
++++ b/tests/test_uniform_workspace.py
+@@ -0,0 +1,164 @@
++"""Native Stage 1 controls using disposable datasets and cached synthetic frames."""
++import tempfile
++import threading
++import time
++from pathlib import Path
++import unittest
++from unittest.mock import Mock, patch
++
++import customtkinter as ctk
++import numpy as np
++from PIL import Image
++
++from core.uniform_dataset import UniformDataset, CATEGORIES
++from ui.uniform_workspace import UniformWorkspace, ReviewWindow
++from ui.window_lifecycle import WorkspaceWindow
++
++
++class UniformWorkspaceTests(unittest.TestCase):
++    def setUp(self):
++        self.tmp = tempfile.TemporaryDirectory()
++        self.dataset = UniformDataset(Path(self.tmp.name)/'dataset')
++        self.source = Path(self.tmp.name)/'original.png'
++        image = Image.new('RGB', (400, 300), 'navy')
++        image.paste('teal', (100, 60, 280, 260))
++        image.save(self.source)
++        self.root = WorkspaceWindow()
++        self.root.geometry('1150x850')
++        self.errors = []
++        self.root.report_callback_exception = lambda *a: self.errors.append(a)
++        self.capture = Mock()
++        self.view = UniformWorkspace(self.root, capture=self.capture, dataset=self.dataset)
++        self.view.pack(fill='both', expand=True)
++        self.wait()
++
++    def tearDown(self):
++        self.root.destroy()
++        self.tmp.cleanup()
++        self.assertEqual(self.errors, [])
++
++    def pump(self, ms=30):
++        self.root.after(ms, self.root.quit)
++        self.root.mainloop()
++
++    def wait(self, task=None):
++        task = task or self.view.task
++        end = time.monotonic()+8
++        while task.busy and time.monotonic()<end:
++            self.pump()
++        self.assertFalse(task.busy)
++        self.pump()
++
++    def descendants(self, w):
++        yield w
++        for child in w.winfo_children():
++            yield from self.descendants(child)
++
++    def test_named_categories_and_disabled_model_actions(self):
++        self.assertEqual(list(self.view.tabs._tab_dict),
++            ['Campus Uniform', 'Organizational Shirt', 'Other Clothing', 'Evaluation & Models'])
++        self.view.show_category('organizational_shirt')
++        self.wait()
++        self.assertEqual(self.view.category(), 'organizational_shirt')
++        buttons = {w.cget('text'):w for w in self.descendants(self.view) if isinstance(w, ctk.CTkButton)}
++        for title in ('Train candidate', 'Evaluate candidate', 'Activate model'):
++            self.assertEqual(buttons[title].cget('state'), 'disabled')
++        self.assertIn('active model unchanged', self.view.status.cget('text'))
++
++    def test_upload_gallery_review_approval_and_label_correction(self):
++        with patch('ui.uniform_workspace.filedialog.askopenfilenames', return_value=(str(self.source),)):
++            self.view.upload('organizational_shirt')
++        self.wait()
++        self.view.show_category('organizational_shirt')
++        self.wait()
++        self.assertIn('1 unique images', self.view.views['organizational_shirt'][1].cget('text'))
++        record = self.dataset.snapshot()['records'][0]
++        self.view.open_review(record)
++        review = self.view._review
++        self.wait(review.task)
++        review.save('approved')
++        self.assertIn('Confirm', review.message.cget('text'))
++        review.set_crop([80, 40, 300, 280])
++        review.category.set(CATEGORIES['campus_uniform'])
++        review.confirm.select()
++        review.save('approved')
++        self.wait(review.task)
++        self.wait()
++        result = self.dataset.snapshot()['records'][0]
++        self.assertEqual(result['crop'], [80, 40, 300, 280])
++        self.assertEqual(result['category'], 'campus_uniform')
++        self.assertEqual(result['status'], 'approved')
++        self.assertEqual(self.source.read_bytes(), (self.dataset.root/result['original_path']).read_bytes())
++
++    def test_import_and_decode_stay_off_tk_thread(self):
++        main_thread = threading.get_ident()
++        calls = []
++        original = self.dataset.import_paths
++        def work(*a, **k):
++            calls.append(threading.get_ident())
++            return original(*a, **k)
++        with patch.object(self.dataset, 'import_paths', side_effect=work), patch('ui.uniform_workspace.filedialog.askopenfilenames', return_value=(str(self.source),)):
++            self.view.upload('other_clothing')
++            self.wait()
++        self.assertTrue(calls)
++        self.assertNotIn(main_thread, calls)
++
++    def test_crop_proposal_does_not_approve_and_remains_editable(self):
++        iid = self.dataset.import_paths([self.source], 'organizational_shirt')[0]
++        record = self.dataset.snapshot()['records'][0]
++        self.view.open_review(record)
++        review = self.view._review
++        self.wait(review.task)
++        with patch.object(self.dataset, 'propose_crop', return_value=[30, 20, 330, 270]):
++            review.propose()
++            self.wait(review.task)
++        self.assertEqual(review.crop(), [30, 20, 330, 270])
++        self.assertEqual(self.dataset.snapshot()['records'][0]['status'], 'pending_review')
++        review.set_crop([20, 10, 350, 280])
++        self.assertEqual(review.crop(), [20, 10, 350, 280])
++
++    def test_capture_uses_supplied_frame_and_shared_group_without_flip(self):
++        frame = np.zeros((200, 300, 3), dtype=np.uint8)
++        frame[:, :80] = (0, 0, 255)
++        done = Mock()
++        self.view.import_frames([frame], 'organizational_shirt', 'camera-session:test', done)
++        self.wait()
++        done.assert_called_once()
++        record = self.dataset.snapshot()['records'][0]
++        self.assertEqual(record['capture_group'], 'camera-session:test')
++        self.assertEqual(self.dataset.image(record['image_id']).getpixel((10, 50)), (255, 0, 0))
++        self.assertEqual(record['status'], 'pending_review')
++
++    def test_destroy_during_background_work_has_no_tk_callback(self):
++        gate = threading.Event()
++        finished = threading.Event()
++        def operation():
++            gate.wait(2)
++            finished.set()
++        self.view.run(operation, 'Testing lifecycle')
++        self.view.destroy()
++        gate.set()
++        self.assertTrue(finished.wait(2))
++        self.pump(100)
++
++    def test_training_panel_keeps_sections_and_routes_camera_saves(self):
++        from ui.training_panel import TrainingPanel
++        trainer = Mock()
++        trainer.get_sample_counts.return_value = {'no_earring':0, 'with_earring':0}
++        trainer.list_samples.return_value = []
++        trainer.is_trained.return_value = False
++        with patch('ui.uniform_workspace.UniformDataset', return_value=self.dataset):
++            panel = TrainingPanel(self.root, trainer=trainer, get_frame=lambda: np.zeros((120,160,3),dtype=np.uint8))
++        panel.pack(fill='both', expand=True)
++        self.wait(panel._uniform_workspace.task)
++        self.assertEqual(list(panel._tabview._tab_dict), ['Uniform Check', 'Earring Check', 'DYCI Logo & Digital Shirts'])
++        panel._open_capture_screen('uniform_stage1', 'organizational_shirt')
++        state = panel._capture_state
++        panel._do_capture(state, np.zeros((120,160,3),dtype=np.uint8))
++        panel._save_changes(state)
++        self.wait(panel._uniform_workspace.task)
++        trainer.add_sample.assert_not_called()
++        trainer.train.assert_not_called()
++        self.assertEqual(len(self.dataset.snapshot()['records']), 1)
++        panel.on_hide()
++        panel.destroy()

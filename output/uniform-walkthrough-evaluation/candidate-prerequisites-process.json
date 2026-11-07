@@ -1,0 +1,9 @@
+{
+  "wrapper_pid": 53098,
+  "wrapper_command": "output/uniform-walkthrough-evaluation/run_owned_check.py candidate-prerequisites .venv/bin/python -m unittest tests.test_uniform_candidate -v",
+  "started_at_utc": "2026-11-05T11:34:38.985298+00:00",
+  "command": ".venv/bin/python -m unittest tests.test_uniform_candidate -v",
+  "pid": 53099,
+  "returncode": 0,
+  "finished_at_utc": "2026-11-05T11:34:40.699529+00:00"
+}

@@ -1,0 +1,16 @@
+{
+  "bundle": "/Users/jopethones/Documents/GitHub/cbvms3.0/data/uniform_candidate_smoke/645a629ef7034ed8ae06d3a4743ba75d/candidates/ffe234076d3d428eb28c332838b9e5fd",
+  "weights_mapping_matches_manifest": true,
+  "weights_preprocess_matches_manifest": true,
+  "finite_tensors": true,
+  "head_shapes": {
+    "model.9.linear.weight": [
+      3,
+      1280
+    ],
+    "model.9.linear.bias": [
+      3
+    ]
+  },
+  "activation_eligible": false
+}

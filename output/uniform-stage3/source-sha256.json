@@ -1,0 +1,21 @@
+{
+  "core/live_pipeline.py": "ab16f11be148a7dd66394efae1a516073e1d50482c0fe4883a6c581202bdb41f",
+  "core/live_state.py": "281b8a9e869eaa883b318d5b85d09bb74fa3c8439d259e320a7fe6a6bd8e5f64",
+  "core/monitor_models.py": "ae5c692637386690900f5b4dda11d2335cdc28422e1b8cfc72d171f37dc9bff9",
+  "core/trainer.py": "920bf2aae36f7815b5071bfe51214aed2c6f9c0e8776e3afc61b31a9a37f8eda",
+  "core/uniform_evaluation.py": "6dfb4b7dab56f6a087cc1420c523a99048d482cd3a4b4986aa1bf96fd90089e3",
+  "core/uniform_model_registry.py": "38a16e4bbf062ff7351d614a9791a4b4eb8b0c6d369ca712cc8478254a124c1f",
+  "core/uniform_models_service.py": "03d7f5e07534ee8619c9ab34cddc76654432028cc0710dfce27b5d93363238e1",
+  "docs/UNIFORM_EVALUATION_MANIFEST.md": "53a1e7b9fe37ccfa10390c9331b9c4410186506c3229bfd6250f4749a5f38c25",
+  "docs/UNIFORM_MODELS_WORKFLOW.md": "e55fe80ddb90700b873906e84ec701c96556112d38b08aa73e08532f0f876848",
+  "tests/test_uniform_evaluation.py": "96ccee61705578c31522ff4133a92c5e905a527103d0b1413a799933b75e220d",
+  "tests/test_uniform_model_registry.py": "28f3e9630386a20ff638f8dbcfe5d61d40d8e04d90a8e07ebe45b6beb0732e59",
+  "tests/test_uniform_models_integration.py": "24a2a6f2403877a59841bccdc874b4e9bc01da6fddbec2ed9bab4137ac662639",
+  "tests/test_uniform_models_ui.py": "15552a55f9a0eae6b22db5c4f1cad6b59a5526aa39eee1adee917f7b412fb19e",
+  "tests/test_uniform_workspace.py": "a3681dbe44714ab85619e9d3189b1e59385685443eed19350dcfd2e2278e3031",
+  "ui/dashboard.py": "1403fb12dfbde5f465f4b30ef4298d0cf435d571e9e49e9bdc2b580d1f5e8644",
+  "ui/training_panel.py": "4cb448b6a5cbe56a83e9493c334e0e695352368e42d0ec7c9fd7cfb26404ed44",
+  "ui/uniform_candidate_panel.py": "0340c9973de6233a4fcbca43d5cb8c668e7043bc80c0a2dab339c4cd1cc4f756",
+  "ui/uniform_models_panel.py": "e9d5123cd65bc74e9e92812df0f622ab01ea332f773c962cddda2e97524cbf0f",
+  "ui/uniform_workspace.py": "e8c9925dfd7d937fa4e5eba54cdf586842004bd62d97f5d5377d8d205a6ac4f9"
+}

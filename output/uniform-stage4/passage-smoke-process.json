@@ -1,0 +1,9 @@
+{
+  "wrapper_pid": 46836,
+  "wrapper_command": "output/uniform-stage4/run_owned_check.py passage-smoke .venv/bin/python scripts/smoke_uniform_observation.py --candidate data/uniform_candidate_smoke/645a629ef7034ed8ae06d3a4743ba75d/candidates/ffe234076d3d428eb28c332838b9e5fd --backend both --passages 10 --output output/uniform-stage4/passage-smoke.json",
+  "started_at_utc": "2026-11-05T05:51:57.658203+00:00",
+  "command": ".venv/bin/python scripts/smoke_uniform_observation.py --candidate data/uniform_candidate_smoke/645a629ef7034ed8ae06d3a4743ba75d/candidates/ffe234076d3d428eb28c332838b9e5fd --backend both --passages 10 --output output/uniform-stage4/passage-smoke.json",
+  "pid": 46837,
+  "returncode": 0,
+  "finished_at_utc": "2026-11-05T05:52:02.831253+00:00"
+}

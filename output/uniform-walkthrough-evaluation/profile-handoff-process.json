@@ -1,0 +1,9 @@
+{
+  "wrapper_pid": 52666,
+  "wrapper_command": "output/uniform-walkthrough-evaluation/run_owned_check.py profile-handoff .venv/bin/python -m unittest tests.test_uniform_pipeline_profile -v",
+  "started_at_utc": "2026-11-05T11:31:32.542183+00:00",
+  "command": ".venv/bin/python -m unittest tests.test_uniform_pipeline_profile -v",
+  "pid": 52667,
+  "returncode": 0,
+  "finished_at_utc": "2026-11-05T11:31:32.748098+00:00"
+}

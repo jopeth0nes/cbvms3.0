@@ -1,0 +1,9 @@
+{
+  "wrapper_pid": 49270,
+  "wrapper_command": "output/uniform-stage5/run_owned_check.py logo-native-ui .venv/bin/python -m unittest tests.test_uniform_logo_ui tests.test_uniform_workspace tests.test_uniform_models_ui tests.test_uniform_observation_ui tests.test_scrolling -v",
+  "started_at_utc": "2026-11-05T06:22:40.573855+00:00",
+  "command": ".venv/bin/python -m unittest tests.test_uniform_logo_ui tests.test_uniform_workspace tests.test_uniform_models_ui tests.test_uniform_observation_ui tests.test_scrolling -v",
+  "pid": 49271,
+  "returncode": 0,
+  "finished_at_utc": "2026-11-05T06:22:55.999349+00:00"
+}

@@ -1,0 +1,28 @@
+{
+  "protected_file_count": 1772,
+  "changed_protected": [],
+  "active_artifact_count": 7,
+  "changed_active": [],
+  "scroll_files_without_intentional_integration": 18,
+  "changed_scroll": [],
+  "intentional_scroll_touchpoints": [
+    "ui/training_panel.py",
+    "ui/dashboard.py",
+    "ui/live_alerts.py"
+  ],
+  "catalog_sha256": "1e96842d40ab26b65d84650672ae1cb93c6512a2864d745d0e27f0055d205d8d",
+  "catalog_unchanged": true,
+  "catalog_status_counts": {
+    "pending_review": 963,
+    "approved": 0,
+    "excluded": 0
+  },
+  "production_pointer_absent": true,
+  "real_candidate_bundles": 0,
+  "unchanged_stage3_source_count": 12,
+  "changed_unowned_stage3_sources": [],
+  "candidate_sha256": "4eda5fd372adbd80749553f849bc155a3fc4873fa2b660774d413a26bdaaf65a",
+  "unchanged_stage4_source_count": 15,
+  "changed_unowned_stage4_sources": [],
+  "unrelated_tracked_diffs_unchanged": true
+}

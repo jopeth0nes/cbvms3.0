@@ -1,0 +1,9 @@
+{
+  "wrapper_pid": 42293,
+  "wrapper_command": "output/uniform-stage4/run_owned_check.py backend-benchmark .venv/bin/python scripts/benchmark_uniform_backends.py --candidate data/uniform_candidate_smoke/645a629ef7034ed8ae06d3a4743ba75d/candidates/ffe234076d3d428eb28c332838b9e5fd --images .venv/lib/python3.12/site-packages/ultralytics/assets/bus.jpg .venv/lib/python3.12/site-packages/ultralytics/assets/zidane.jpg --backend both --repeats 30 --warmup 4 --output output/uniform-stage4/backend-benchmark.json",
+  "started_at_utc": "2026-11-04T17:09:27.649892+00:00",
+  "command": ".venv/bin/python scripts/benchmark_uniform_backends.py --candidate data/uniform_candidate_smoke/645a629ef7034ed8ae06d3a4743ba75d/candidates/ffe234076d3d428eb28c332838b9e5fd --images .venv/lib/python3.12/site-packages/ultralytics/assets/bus.jpg .venv/lib/python3.12/site-packages/ultralytics/assets/zidane.jpg --backend both --repeats 30 --warmup 4 --output output/uniform-stage4/backend-benchmark.json",
+  "pid": 42294,
+  "returncode": 0,
+  "finished_at_utc": "2026-11-04T17:09:42.002649+00:00"
+}

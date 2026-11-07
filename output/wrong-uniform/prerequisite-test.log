@@ -1,0 +1,6 @@
+test_readiness_names_missing_local_weights_before_start (tests.test_uniform_candidate.CandidateFreezeTests.test_readiness_names_missing_local_weights_before_start) ... ok
+
+----------------------------------------------------------------------
+Ran 1 test in 0.025s
+
+OK

@@ -1,0 +1,203 @@
+"""Shared candidate controls. Catalog reads, snapshots and job operations stay off Tk."""
+from pathlib import Path
+import customtkinter as ctk
+
+from core.uniform_dataset import CATEGORIES
+from ui.background_task import BackgroundTask
+from ui.scrolling import ScrollableFrame
+from ui.components import COLOR_BG, COLOR_ACCENT, COLOR_TEXT_MUTED, heading_font
+
+TRAIN_ACTION = 'Train candidate with approved datasets'
+ACTIVE_STATES = {'preparing', 'running', 'cancel_requested'}
+
+
+def _job_status(service, run_id):
+    return {**service.status(run_id), 'training_slot_busy': service.is_busy()}
+
+
+class CandidateTrainingWindow(ctk.CTkToplevel):
+    def __init__(self, master, service, candidates_root, *, training_busy=lambda: False):
+        super().__init__(master)
+        self.title(TRAIN_ACTION)
+        self.geometry('940x780')
+        self.minsize(820, 500)
+        self.transient(master.winfo_toplevel())
+        self.service, self.candidates_root = service, Path(candidates_root)
+        self.training_busy = training_busy
+        self.task = BackgroundTask(self)
+        self.summary = {}
+        self.current = {}
+        self.run_id = None
+        self.selected_run_id = None
+        self._poll = None
+        self._closed = False
+        self.protocol('WM_DELETE_WINDOW', self.destroy)
+        self.bind('<Escape>', lambda e: self.destroy())
+        body = ScrollableFrame(self, fg_color=COLOR_BG)
+        body.pack(fill='both', expand=True)
+        ctk.CTkLabel(body, text=TRAIN_ACTION, font=heading_font()).pack(anchor='w', padx=14, pady=10)
+        self.coverage = ctk.CTkLabel(body, text='Reading approved dataset…', justify='left', anchor='w', wraplength=850)
+        self.coverage.pack(fill='x', padx=14, pady=6)
+        self.readiness = ctk.CTkLabel(body, text='', justify='left', anchor='w', wraplength=850)
+        self.readiness.pack(fill='x', padx=14, pady=6)
+        ctk.CTkLabel(body, text=(
+            'Only reviewed crops in the three garment categories are included. Unresolved quality or association warnings are excluded. '
+            'Unable to assess is an uncertainty outcome, not a clothing class.\n'
+            'Ten eligible examples per class is a software minimum for an experiment, not evidence of accuracy. '
+            'Unknown provenance stays together. A train-only experiment has no independent evaluation.\n'
+            'Candidates use the local YOLOv8n classifier with a versioned three-class head and live-compatible 224 px letterboxing. '
+            'No automatic mirroring, architecture downloads, or active-model replacement.'),
+            justify='left', anchor='w', wraplength=850, text_color=COLOR_TEXT_MUTED).pack(fill='x', padx=14, pady=8)
+        config = ctk.CTkFrame(body, fg_color='transparent')
+        config.pack(fill='x', padx=14, pady=6)
+        self.options = {}
+        for name, title, values, default in (
+            ('epochs', 'Epochs', ['1', '2', '5', '10', '20', '40'], '5'),
+            ('batch', 'Batch size', ['2', '4', '8', '16'], '4'),
+            ('threads', 'CPU threads', ['1', '2', '3', '4'], '2')):
+            ctk.CTkLabel(config, text=title).pack(side='left', padx=(0, 6))
+            menu = ctk.CTkOptionMenu(config, values=values, width=95)
+            menu.set(default)
+            menu.pack(side='left', padx=(0, 16))
+            self.options[name] = menu
+        ctk.CTkLabel(body, text=(
+            'CPU training can slow live monitoring. Pause monitoring before training if possible. '
+            'Camera ownership is unchanged. Another Training job must finish first.\n'
+            'Closing this window does not stop the job. Use Cancel; reopen here to recover its status. '
+            'Resume continues from the last complete epoch with the frozen dataset and original configuration.'),
+            justify='left', anchor='w', wraplength=850).pack(fill='x', padx=14, pady=8)
+        self.ack = ctk.CTkCheckBox(body, text='I understand training can compete with live monitoring', command=self._buttons)
+        self.ack.pack(anchor='w', padx=14, pady=6)
+        actions = ctk.CTkFrame(body, fg_color='transparent')
+        actions.pack(fill='x', padx=10, pady=8)
+        self.start_button = ctk.CTkButton(actions, text=TRAIN_ACTION, width=310, state='disabled', command=self.start)
+        self.start_button.pack(side='left', padx=4)
+        self.cancel_button = ctk.CTkButton(actions, text='Cancel', width=90, state='disabled', command=self.cancel)
+        self.cancel_button.pack(side='left', padx=4)
+        self.resume_button = ctk.CTkButton(actions, text='Resume', width=90, state='disabled', command=self.resume)
+        self.resume_button.pack(side='left', padx=4)
+        self.refresh_button = ctk.CTkButton(actions, text='Refresh', width=90, command=self.refresh)
+        self.refresh_button.pack(side='left', padx=4)
+        self.run_picker = ctk.CTkOptionMenu(body, values=['Latest candidate'], command=self.select_run)
+        self.run_picker.pack(fill='x', padx=14, pady=8)
+        self.progress = ctk.CTkProgressBar(body, progress_color=COLOR_ACCENT)
+        self.progress.set(0)
+        self.progress.pack(fill='x', padx=14, pady=8)
+        self.message = ctk.CTkLabel(body, text='Reading job status…', justify='left', anchor='w', wraplength=850)
+        self.message.pack(fill='x', padx=14, pady=8)
+        self.artifact = ctk.CTkLabel(body, text='', justify='left', anchor='w', wraplength=850, text_color=COLOR_TEXT_MUTED)
+        self.artifact.pack(fill='x', padx=14, pady=8)
+        ctk.CTkLabel(body, text='Open Uniform Check → Evaluation & Models for independent evaluation and deployment review. Training alone establishes neither accuracy nor activation eligibility.',
+                     justify='left', anchor='w', wraplength=850).pack(fill='x', padx=14, pady=8)
+        self.refresh()
+
+    def _buttons(self):
+        active = self.current.get('status') in ACTIVE_STATES
+        available = not self.task.busy and not self.training_busy() and not self.current.get('training_slot_busy')
+        self.start_button.configure(state='normal' if available and not active and self.summary.get('eligible') and self.ack.get() else 'disabled')
+        self.cancel_button.configure(state='normal' if active and not self.task.busy and self.current.get('status') != 'cancel_requested' else 'disabled')
+        self.resume_button.configure(state='normal' if available and not active and self.current.get('resumable') and self.ack.get() else 'disabled')
+        self.refresh_button.configure(state='disabled' if self.task.busy else 'normal')
+        self.run_picker.configure(state='disabled' if self.task.busy else 'normal')
+        for menu in self.options.values():
+            menu.configure(state='disabled' if active or self.task.busy else 'normal')
+
+    def _schedule(self):
+        if self._poll is not None:
+            self.after_cancel(self._poll)
+        self._poll = self.after(1500, self._tick)
+
+    def _tick(self):
+        self._poll = None
+        if not self._closed:
+            if self.task.busy:
+                self._schedule()
+            else:
+                service, summary, run_id = self.service, self.summary, self.selected_run_id
+                self.task.run(lambda: (summary, _job_status(service, run_id)), self._loaded, self._failure)
+
+    def _failure(self, error):
+        self.message.configure(text=str(error))
+        self._buttons()
+        self._schedule()
+
+    def refresh(self):
+        if self.task.busy:
+            self._schedule()
+            return
+        service, run_id = self.service, self.selected_run_id
+        # A fresh catalog summary is required each time; approvals can change elsewhere.
+        self.task.run(lambda: (service.summary(), _job_status(service, run_id), service.list_runs()), self._loaded, self._failure)
+        self._buttons()
+
+    def _loaded(self, result):
+        self.summary, current = result[:2]
+        if len(result) > 2:
+            choices = ['Latest candidate'] + [f"{row['run_id']} • {row['status']}" for row in result[2]]
+            self.run_picker.configure(values=choices)
+            if self.selected_run_id:
+                choice = next((c for c in choices if c.startswith(self.selected_run_id)), 'Latest candidate')
+                self.run_picker.set(choice)
+        self.current = current or {}
+        self.run_id = self.current.get('run_id')
+        lines = []
+        for category in ('campus_uniform', 'organizational_shirt', 'other_clothing'):
+            groups = self.summary.get('groups_by_category', {}).get(category, {})
+            lines.append(f"{CATEGORIES[category]}: {self.summary.get('included_by_category', {}).get(category, 0)} included • "
+                         f"{groups.get('known', 0)} known capture groups • {groups.get('unknown', 0)} unknown-provenance group(s)")
+        lines.append(f"Pending: {self.summary.get('pending', 0)} • Excluded: {self.summary.get('excluded', 0)} • "
+                     f"Approved but quality/association blocked: {self.summary.get('quality_blocked', 0)}")
+        self.coverage.configure(text='Current dataset eligibility (Refresh after review):\n' + '\n'.join(lines))
+        reasons = self.summary.get('reasons', [])
+        self.readiness.configure(text=('Eligible for experimental training.' if self.summary.get('eligible') else 'Training blocked.')
+                                 + ('\n' + '\n'.join(reasons) if reasons else ''))
+        state = self.current.get('status', 'idle')
+        epoch, epochs = self.current.get('epoch', 0), self.current.get('epochs', 0)
+        self.progress.set(min(1, max(0, epoch / epochs)) if epochs else 0)
+        self.message.configure(text=f"{state.replace('_', ' ').capitalize()} • epoch {epoch}/{epochs}\n" + self.current.get('message', 'No candidate job yet.'))
+        self.artifact.configure(text=('Candidate bundle: ' + str(self.candidates_root / self.run_id) + '\nLogs: train.log • Frozen manifest, mapping, configuration and recovery checkpoint are stored in this bundle.') if self.run_id else '')
+        if self.current.get('training_slot_busy') and state not in ACTIVE_STATES:
+            self.message.configure(text='The training slot is occupied. Starting or resuming is available after it is released.')
+        if self.training_busy():
+            self.message.configure(text='Another Training operation is running. Finish it before starting or resuming a candidate.')
+        self._buttons()
+        self._schedule()
+
+    def select_run(self, value):
+        self.selected_run_id = None if value == 'Latest candidate' else value.split(' • ')[0]
+        self.refresh()
+
+    def _operate(self, operation, message):
+        if self.task.busy:
+            return
+        self.message.configure(text=message)
+        self.task.run(operation, lambda _: self.refresh(), self._failure)
+        self._buttons()
+
+    def start(self):
+        if self.task.busy or self.training_busy() or not self.summary.get('eligible') or not self.ack.get():
+            return
+        config = {name: int(menu.get()) for name, menu in self.options.items()}
+        config.update(min_per_class=10, synthetic_smoke=False)
+        service = self.service
+        self.selected_run_id = None
+        self.run_picker.set('Latest candidate')
+        self._operate(lambda: service.start(config), 'Freezing approved dataset and preparing candidate…')
+
+    def cancel(self):
+        if self.run_id and self.current.get('status') in ACTIVE_STATES:
+            service, run_id = self.service, self.run_id
+            self._operate(lambda: service.cancel(run_id), 'Requesting cancellation; waiting for a safe checkpoint…')
+
+    def resume(self):
+        if self.task.busy or self.training_busy() or not self.current.get('resumable') or not self.ack.get():
+            return
+        service, run_id = self.service, self.run_id
+        self._operate(lambda: service.resume(run_id), 'Validating frozen bundle and recovery checkpoint…')
+
+    def destroy(self):
+        self._closed = True
+        if self._poll is not None:
+            self.after_cancel(self._poll)
+            self._poll = None
+        super().destroy()

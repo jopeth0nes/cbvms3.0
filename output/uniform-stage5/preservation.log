@@ -1,0 +1,5 @@
+Traceback (most recent call last):
+  File "/Users/jopethones/Documents/GitHub/cbvms3.0/output/uniform-stage5/verify_preservation.py", line 36, in <module>
+    assert not results['changed_unowned_stage3_sources']
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError

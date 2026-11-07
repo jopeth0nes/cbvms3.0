@@ -1,0 +1,21 @@
+{
+  "protected_file_count": 1772,
+  "changed_protected": [],
+  "active_artifact_count": 7,
+  "changed_active": [],
+  "scroll_files_without_intentional_integration": 19,
+  "changed_scroll": [],
+  "intentional_scroll_touchpoints": [
+    "ui/training_panel.py",
+    "ui/dashboard.py"
+  ],
+  "catalog_sha256": "1e96842d40ab26b65d84650672ae1cb93c6512a2864d745d0e27f0055d205d8d",
+  "catalog_unchanged": true,
+  "catalog_status_counts": {
+    "pending_review": 963,
+    "approved": 0,
+    "excluded": 0
+  },
+  "production_pointer_absent": true,
+  "real_candidate_bundles": 0
+}

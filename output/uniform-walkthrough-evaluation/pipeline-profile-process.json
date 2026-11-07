@@ -1,0 +1,9 @@
+{
+  "wrapper_pid": 51912,
+  "wrapper_command": "output/uniform-walkthrough-evaluation/run_owned_check.py pipeline-profile .venv/bin/python scripts/profile_uniform_pipeline.py --candidate data/uniform_candidate_smoke/645a629ef7034ed8ae06d3a4743ba75d/candidates/ffe234076d3d428eb28c332838b9e5fd --images .venv/lib/python3.12/site-packages/ultralytics/assets/bus.jpg .venv/lib/python3.12/site-packages/ultralytics/assets/zidane.jpg --warmup 4 --repeats 20 --output output/uniform-walkthrough-evaluation/pipeline-profile.json",
+  "started_at_utc": "2026-11-05T11:23:56.050014+00:00",
+  "command": ".venv/bin/python scripts/profile_uniform_pipeline.py --candidate data/uniform_candidate_smoke/645a629ef7034ed8ae06d3a4743ba75d/candidates/ffe234076d3d428eb28c332838b9e5fd --images .venv/lib/python3.12/site-packages/ultralytics/assets/bus.jpg .venv/lib/python3.12/site-packages/ultralytics/assets/zidane.jpg --warmup 4 --repeats 20 --output output/uniform-walkthrough-evaluation/pipeline-profile.json",
+  "pid": 51913,
+  "returncode": 0,
+  "finished_at_utc": "2026-11-05T11:24:26.039229+00:00"
+}

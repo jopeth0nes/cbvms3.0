@@ -1,0 +1,2 @@
+Isolated observation workspace; primary=MacBook Camera. Empty evaluation roster. No production datasets or activation pointer copied.
+{"observation_only": true, "isolated_database": true, "empty_gallery": true, "candidate_synthetic": true, "candidate_sha256": "4eda5fd372adbd80749553f849bc155a3fc4873fa2b660774d413a26bdaaf65a", "primary_camera": {"id": "usb_0", "type": "usb", "index": 0, "label": "MacBook Camera"}, "logo_enabled": false, "camera_opened": false, "cloud_config_copied": false}

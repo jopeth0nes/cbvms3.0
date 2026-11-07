@@ -1,0 +1,25 @@
+{
+  "archive": {
+    "zip": "/Users/jopethones/Documents/GitHub/Org Shirt-20261031T093503Z-1-001.zip",
+    "sha256": "c49843a60e5193d519acf8f3a3cf4acd57fc037bf8cb3bbe408cdbeb0a18e7ea",
+    "image_files": 116,
+    "byte_distinct_images": 36,
+    "duplicate_occurrences": 80,
+    "expanded_bytes": 150478162,
+    "extensions": {
+      ".jpg": 116
+    }
+  },
+  "active_artifacts_sha256": {
+    "models/uniform_color_ref.json": "ad031db790ce11bc3e8e85a726a2b65fcf238d919388bd1844980a0e6ca497e4",
+    "models/uniform_embed_ref.npz": "b6b9c197fa7b0a81d334e08557658cb84424a4ca25e4c314ca12bc5cf2037fbc",
+    "models/yolov8n.pt": "31e20dde3def09e2cf938c7be6fe23d9150bbbe503982af13345706515f2ef95",
+    "models/uniform_cls.pt": "8fba6e1da0c11c97873b16049b940ce21d5699838cc2040f069d5d5249a15680"
+  },
+  "legacy_counts": {
+    "data/training/uniform/wrong_uniform": 202,
+    "data/training/uniform/correct_uniform": 727,
+    "data/training_cropped/uniform/wrong_uniform": 202,
+    "data/training_cropped/uniform/correct_uniform": 634
+  }
+}

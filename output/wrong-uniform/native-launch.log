@@ -1,0 +1,2 @@
+[1;31m2026-11-06 13:32:36.180704 [E:onnxruntime:, sequential_executor.cc:516 ExecuteKernel] Non-zero status code returned while running BatchNormalization node. Name:'BatchNormalization_95' Status Message: GetElementType is not implemented[m
+[1;31m2026-11-06 13:32:36.183464 [E:onnxruntime:, sequential_executor.cc:516 ExecuteKernel] Non-zero status code returned while running FusedConv node. Name:'Conv_6' Status Message: GetElementType is not implemented[m

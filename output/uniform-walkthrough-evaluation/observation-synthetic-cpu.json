@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "mode": "observation_only",
+  "candidate_bundle": "/Users/jopethones/Documents/GitHub/cbvms3.0/data/uniform_candidate_smoke/645a629ef7034ed8ae06d3a4743ba75d/candidates/ffe234076d3d428eb28c332838b9e5fd",
+  "candidate_sha256": "4eda5fd372adbd80749553f849bc155a3fc4873fa2b660774d413a26bdaaf65a",
+  "recognition_confidence": 0.8,
+  "backend": "cpu",
+  "assessment_zone": null,
+  "policy": null,
+  "minimum_torso_px": 160,
+  "minimum_sharpness": 25.0,
+  "evidence_ttl": 1.0,
+  "refresh_interval": 0.5,
+  "frame_ttl": 1.0,
+  "max_passages": 48,
+  "logo_verification": {
+    "enabled": false
+  }
+}

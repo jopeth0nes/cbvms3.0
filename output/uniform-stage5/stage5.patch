@@ -1,0 +1,1657 @@
+--- a/core/uniform_dataset.py
++++ b/core/uniform_dataset.py
+@@ -15,14 +15,19 @@
+ import threading
+ import time
+ import zipfile
++from datetime import datetime, timezone
+ from pathlib import Path, PurePosixPath
+ from typing import Iterable
+ 
+ import cv2
+ import numpy as np
++import copy
+ from PIL import Image, UnidentifiedImageError
+ 
+ from core.trainer import TRAIN_DIR
++from core.uniform_logo_annotations import (
++    is_eligible_visible_annotation, logo_readiness, normalize_visibility,
++)
+ 
+ PREPROCESS_VERSION = "uniform-stage1-raster-v1"
+ CATEGORIES = {
+@@ -45,6 +50,10 @@
+ 
+ def _now() -> str:
+     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
++
++
++def _review_now() -> str:
++    return datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
+ 
+ 
+ def _validate_category(category: str) -> None:
+@@ -439,7 +448,7 @@
+         experimental_training_eligible = not missing_categories
+         if not experimental_training_eligible and not eligibility_reasons:
+             eligibility_reasons.append("No approved, assigned, unambiguous records are available.")
+-        return {
++        result = {
+             "schema_version": 1, "preprocess_version": PREPROCESS_VERSION, "categories": dict(CATEGORIES),
+             "records": records,
+             "counts": {"total": len(records), "by_category": by_category, "by_status": by_status,
+@@ -454,18 +463,27 @@
+                           "independent_evaluation_ready": False, "model_activation_allowed": False},
+             "proposed_splits": proposed,
+         }
++        result["logo"] = logo_readiness(records)
++        return result
+ 
+     def review(self, image_id: str, *, category: str, crop: list[int], status: str,
+                logo_visibility: str = "unknown", logo_box: list[int] | None = None,
+                flags: list[str] | None = None, notes: str = "",
+-               crop_source: str = "manual") -> dict:
++               crop_source: str = "manual", logo_reviewed: bool = False,
++               logo_source_kind: str = "uncertain",
++               logo_association_confirmed: bool = False) -> dict:
+         _validate_category(category)
+         if status not in {"pending_review", "approved", "excluded"}:
+             raise ValueError("Invalid review status")
+-        if logo_visibility not in {"unknown", "visible", "occluded", "not_visible"}:
++        if logo_visibility not in {"unknown", "visible", "occluded", "not_visible",
++                                   "obscured", "too_small", "back_view", "uncertain"}:
+             raise ValueError("Invalid logo visibility")
+         if crop_source not in {"manual", "detector"}:
+             raise ValueError("Crop source must be manual or detector")
++        if type(logo_reviewed) is not bool or type(logo_association_confirmed) is not bool:
++            raise ValueError("Logo review and association confirmation must be explicit booleans")
++        if logo_source_kind not in {"photographed_print", "reference_artwork", "uncertain"}:
++            raise ValueError("Invalid logo source kind")
+         with self._locked():
+             catalog = self._load()
+             record = next((r for r in catalog["records"] if r["image_id"] == image_id), None)
+@@ -484,11 +502,43 @@
+                     raise ValueError("Logo box must be inside the reviewed crop")
+             if status == "approved" and category == "unassigned":
+                 raise ValueError("Unassigned records cannot be approved")
++            prior_annotation = record.get("logo_annotation") or {}
+             if crop_source == "detector" and not any(p.get("box") == list(crop)
+                                                         for p in record.get("crop_proposal_history", [])):
+                 raise ValueError("Detector crop must match a stored detector proposal")
+             if status == "approved" and (category not in CATEGORIES or not crop):
+                 raise ValueError("Approval requires an explicit category and crop")
++            canonical_visibility = normalize_visibility(logo_visibility)
++            # An omitted/default uncertain value does not erase a known source
++            # draft. Correcting artwork requires an explicit confirmed re-review.
++            effective_source_kind = logo_source_kind
++            if (logo_source_kind == "uncertain" and not logo_reviewed
++                    and prior_annotation.get("source_kind") in {"photographed_print", "reference_artwork"}):
++                effective_source_kind = prior_annotation["source_kind"]
++            if (prior_annotation.get("source_kind") == "reference_artwork"
++                    and not (logo_reviewed and logo_source_kind == "photographed_print"
++                             and logo_association_confirmed)):
++                # A pending unconfirmed source edit must not wash away artwork
++                # provenance before a later default approval.
++                effective_source_kind = "reference_artwork"
++            if status == "approved" and (
++                effective_source_kind == "reference_artwork"
++                or (prior_annotation.get("source_kind") == "reference_artwork"
++                    and not (logo_reviewed and logo_source_kind == "photographed_print"
++                             and logo_association_confirmed))
++            ):
++                raise ValueError("Reference artwork cannot be approved as a training garment")
++            if logo_reviewed:
++                if not logo_association_confirmed or effective_source_kind == "uncertain":
++                    raise ValueError("Reviewed logo annotations require a known source and confirmed torso association")
++                if canonical_visibility == "visible":
++                    if effective_source_kind != "photographed_print":
++                        raise ValueError("Visible logos must be photographed prints, not reference artwork")
++                    if logo_box is None:
++                        raise ValueError("A visible logo annotation requires a box inside the reviewed torso")
++                if status == "approved" and effective_source_kind == "reference_artwork":
++                    raise ValueError("Reference artwork cannot be approved as a training garment")
++            reviewed_at = _review_now()
+             new = {"category": category, "status": status, "crop": list(crop),
+                    "logo_visibility": logo_visibility, "logo_box": list(logo_box) if logo_box else None,
+                    "flags": list(dict.fromkeys(flags or [])), "notes": str(notes),
+@@ -496,7 +546,33 @@
+             record.update(new)
+             record["preprocess_version"] = PREPROCESS_VERSION
+             record["crop_source"] = crop_source
+-            record["review_history"].append({"at": _now(), **new})
++            annotate_logo = (logo_reviewed or logo_source_kind != "uncertain"
++                             or prior_annotation.get("schema") == "printed-logo-v1")
++            history_entry = {"at": reviewed_at, **new}
++            if annotate_logo:
++                annotation = {
++                    "schema": "printed-logo-v1",
++                    "reviewed": logo_reviewed,
++                    "visibility": canonical_visibility,
++                    "box": list(logo_box) if logo_box else None,
++                    "source_kind": effective_source_kind,
++                    "association_confirmed": logo_association_confirmed,
++                    "image_sha256": record["sha256"],
++                    "torso_crop": list(crop),
++                    "category": category,
++                    "preprocess_version": PREPROCESS_VERSION,
++                    "provenance": {
++                        "sources": copy.deepcopy(record.get("sources", [])),
++                        "capture_group": record.get("capture_group"),
++                        "capture_groups": copy.deepcopy(record.get("capture_groups", [])),
++                        "provenance_group": record.get("provenance_group"),
++                        "has_unknown_provenance": record.get("has_unknown_provenance", True),
++                    },
++                    "reviewed_at": reviewed_at,
++                }
++                record["logo_annotation"] = annotation
++                history_entry["logo_annotation"] = copy.deepcopy(annotation)
++            record["review_history"].append(history_entry)
+             self._save(catalog)
+             return dict(record)
+ 
+@@ -514,6 +590,37 @@
+                 raise ValueError("Image has no reviewed crop")
+             return result.crop(tuple(box))
+         return result
++
++    def logo_image(self, image_id: str) -> Image.Image:
++        """Return the native-resolution printed-logo crop for a current review."""
++        snap = self.snapshot()
++        record = next((r for r in snap["records"] if r["image_id"] == image_id), None)
++        if record is None:
++            raise KeyError(image_id)
++        annotation = record.get("logo_annotation") or {}
++        if not is_eligible_visible_annotation(record):
++            raise ValueError("No current eligible reviewed photographed-logo annotation")
++        path = self.root / record["original_path"]
++        try:
++            path.resolve().relative_to(self.root.resolve())
++        except (OSError, ValueError) as exc:
++            raise ValueError("Original image path escapes the dataset root") from exc
++        if path.is_symlink():
++            raise ValueError("Original image path must not be a symlink")
++        try:
++            with path.open('rb') as stream:
++                data = stream.read(MAX_FILE_BYTES + 1)
++        except OSError as exc:
++            raise ValueError("Original image is unavailable") from exc
++        if not data or len(data) > MAX_FILE_BYTES:
++            raise ValueError("Original image exceeds the reviewed image size limit")
++        if hashlib.sha256(data).hexdigest() != record.get("sha256") or annotation.get("image_sha256") != record.get("sha256"):
++            raise ValueError("Original image hash does not match the reviewed annotation")
++        with Image.open(io.BytesIO(data)) as im:
++            if im.size != (record['width'], record['height']):
++                raise ValueError("Original dimensions do not match the reviewed annotation")
++            image = im.convert("RGB")
++        return image.crop(tuple(annotation["box"]))
+ 
+     def propose_crop(self, image_id: str) -> list[int] | None:
+         """Try local PersonDetector weights and persist a non-approving proposal."""
+--- /dev/null
++++ b/core/uniform_logo_annotations.py
+@@ -0,0 +1,146 @@
++"""Read-only readiness helpers for independently reviewed printed logos."""
++from __future__ import annotations
++
++LOGO_VISIBILITIES = ("visible", "obscured", "too_small", "back_view", "uncertain")
++_ALIASES = {
++    "unknown": "uncertain",
++    "not_visible": "uncertain",
++    "occluded": "obscured",
++}
++_RELEVANT_FLAGS = {
++    "label_conflict", "incorrect_association", "provenance_association_uncertain",
++    "person_association_uncertain", "multiple_people", "obstruction",
++    "low_resolution", "possible_blur", "image_quality_check_failed", "unable_to_assess", "ambiguous",
++}
++
++
++def normalize_visibility(value: str) -> str:
++    """Map legacy labels without treating unknown or occlusion as logo absence."""
++    if not isinstance(value, str):
++        return "uncertain"
++    normalized = value.strip().lower()
++    normalized = _ALIASES.get(normalized, normalized)
++    return normalized if normalized in LOGO_VISIBILITIES else "uncertain"
++
++
++def _current_provenance(record: dict) -> dict:
++    return {
++        "sources": record.get("sources", []),
++        "capture_group": record.get("capture_group"),
++        "capture_groups": record.get("capture_groups", []),
++        "provenance_group": record.get("provenance_group"),
++        "has_unknown_provenance": record.get("has_unknown_provenance", True),
++    }
++
++
++def _annotation_matches(record: dict, annotation: dict) -> bool:
++    if not isinstance(record, dict) or not isinstance(annotation, dict) or annotation.get("schema") != "printed-logo-v1":
++        return False
++    history = record.get("review_history", [])
++    if not isinstance(history, list) or not history or not isinstance(history[-1], dict):
++        return False
++    latest_at = history[-1].get("at")
++    history_annotation = history[-1].get("logo_annotation")
++    return (
++        annotation.get("reviewed") is True
++        and annotation.get("image_sha256") == record.get("sha256")
++        and annotation.get("torso_crop") == record.get("crop")
++        and annotation.get("category") == record.get("category")
++        and annotation.get("preprocess_version") == record.get("preprocess_version")
++        and annotation.get("provenance") == _current_provenance(record)
++        and annotation.get("reviewed_at") == latest_at
++        and history_annotation == annotation
++        and annotation.get("box") == record.get("logo_box")
++        and annotation.get("visibility") == normalize_visibility(record.get("logo_visibility"))
++    )
++
++
++def is_eligible_visible_annotation(record: dict) -> bool:
++    """Whether a visible-logo annotation is current and explicitly reviewed."""
++    if not isinstance(record, dict):
++        return False
++    annotation = record.get("logo_annotation") or {}
++    if not isinstance(annotation, dict):
++        return False
++    if not _annotation_matches(record, annotation):
++        return False
++    if record.get("status") != "approved" or record.get("category") not in {
++        "campus_uniform", "organizational_shirt", "other_clothing",
++    }:
++        return False
++    if annotation.get("visibility") != "visible":
++        return False
++    if annotation.get("source_kind") != "photographed_print" or annotation.get("association_confirmed") is not True:
++        return False
++    torso = record.get("crop")
++    box = annotation.get("box")
++    if (not isinstance(torso, list) or len(torso) != 4 or not isinstance(box, list) or len(box) != 4
++            or any(type(value) is not int for value in torso + box)):
++        return False
++    x1, y1, x2, y2 = torso
++    lx1, ly1, lx2, ly2 = box
++    if lx1 < x1 or ly1 < y1 or lx2 > x2 or ly2 > y2 or lx1 >= lx2 or ly1 >= ly2:
++        return False
++    flags = record.get("flags", [])
++    if not isinstance(flags, list) or any(not isinstance(flag, str) for flag in flags):
++        return False
++    return not any(flag in _RELEVANT_FLAGS or any(marker in flag for marker in (
++        "ambiguous", "conflict", "association_uncertain", "obstruct", "unable_to_assess",
++    ))
++                   for flag in record.get("flags", []))
++
++
++def logo_readiness(records) -> dict:
++    """Summarize exact reviewed-logo counts; never implies training or accuracy."""
++    rows = list(records)
++    per_visibility = {value: 0 for value in LOGO_VISIBILITIES}
++    by_category = {}
++    reviewed_visible = 0
++    known_groups = set()
++    unknown_provenance_visible = 0
++    for row in rows:
++        if not isinstance(row, dict):
++            continue
++        annotation = row.get("logo_annotation") or {}
++        if not isinstance(annotation, dict):
++            continue
++        if _annotation_matches(row, annotation):
++            visibility = normalize_visibility(annotation.get("visibility"))
++            per_visibility[visibility] += 1
++            if visibility == "visible" and is_eligible_visible_annotation(row):
++                reviewed_visible += 1
++                by_category[row.get("category", "unknown")] = by_category.get(row.get("category", "unknown"), 0) + 1
++            if visibility == "visible" and is_eligible_visible_annotation(row):
++                provenance = annotation.get("provenance") or {}
++                if not isinstance(provenance, dict):
++                    capture_groups = []
++                    unknown_provenance_visible += 1
++                    continue
++                capture_groups = provenance.get("capture_groups", [])
++                if not isinstance(capture_groups, list):
++                    capture_groups = []
++                if provenance.get("has_unknown_provenance", True) or not capture_groups:
++                    unknown_provenance_visible += 1
++                else:
++                    known_groups.update(group for group in capture_groups if isinstance(group, str) and group)
++    return {
++        "status": "Not trained",
++        "enabled": False,
++        "counts": {
++            "total": len(rows),
++            "reviewed": sum(per_visibility.values()),
++            "reviewed_visible": reviewed_visible,
++            "known_capture_groups": len(known_groups),
++            "eligible_visible_unknown_provenance": unknown_provenance_visible,
++            "per_visibility": per_visibility,
++        },
++        "by_category": by_category,
++        "known_capture_groups": len(known_groups),
++        "eligible_visible_unknown_provenance": unknown_provenance_visible,
++        "limitations": [
++            "Logo annotations are an independent human review record; no logo model has been trained.",
++            "Only explicitly reviewed, current photographed-print annotations with confirmed association count as visible examples.",
++            "Obscured, too-small, back-view, uncertain, and reference-artwork examples are not treated as logo absence.",
++            "Counts do not establish accuracy, coverage sufficiency, or deployment readiness.",
++        ],
++    }
+--- /dev/null
++++ b/core/uniform_logo.py
+@@ -0,0 +1,122 @@
++"""Optional printed-logo contract. No trained backend is supplied by Stage 5.
++
++The admission/deadline guard is usable by a future observation-only backend.
++It owns no thread, camera, cache, predictor, policy or production model pointer.
++Production configuration rejects enablement until a validated backend exists.
++"""
++from dataclasses import dataclass
++import math
++import threading
++import uuid
++
++
++NOT_TRAINED = 'Not trained'
++
++
++@dataclass(frozen=True)
++class LogoVerificationConfig:
++    enabled: bool = False
++    # Scheduling budget, NOT an accuracy criterion or measured latency promise.
++    max_added_latency_ms: float = 100.
++
++    @classmethod
++    def parse(cls, value=None):
++        if value is None:
++            return cls()
++        if not isinstance(value, dict) or set(value) - set(cls.__dataclass_fields__):
++            raise ValueError('Unknown logo verification configuration')
++        result = cls(**value)
++        result.validate()
++        return result
++
++    def validate(self):
++        if type(self.enabled) is not bool:
++            raise ValueError('Logo enabled must be a boolean')
++        budget = self.max_added_latency_ms
++        if type(budget) not in (int, float) or not math.isfinite(budget) or not 0 < budget <= 1000:
++            raise ValueError('Logo scheduling budget must be greater than 0 and at most 1000 ms')
++
++    def require_available(self):
++        self.validate()
++        if self.enabled:
++            raise ValueError('Logo verifier: Not trained. Enablement requires reviewed photographed logos, '
++                             'a compatible trained bundle and paired held-out evaluation against explicit criteria.')
++
++
++@dataclass(frozen=True)
++class LogoRequest:
++    token: str
++    epoch: int
++    ticket: object
++    box: tuple
++    started_at: float
++    deadline: float
++
++
++def original_logo_region(frame, ticket, box):
++    """View the associated original raster, with no resize, flip or OCR."""
++    if not ticket.usable or ticket.torso_box is None:
++        raise ValueError('Logo needs a usable associated torso')
++    if not isinstance(box, (tuple, list)) or len(box) != 4 or any(type(v) is not int for v in box):
++        raise ValueError('Logo box needs original-raster integer coordinates')
++    a, b, c, d = ticket.torso_box
++    x1, y1, x2, y2 = box
++    h, w = frame.shape[:2]
++    if not (0 <= a <= x1 < x2 <= c <= w and 0 <= b <= y1 < y2 <= d <= h):
++        raise ValueError('Logo must belong wholly to the current torso')
++    return frame[y1:y2, x1:x2]
++
++
++class LogoRequestGate:
++    """One outstanding request, no waiting queue and no stored image/cache.
++
++    This is an admission contract, not an inference executor. Tests use an
++    explicitly available fixture backend. The application has no such backend.
++    A future executor must enforce cooperative cancellation or process isolation;
++    rejecting a late result alone does not bound a blocking model call.
++    """
++    def __init__(self, config, *, backend_available=False):
++        config.validate()
++        self.config = config
++        self.backend_available = backend_available
++        self._lock = threading.Lock()
++        self._active = None
++        self._epoch = 0
++
++    def reserve(self, *, frame, ticket, logo_box, visibility, torso_label,
++                now, frame_ttl, current):
++        with self._lock:
++            if (not self.config.enabled or not self.backend_available or self._active is not None
++                    or torso_label is not None or visibility != 'visible'):
++                return None
++            if (not math.isfinite(now) or not math.isfinite(frame_ttl) or frame_ttl <= 0
++                    or not 0 <= now-ticket.captured_at < frame_ttl or not current(ticket, now)):
++                return None
++            original_logo_region(frame, ticket, logo_box)  # Validate association before reservation.
++            request = LogoRequest(uuid.uuid4().hex, self._epoch, ticket, tuple(logo_box), now,
++                min(ticket.captured_at+frame_ttl, now+self.config.max_added_latency_ms/1000))
++            self._active = request
++            return request
++
++    def finish(self, request, *, now, current):
++        """Release only the matching job; stale/late completion supplies no evidence."""
++        with self._lock:
++            if request is not self._active or request is None:
++                return False
++            self._active = None
++            return bool(request.epoch == self._epoch and math.isfinite(now)
++                        and request.started_at <= now <= request.deadline
++                        and current(request.ticket, now))
++
++    def invalidate(self):
++        with self._lock:
++            self._epoch += 1
++            # Retain the occupied slot until its owner acknowledges completion.
++            # Otherwise source switching could launch overlapping model calls.
++
++
++def unavailable_logo_status(config=None):
++    config = config or LogoVerificationConfig()
++    return {'status': NOT_TRAINED, 'enabled': False, 'executed': False,
++            'max_added_latency_ms': config.max_added_latency_ms,
++            'reason': 'No trained and evaluated printed-logo verifier. Torso-only assessment remains in use.'}
+--- /dev/null
++++ b/core/uniform_logo_evaluation.py
+@@ -0,0 +1,148 @@
++"""Compare paired passage exports without running, training or activating models.
++
++Reuses Stage 3 classification/policy accounting and Stage 4 latency statistics.
++This report is descriptive; it does not establish training/test independence or
++replace the model registry's authorization and acceptance workflow.
++"""
++import math
++import statistics
++from collections import Counter
++
++from core.uniform_evaluation import EvaluationService
++from core.uniform_latency import distribution
++from core.uniform_model_registry import CLASSES, json_hash
++from core.uniform_logo_annotations import LOGO_VISIBILITIES
++
++CRITERIA = ('classification_errors', 'false_violations', 'unassessed_rate', 'added_latency_ms')
++COMMON = ('footage_sha256', 'frame_sequence_sha256', 'annotation_manifest_sha256',
++          'torso_model_sha256', 'torso_preprocessing', 'policy_version',
++          'configuration_sha256', 'test_conditions')
++
++
++def _sha(value):
++    return isinstance(value, str) and len(value) == 64 and all(c in '0123456789abcdef' for c in value)
++
++
++def _signed_distribution(values):
++    if not values:
++        return {'count': 0, 'median_ms': None, 'p95_ms': None}
++    values = sorted(values)
++    rank = (len(values)-1)*.95
++    lo = int(rank)
++    hi = min(lo+1, len(values)-1)
++    return {'count': len(values), 'median_ms': statistics.median(values),
++            'p95_ms': values[lo]+(values[hi]-values[lo])*(rank-lo)}
++
++
++def compare_logo_runs(manifest, torso_only, torso_plus_logo, *, criteria):
++    """One final result per annotated passage; missing results remain missing.
++
++    Criteria are supplied by the responsible reviewer before final testing. No
++    thresholds or pass/fail decisions are invented here. Signed added latency
++    is paired by passage, never a difference of unrelated aggregate percentiles.
++    """
++    if (not isinstance(criteria, dict) or set(criteria) != set(CRITERIA)
++            or any(not isinstance(v, str) or not v.strip() for v in criteria.values())):
++        raise ValueError('Explicit predeclared classification, policy, unassessed and latency criteria are required')
++    if (manifest.get('schema') != 1 or manifest.get('purpose') != 'logo-held-out-comparison'
++            or manifest.get('reviewed') is not True or not _sha(manifest.get('footage_sha256'))):
++        raise ValueError('A reviewed held-out footage manifest is required')
++    people = manifest.get('passages')
++    if not isinstance(people, list) or not 1 <= len(people) <= 10000:
++        raise ValueError('Supply 1–10000 annotated passages')
++    truth = {}
++    for person in people:
++        alias = person.get('passage_alias')
++        if not isinstance(alias, str) or not alias or alias in truth:
++            raise ValueError('Passage aliases must be unique and nonempty')
++        if person.get('garment_label') not in (*CLASSES, None):
++            raise ValueError('Invalid garment ground truth')
++        if person.get('policy_label') not in ('compliant', 'violation', None):
++            raise ValueError('Invalid policy ground truth')
++        if person.get('logo_visibility', 'uncertain') not in LOGO_VISIBILITIES:
++            raise ValueError('Use canonical logo visibility, never absent for unreadable logos')
++        truth[alias] = person
++    runs = (torso_only, torso_plus_logo)
++    if tuple(r.get('mode') for r in runs) != ('torso_only', 'torso_plus_logo'):
++        raise ValueError('Compare torso_only against torso_plus_logo')
++    for key in COMMON:
++        left, right = (r.get(key) for r in runs)
++        if left != right or left is None or left == '' or left == {}:
++            raise ValueError('Paired runs must match '+key)
++        if key.endswith('sha256') and not _sha(left):
++            raise ValueError('Invalid hash: '+key)
++    if (torso_only['footage_sha256'] != manifest['footage_sha256']
++            or torso_only['annotation_manifest_sha256'] != json_hash(manifest)):
++        raise ValueError('Runs do not refer to this exact footage/annotation manifest')
++    if torso_only.get('logo_model_sha256') is not None or not _sha(torso_plus_logo.get('logo_model_sha256')):
++        raise ValueError('Pin the logo model only for the augmented run')
++    if not torso_plus_logo.get('logo_preprocessing'):
++        raise ValueError('Pin the logo preprocessing version')
++    if any(r.get('criteria_sha256') != json_hash(criteria) for r in runs):
++        raise ValueError('Both runs must pin the predeclared criteria')
++    indexed = []
++    timing_keys = ('first_usable_to_decision_ms', 'zone_entry_to_decision_ms', 'logo_ms')
++    for run in runs:
++        rows = run.get('results')
++        if not isinstance(rows, list) or len(rows) > len(truth):
++            raise ValueError('Too many or invalid passage results')
++        seen = {}
++        for row in rows:
++            alias = row.get('passage_alias')
++            if alias not in truth or alias in seen:
++                raise ValueError('Results must name unique annotated passages')
++            if row.get('label') not in (*CLASSES, None):
++                raise ValueError('Invalid garment prediction')
++            if row.get('policy_outcome') not in ('compliant', 'violation', None):
++                raise ValueError('Invalid policy prediction')
++            if row.get('label') is None and row.get('policy_outcome') is not None:
++                raise ValueError('Unable to assess must not become a policy outcome')
++            for key in timing_keys:
++                value = row.get(key)
++                if value is not None and (type(value) not in (int, float) or not math.isfinite(value) or value < 0):
++                    raise ValueError('Invalid measured '+key)
++            seen[alias] = row
++        indexed.append(seen)
++    combined = []
++    for alias, person in truth.items():
++        row = {'category': person.get('garment_label'), 'policy_label': person.get('policy_label')}
++        for key, results in zip(('baseline', 'candidate'), indexed):
++            prediction = results.get(alias, {})
++            row[key] = {'label': prediction.get('label'), 'policy_label': prediction.get('policy_outcome')}
++        combined.append(row)
++    labelled = [r for r in combined if r['category'] is not None]
++    summary = {}
++    for mode, key, results in zip(('torso_only', 'torso_plus_logo'), ('baseline', 'candidate'), indexed):
++        policy = EvaluationService._policy_metrics(combined, key)
++        if not policy['assessed_count']:
++            policy['false_violation_count'] = policy['missed_violation_count'] = None
++        unassessed = sum(r.get('label') is None for r in results.values())
++        summary[mode] = {'passages': len(truth), 'returned_results': len(results),
++            'missed': len(truth)-len(results), 'unassessed': unassessed,
++            'unassessed_rate_on_returned': unassessed/len(results) if results else None,
++            'unresolved_rate_all_passages': (len(truth)-len(results)+unassessed)/len(truth),
++            'labelled_passages': len(labelled),
++            'classification_errors': (sum(r[key]['label'] is not None and r[key]['label'] != r['category']
++                                          for r in labelled) if labelled else None),
++            'classification_unresolved': sum(r[key]['label'] is None for r in labelled),
++            'per_class': EvaluationService._class_metrics(labelled, key),
++            'confusion': EvaluationService._confusion(labelled, key, list(CLASSES)),
++            'policy': policy,
++            'latency': {k: distribution([r.get(k) for r in results.values()]) for k in timing_keys}}
++    added = []
++    for alias in truth:
++        a, b = (rows.get(alias, {}).get('first_usable_to_decision_ms') for rows in indexed)
++        if a is not None and b is not None:
++            added.append(b-a)
++    return {'schema': 1, 'status': 'comparison_only', 'activation_allowed': False,
++        'manifest_sha256': json_hash(manifest), 'criteria': criteria, 'criteria_sha256': json_hash(criteria),
++        'matched_conditions': {k: torso_only[k] for k in COMMON},
++        'logo_model_sha256': torso_plus_logo['logo_model_sha256'],
++        'logo_preprocessing': torso_plus_logo['logo_preprocessing'],
++        'per_mode': summary, 'paired_added_latency_ms': _signed_distribution(added),
++        'coverage': {key: dict(Counter(str(p.get(key) or 'unknown') for p in people))
++                     for key in ('camera', 'lighting', 'capture_group', 'logo_visibility')},
++        'limitations': ['Training/test independence and label correctness require a separate provenance review.',
++            'Missing classification/policy labels are not inferred; no automatic acceptance decision is made.',
++            'Only matching input hashes/configuration are checked; real replay conditions require audit.',
++            'A shared crest alone does not establish garment category or policy permission.']}
+--- a/core/uniform_observation.py
++++ b/core/uniform_observation.py
+@@ -19,6 +19,7 @@
+ from core.person_detector import skin_fraction, MAX_TORSO_SKIN_FRACTION
+ from core.uniform_model_registry import (CandidatePredictor, candidate_descriptor,
+     json_hash, read_json, policy_rule, CLASSES)
++from core.uniform_logo import LogoVerificationConfig, unavailable_logo_status
+ 
+ LABELS = {'campus_uniform':'Campus Uniform recognized',
+           'organizational_shirt':'Organizational Shirt recognized',
+@@ -41,6 +42,7 @@
+     refresh_interval: float = .5
+     frame_ttl: float = 1.
+     max_passages: int = 48
++    logo_verification: dict | None = None
+ 
+     @classmethod
+     def load(cls, path):
+@@ -59,6 +61,7 @@
+         return config
+ 
+     def validate(self):
++        LogoVerificationConfig.parse(self.logo_verification).require_available()
+         if self.backend not in ('cpu','mps'):
+             raise ValueError('Candidate backend must be cpu or mps')
+         if (not isinstance(self.candidate_sha256,str) or len(self.candidate_sha256) != 64 or
+@@ -115,6 +118,7 @@
+     timings: dict = field(default_factory=dict)
+     decision_at: float = 0.
+     evidence_at: float = 0.
++    logo_verification: dict = field(default_factory=unavailable_logo_status)
+ 
+     @property
+     def state(self): return LABELS[self.label]
+@@ -193,7 +197,8 @@
+         if self.predictor is None: return 'Observation only · Loading candidate'
+         device = self.predictor.backend_status()['active']
+         synthetic = ' · synthetic test model' if self.descriptor.get('synthetic') else ''
+-        return f'Observation only · Candidate {self.config.candidate_sha256[:12]} · {device.upper()}{synthetic}'
++        return (f'Observation only · Candidate {self.config.candidate_sha256[:12]} · {device.upper()}{synthetic}'
++                ' · Logo verifier: Not trained (disabled)')
+ 
+     def _quality(self, task, observation, observations):
+         o = observation
+@@ -322,6 +327,7 @@
+ 
+     def assess(self, task, ticket):
+         started = self.clock()
++        logo_status = unavailable_logo_status(LogoVerificationConfig.parse(self.config.logo_verification))
+         policy_text = 'Policy not configured; department/day/schedule permissions unassessed'
+         if self.config.policy is not None:
+             policy_text = 'Existing garment policy only; department/day/schedule permissions unassessed'
+@@ -331,7 +337,8 @@
+             if p.result is not None and ticket.captured_at<p.result.evidence_at:return None
+             def unknown(reason):
+                 return GarmentObservation(p.passage_id,None,0.,reason+' · '+policy_text,
+-                    self.config.candidate_sha256,self._version,decision_at=self.clock(),evidence_at=ticket.captured_at)
++                    self.config.candidate_sha256,self._version,decision_at=self.clock(),evidence_at=ticket.captured_at,
++                    logo_verification=logo_status)
+             if not ticket.usable: return unknown(ticket.reason)
+             if (p.result is not None and p.result.label is not None and
+                     0<=ticket.captured_at-p.result.evidence_at<self.config.refresh_interval and
+@@ -375,7 +382,7 @@
+                 if policy: reason += ' · Garment policy: '+policy
+                 result = GarmentObservation(p.passage_id,label,confidence,reason,
+                     self.config.candidate_sha256,self._version,policy,timings=timings,
+-                    decision_at=finished,evidence_at=ticket.captured_at)
++                    decision_at=finished,evidence_at=ticket.captured_at,logo_verification=logo_status)
+                 p.result = result
+                 return result
+         except Exception as exc:
+@@ -389,4 +396,5 @@
+         with self._lock:
+             return {'version':self.version_token,'passages':len(self._passages),
+                     'max_passages':self.config.max_passages,'model':self.config.candidate_sha256,
+-                    'policy_configured':self.config.policy is not None,'error':self.error}
++                    'policy_configured':self.config.policy is not None,'error':self.error,
++                    'logo_verification':unavailable_logo_status(LogoVerificationConfig.parse(self.config.logo_verification))}
+--- a/ui/uniform_workspace.py
++++ b/ui/uniform_workspace.py
+@@ -8,6 +8,7 @@
+ from PIL import Image, ImageTk
+ 
+ from core.uniform_dataset import UniformDataset, CATEGORIES
++from core.uniform_logo_annotations import LOGO_VISIBILITIES, normalize_visibility
+ from core.uniform_candidate import CandidateService
+ from ui.uniform_candidate_panel import CandidateTrainingWindow, TRAIN_ACTION
+ from core.trainer import ROOT, TRAIN_DIR
+@@ -165,12 +166,16 @@
+             if not rows:
+                 ctk.CTkLabel(gallery, text='No examples yet. Import photos to begin review.', text_color=COLOR_TEXT_MUTED).grid(row=0, column=0, columnspan=3, pady=25)
+             ready = snapshot.get('readiness', {})
++            logo = snapshot.get('logo', {})
+             self.readiness.configure(text='Current model artifacts (unchanged): ' + ' • '.join(models) + '\n'
+                 + 'Stage 1 category coverage: ' + str(ready.get('experimental_training_eligible', False)) +
+                 ' (minimum category coverage only) • Independent evaluation: ' + str(ready.get('independent_evaluation_ready', False)) + '\n'
+                 + 'Open Evaluation & Models to inspect versions, independent evaluation and explicit deployment prerequisites.\n'
+                 + 'Readiness: ' + '; '.join(ready.get('experimental_training_reasons', [])) + '\n'
+                 + 'Photo count alone does not establish accuracy. Unknown provenance stays grouped; no independent evaluation claims.\n'
++                + f"Optional logo verifier: Not trained · Disabled · {logo.get('counts', {}).get('reviewed_visible', 0)} eligible reviewed visible logos.\n"
++                + 'Review actual printed crests with their torso; hidden/unreadable logos are not absent. '
++                + 'No logo or OCR model is trained or enabled.\n'
+                 + f"Dataset: {snapshot.get('counts', {}).get('total', len(snapshot['records']))} unique originals. "
+                 + 'Review legacy examples below; confirm each garment category.')
+             self.status.configure(text='Review dataset and isolated candidates • active model unchanged')
+@@ -271,6 +276,7 @@
+         self.task = BackgroundTask(self)
+         self._photo = None
+         self._crop_photo = None
++        self._logo_photo = None
+         self.scale = 1.0
+         self._proposal_box = record.get('crop_proposal', {}).get('box')
+         self.bind('<Escape>', lambda e: self.destroy())
+@@ -286,6 +292,9 @@
+         self.crop_preview.pack(side='left', padx=8)
+         self.canvas.bind('<ButtonPress-1>', self.start_crop)
+         self.canvas.bind('<B1-Motion>', self.drag_crop)
++        self.draw_mode = ctk.CTkSegmentedButton(body, values=['Torso crop', 'Logo box'])
++        self.draw_mode.set('Torso crop')
++        self.draw_mode.pack(fill='x', padx=10, pady=4)
+         ctk.CTkLabel(body, text='Original raster • drag to correct the crop. Keep collar, sleeves, garment and emblem visible.\nNo mirror correction is applied automatically.', wraplength=780, justify='left').pack(padx=10, pady=6)
+         self.category = ctk.CTkOptionMenu(body, values=list(CATEGORIES.values()))
+         self.category.set(CATEGORIES[record['category']])
+@@ -303,14 +312,36 @@
+         buttons.pack(fill='x', padx=10, pady=4)
+         ctk.CTkButton(buttons, text='Preview corrected crop', command=self.preview).pack(side='left', padx=4)
+         ctk.CTkButton(buttons, text='Propose torso crop', command=self.propose).pack(side='left', padx=4)
+-        self.visibility = ctk.CTkOptionMenu(body, values=['unknown', 'visible', 'occluded', 'not_visible'])
+-        ctk.CTkLabel(body, text='Logo visibility').pack(anchor='w', padx=10)
+-        self.visibility.set(record.get('logo_visibility', 'unknown'))
++        self.visibility = ctk.CTkOptionMenu(body, values=list(LOGO_VISIBILITIES))
++        ctk.CTkLabel(body, text='Printed-logo visibility (hidden or unreadable never means absent)').pack(anchor='w', padx=10)
++        self.visibility.set(normalize_visibility(record.get('logo_visibility', 'unknown')))
+         self.visibility.pack(fill='x', padx=10)
+         ctk.CTkLabel(body, text='Optional logo box in original pixels: left, top, right, bottom (blank = none)').pack(anchor='w', padx=10)
+         self.logo_box = ctk.CTkEntry(body)
+         self.logo_box.pack(fill='x', padx=10)
+         self.logo_box.insert(0, ', '.join(map(str, record.get('logo_box') or [])))
++        self.logo_preview = ctk.CTkLabel(body, text='No photographed-logo box selected.', wraplength=780)
++        self.logo_preview.pack(fill='x', padx=10, pady=6)
++        ctk.CTkButton(body, text='Preview logo from original', command=self.preview).pack(anchor='w', padx=10, pady=4)
++        ctk.CTkLabel(body, text=(
++            'Select Logo box and drag on the original; the box must stay inside the correct torso. '
++            'The display preview may be scaled; saved coordinates and derived pixels use the original resolution.\n'
++            'The white printed crest may also occur on Campus Uniform or Other Clothing. '
++            'Lettering is not read automatically. Reference artwork belongs in DYCI Logo & Digital Shirts.'),
++            justify='left', wraplength=780, text_color=COLOR_TEXT_MUTED).pack(fill='x', padx=10, pady=4)
++        self.logo_source = ctk.CTkOptionMenu(body, values=['uncertain', 'photographed_print', 'reference_artwork'])
++        ctk.CTkLabel(body, text='Logo source type').pack(anchor='w', padx=10)
++        self.logo_source.set(record.get('logo_annotation', {}).get('source_kind', 'uncertain'))
++        self.logo_source.pack(fill='x', padx=10, pady=4)
++        self.logo_association = ctk.CTkCheckBox(body, text='This logo/visibility belongs to the selected torso and person.')
++        self.logo_association.pack(anchor='w', padx=10, pady=4)
++        self.logo_confirm = ctk.CTkCheckBox(body, text='I reviewed this logo box, source and visibility separately from the garment.')
++        self.logo_confirm.pack(anchor='w', padx=10, pady=4)
++        # Never pre-confirm an old annotation after a new crop/category review.
++        for widget in (*self.coords, self.logo_box):
++            widget.bind('<KeyRelease>', self.invalidate_logo_review, add='+')
++        for widget in (self.category, self.visibility, self.logo_source):
++            widget.configure(command=self.invalidate_logo_review)
+         self.flags = {}
+         for flag, label in [('possible_blur', 'Possible blur'), ('obstruction', 'Garment obstructed'), ('low_resolution', 'Insufficient resolution'), ('incorrect_association', 'Wrong person / garment association'), ('provenance_association_uncertain', 'Association still needs review'), ('label_conflict', 'Conflicting labels still unresolved'), ('multiple_people', 'Multiple people: association unresolved'), ('person_association_uncertain', 'Detected person association needs review')]:
+             check = ctk.CTkCheckBox(body, text=label)
+@@ -341,14 +372,36 @@
+         for entry, value in zip(self.coords, box):
+             entry.delete(0, 'end')
+             entry.insert(0, str(int(value)))
++        self.invalidate_logo_review()
+         self.draw_box()
++
++    def invalidate_logo_review(self, _=None):
++        self.logo_confirm.deselect()
++        self.logo_association.deselect()
+ 
+     def draw_box(self):
+         try:
+             self.canvas.delete('crop')
+             self.canvas.create_rectangle(*(v * self.scale for v in self.crop()), outline='#26c6b0', width=2, tags='crop')
++            self.canvas.delete('logo')
++            box = self.logo_coords()
++            if box:
++                self.canvas.create_rectangle(*(v * self.scale for v in box), outline='#ffd166', width=2, tags='logo')
+         except ValueError:
+             pass
++
++    def logo_coords(self):
++        text = self.logo_box.get().strip()
++        if not text:
++            return None
++        box = [int(v.strip()) for v in text.split(',')]
++        if len(box) != 4:
++            raise ValueError('Logo box needs four original-raster coordinates.')
++        x1, y1, x2, y2 = self.crop()
++        a, b, c, d = box
++        if not (x1 <= a < c <= x2 and y1 <= b < d <= y2):
++            raise ValueError('Logo box must be inside this person’s reviewed torso.')
++        return box
+ 
+     def start_crop(self, event):
+         self.origin = (event.x, event.y)
+@@ -358,22 +411,35 @@
+         w, h = self.record['width'], self.record['height']
+         box = [max(0, min(w, round(min(x, event.x)/self.scale))), max(0, min(h, round(min(y, event.y)/self.scale))),
+                max(0, min(w, round(max(x, event.x)/self.scale))), max(0, min(h, round(max(y, event.y)/self.scale)))]
+-        self.set_crop(box)
++        self.logo_confirm.deselect()
++        self.logo_association.deselect()
++        if self.draw_mode.get() == 'Logo box':
++            self.logo_box.delete(0, 'end')
++            self.logo_box.insert(0, ', '.join(map(str, box)))
++            self.draw_box()
++        else:
++            self.confirm.deselect()
++            self.set_crop(box)
+ 
+     def preview(self):
+         try:
+             box = self.crop()
++            logo_box = self.logo_coords()
+         except ValueError as exc:
+             self.message.configure(text=str(exc)); return
+         dataset, image_id = self.dataset, self.record['image_id']
+         def load():
+             original = dataset.image(image_id)
+             crop = original.crop(box)
++            logo = original.crop(logo_box) if logo_box else None
++            logo_size = logo.size if logo else None
+             original.thumbnail((390, 300))
+             crop.thumbnail((330, 300))
+-            return original, crop
++            if logo:
++                logo.thumbnail((700, 240))
++            return original, crop, logo, logo_size
+         def loaded(result):
+-            original, crop = result
++            original, crop, logo, logo_size = result
+             self.scale = original.width / self.record['width']
+             self._photo = ImageTk.PhotoImage(original, master=self.canvas)
+             self.canvas.delete('all')
+@@ -381,6 +447,13 @@
+             self.draw_box()
+             self._crop_photo = ctk.CTkImage(light_image=crop, dark_image=crop, size=crop.size)
+             self.crop_preview.configure(image=self._crop_photo, text='')
++            if logo:
++                self._logo_photo = ctk.CTkImage(light_image=logo, dark_image=logo, size=logo.size)
++                self.logo_preview.configure(image=self._logo_photo, compound='top',
++                    text=f'Logo region: {logo_size[0]} × {logo_size[1]} original pixels · preview only, not yet approved')
++            else:
++                self.logo_preview.configure(image=None, text='No photographed-logo box selected.')
++                self._logo_photo = None
+             self.message.configure(text=f"Original {self.record['image_id'][:12]} • {self.record['width']}×{self.record['height']}\n"
+                 + 'Flags: ' + ', '.join(self.record.get('flags', [])) + '\n'
+                 + 'Group: ' + str(self.record.get('capture_group') or 'unknown provenance')
+@@ -414,11 +487,14 @@
+             if status == 'approved' and not self.confirm.get():
+                 raise ValueError('Confirm your review before approval.')
+             box = self.crop()
+-            logo = [int(v.strip()) for v in self.logo_box.get().split(',')] if self.logo_box.get().strip() else None
++            logo = self.logo_coords()
+             category = next(c for c, title in CATEGORIES.items() if title == self.category.get())
+             flags = [f for f in self.record.get('flags', []) if f not in self.flags]
+             flags += [f for f, check in self.flags.items() if check.get()]
+-            args = dict(category=category, crop=box, crop_source='detector' if box == self._proposal_box else 'manual', status=status, logo_visibility=self.visibility.get(), logo_box=logo, flags=flags, notes=self.notes.get())
++            args = dict(category=category, crop=box, crop_source='detector' if box == self._proposal_box else 'manual', status=status,
++                logo_visibility=self.visibility.get(), logo_box=logo, logo_reviewed=bool(self.logo_confirm.get()),
++                logo_source_kind=self.logo_source.get(), logo_association_confirmed=bool(self.logo_association.get()),
++                flags=flags, notes=self.notes.get())
+         except (ValueError, StopIteration) as exc:
+             self.message.configure(text=str(exc)); return
+         dataset, image_id = self.dataset, self.record['image_id']
+--- a/ui/uniform_models_panel.py
++++ b/ui/uniform_models_panel.py
+@@ -45,6 +45,14 @@
+         ctk.CTkLabel(body,text='Evaluation & Models',font=heading_font()).pack(anchor='w',padx=14,pady=10)
+         self.summary = ctk.CTkLabel(body,text='Reading model versions…',anchor='w',justify='left',wraplength=900)
+         self.summary.pack(fill='x',padx=14,pady=6)
++        self.logo_status = ctk.CTkLabel(body, text=(
++            'Optional logo verifier: Not trained · Disabled\n'
++            'Review photographed printed-logo boxes in Uniform Check. Reference artwork is separate. '
++            'Enablement needs a trained bundle and a torso-only / torso-plus-logo comparison on identical held-out '
++            'footage, with explicit classification, policy, unassessed-rate and added-latency criteria. '
++            'A crest alone does not identify the garment or grant department/day permission.'),
++            anchor='w', justify='left', wraplength=900, text_color=COLOR_TEXT_MUTED)
++        self.logo_status.pack(fill='x', padx=14, pady=6)
+         self.note = ctk.CTkLabel(body,text=(
+             'Independent evaluation needs human-reviewed held-out examples and complete training provenance for both models. '
+             'It uses the same examples for both models and never trains on the final test set.\n'
+--- a/ui/training_panel.py
++++ b/ui/training_panel.py
+@@ -186,8 +186,9 @@
+             font=heading_font()).pack(anchor='w', padx=20, pady=(20, 8))
+         ctk.CTkLabel(references, text=(
+             'Save approved DYCI logos and digital shirt designs at full resolution.\n'
+-            'Artwork is kept separate from camera training photos. Use real chest-framed photos\n'
+-            'with visible logos in Uniform Check to train and evaluate detection accuracy.'),
++            'Artwork is kept separate from photographed training examples and is not training evidence.\n'
++            'Review actual white printed crests and their torso association in Uniform Check.\n'
++            'Optional logo verifier: Not trained; disabled. The crest can appear on more than one garment category.'),
+             justify='left', wraplength=800, text_color=COLOR_TEXT_MUTED).pack(anchor='w', padx=20, pady=8)
+         for kind, title in KINDS.items():
+             ctk.CTkButton(references, text=f'Save {title}',
+--- /dev/null
++++ b/scripts/compare_uniform_logo.py
+@@ -0,0 +1,30 @@
++"""Summarize paired, externally recorded logo replay exports. No inference."""
++import argparse
++import json
++from pathlib import Path
++import sys
++
++sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
++from core.uniform_logo_evaluation import compare_logo_runs
++from core.uniform_model_registry import read_json
++
++
++def main(argv=None):
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument('--manifest', type=Path, required=True)
++    parser.add_argument('--torso-only', type=Path, required=True)
++    parser.add_argument('--torso-plus-logo', type=Path, required=True)
++    parser.add_argument('--criteria', type=Path, required=True)
++    parser.add_argument('--output', type=Path, required=True, help='New JSON file; existing files are never overwritten')
++    args = parser.parse_args(argv)
++    report = compare_logo_runs(read_json(args.manifest), read_json(args.torso_only),
++                              read_json(args.torso_plus_logo), criteria=read_json(args.criteria))
++    with args.output.open('x', encoding='utf-8') as stream:
++        json.dump(report, stream, indent=2, allow_nan=False)
++        stream.write('\n')
++    print('Comparison saved; this report does not authorize enablement or activation.')
++    return 0
++
++
++if __name__ == '__main__':
++    raise SystemExit(main())
+--- /dev/null
++++ b/tests/test_uniform_logo.py
+@@ -0,0 +1,112 @@
++"""Scheduling contracts on synthetic pixels; no trained logo backend or timings."""
++from dataclasses import replace
++from types import SimpleNamespace
++import unittest
++
++import numpy as np
++
++from core.uniform_logo import LogoVerificationConfig, LogoRequestGate, original_logo_region
++from core.uniform_observation import ObservationUniformSession
++from core.uniform_model_registry import CLASSES, policy_rule
++from tests import test_uniform_observation as fixtures
++
++
++class LogoGateTests(unittest.TestCase):
++    def setUp(self):
++        self.frame = np.arange(120*160*3, dtype=np.uint8).reshape(120,160,3)
++        self.ticket = SimpleNamespace(usable=True, torso_box=(10,20,140,110), captured_at=10.,
++                                     key=('camera','session','generation','track'), revision=1)
++        self.options = dict(frame=self.frame, ticket=self.ticket, logo_box=[20,30,60,70],
++            visibility='visible', torso_label=None, now=10.05, frame_ttl=1., current=lambda t,n:True)
++        self.gate = LogoRequestGate(LogoVerificationConfig(True,50.), backend_available=True)
++
++    def test_default_disabled_and_no_backend_do_not_schedule(self):
++        self.assertIsNone(LogoRequestGate(LogoVerificationConfig(), backend_available=True).reserve(**self.options))
++        self.assertIsNone(LogoRequestGate(LogoVerificationConfig(True)).reserve(**self.options))
++        with self.assertRaisesRegex(ValueError,'Not trained'):
++            LogoVerificationConfig(True).require_available()
++
++    def test_only_uncertain_torso_and_visible_logo_are_considered(self):
++        for visibility in ('obscured','too_small','back_view','uncertain','not_visible'):
++            self.assertIsNone(self.gate.reserve(**{**self.options,'visibility':visibility}))
++        for label in CLASSES:
++            self.assertIsNone(self.gate.reserve(**{**self.options,'torso_label':label}))
++        self.assertIsNotNone(self.gate.reserve(**self.options))
++
++    def test_original_pixels_no_resize_flip_or_other_torso(self):
++        crop=original_logo_region(self.frame,self.ticket,[20,30,60,70])
++        np.testing.assert_array_equal(crop,self.frame[30:70,20:60])
++        self.assertEqual(crop.shape,(40,40,3))
++        for box in ([0,0,60,70],[20,30,141,70],[20,30,20,70],[20.,30,60,70]):
++            with self.assertRaises(ValueError):original_logo_region(self.frame,self.ticket,box)
++        self.ticket.usable=False
++        with self.assertRaises(ValueError):self.gate.reserve(**self.options)
++
++    def test_one_slot_and_no_overlap_after_invalidation(self):
++        first=self.gate.reserve(**self.options)
++        self.assertIsNone(self.gate.reserve(**self.options))
++        self.gate.invalidate()
++        self.assertIsNone(self.gate.reserve(**self.options))
++        self.assertFalse(self.gate.finish(first,now=10.06,current=lambda t,n:True))
++        second=self.gate.reserve(**self.options)
++        self.assertIsNotNone(second)
++        self.assertFalse(self.gate.finish(first,now=10.06,current=lambda t,n:True))
++        self.assertTrue(self.gate.finish(second,now=10.07,current=lambda t,n:True))
++
++    def test_deadline_and_scope_reject_late_or_reassigned_results(self):
++        first=self.gate.reserve(**self.options)
++        self.assertAlmostEqual(first.deadline,10.1)
++        self.assertFalse(self.gate.finish(first,now=10.101,current=lambda t,n:True))
++        for scope in ('camera','session','generation','track','model','policy'):
++            with self.subTest(scope=scope):
++                request=self.gate.reserve(**self.options)
++                self.assertFalse(self.gate.finish(request,now=10.06,current=lambda t,n:False))
++        self.assertIsNone(self.gate.reserve(**{**self.options,'now':11.1}))
++        self.assertIsNone(self.gate.reserve(**{**self.options,'current':lambda t,n:False}))
++        backwards=self.gate.reserve(**self.options)
++        self.assertFalse(self.gate.finish(backwards,now=10.04,current=lambda t,n:True))
++
++    def test_bad_config_rejected_without_backend_or_download(self):
++        for value in ({'enabled':1},{'max_added_latency_ms':0},{'max_added_latency_ms':float('nan')},
++                      {'max_added_latency_ms':1001},{'ocr':True},{'weights':'download'}):
++            with self.assertRaises(ValueError):LogoVerificationConfig.parse(value)
++
++
++class LogoObservationTests(unittest.TestCase):
++    def setUp(self):
++        self.fx=fixtures.ObservationTests()
++        self.fx.setUp()
++        self.addCleanup(self.fx.doCleanups)
++
++    def test_not_trained_cannot_be_enabled_and_changes_are_versioned(self):
++        config=self.fx.config
++        changed=replace(config,logo_verification={'enabled':False,'max_added_latency_ms':70})
++        self.assertNotEqual(config.version,changed.version)
++        session=ObservationUniformSession(changed)
++        self.assertFalse(session.snapshot()['logo_verification']['executed'])
++        self.assertEqual(session.snapshot()['logo_verification']['max_added_latency_ms'],70)
++        fx=self.fx;fx.session=ObservationUniformSession(changed,clock=lambda:fx.now)
++        fx.session.predictor=fx.predictor
++        self.assertEqual(fx.assess(fx.task()).logo_verification['max_added_latency_ms'],70)
++        with self.assertRaisesRegex(ValueError,'Not trained'):
++            ObservationUniformSession(replace(config,logo_verification={'enabled':True}))
++
++    def test_missing_logo_does_not_change_uncertainty_policy_or_cache(self):
++        fx=self.fx
++        fx.session=ObservationUniformSession(replace(fx.config,policy=policy_rule(.8)),clock=lambda:fx.now)
++        fx.session.predictor=fx.predictor
++        fx.predictor.probs=dict(zip(CLASSES,(.34,.33,.33)))
++        unknown=fx.assess(fx.task())
++        self.assertIsNone(unknown.label);self.assertIsNone(unknown.policy_outcome)
++        self.assertEqual(unknown.logo_verification['status'],'Not trained')
++        self.assertFalse(unknown.logo_verification['executed'])
++        fx.predictor.probs=dict(zip(CLASSES,(.02,.95,.03)))
++        reliable=fx.assess(fx.task());cached=fx.assess(fx.task())
++        self.assertEqual(reliable.policy_outcome,'compliant')
++        self.assertEqual(reliable.passage_id,unknown.passage_id)
++        self.assertTrue(cached.cached);self.assertEqual(fx.predictor.calls,2)
++        fx.session.invalidate()
++        self.assertFalse(fx.session.result_valid(cached,fx.task().uniform_tickets[0]))
++
++
++if __name__=='__main__':unittest.main()
+--- /dev/null
++++ b/tests/test_uniform_logo_annotations.py
+@@ -0,0 +1,233 @@
++import hashlib
++import io
++import json
++import tempfile
++import unittest
++from unittest.mock import patch
++from pathlib import Path
++
++import numpy as np
++from PIL import Image
++
++from core.uniform_dataset import UniformDataset
++from core.uniform_logo_annotations import LOGO_VISIBILITIES, logo_readiness, normalize_visibility
++
++
++def raster_bytes():
++    rng = np.random.default_rng(2241)
++    pixels = rng.integers(0, 256, (96, 128, 3), dtype=np.uint8)
++    stream = io.BytesIO()
++    Image.fromarray(pixels, "RGB").save(stream, format="PNG")
++    return stream.getvalue()
++
++
++class UniformLogoAnnotationTests(unittest.TestCase):
++    def setUp(self):
++        self.tmp = tempfile.TemporaryDirectory()
++        self.root = Path(self.tmp.name) / "catalog"
++        self.ds = UniformDataset(self.root)
++        self.data = raster_bytes()
++        self.path = Path(self.tmp.name) / "source.png"
++        self.path.write_bytes(self.data)
++        self.image_id = self.ds.import_paths([self.path], "campus_uniform", capture_group="camera-a")[0]
++
++    def tearDown(self):
++        self.tmp.cleanup()
++
++    def review(self, **kwargs):
++        defaults = dict(category="campus_uniform", crop=[8, 8, 120, 88], status="approved",
++                        flags=[], logo_visibility="visible", logo_box=[30, 24, 52, 42],
++                        logo_reviewed=True, logo_source_kind="photographed_print",
++                        logo_association_confirmed=True)
++        defaults.update(kwargs)
++        return self.ds.review(self.image_id, **defaults)
++
++    def test_legacy_visibility_never_means_absence(self):
++        self.assertEqual(LOGO_VISIBILITIES, ("visible", "obscured", "too_small", "back_view", "uncertain"))
++        self.assertEqual(normalize_visibility("unknown"), "uncertain")
++        self.assertEqual(normalize_visibility("not_visible"), "uncertain")
++        self.assertEqual(normalize_visibility("occluded"), "obscured")
++        self.assertEqual(normalize_visibility("unexpected"), "uncertain")
++        readiness = logo_readiness([{"logo_visibility": "not_visible"}])
++        self.assertEqual(readiness["status"], "Not trained")
++        self.assertFalse(readiness["enabled"])
++        self.assertEqual(readiness["counts"]["reviewed_visible"], 0)
++
++    def test_pending_edits_cannot_bypass_artwork_rereview(self):
++        self.review(status='pending_review', logo_reviewed=False, logo_source_kind='reference_artwork')
++        row = self.review(status='pending_review', logo_reviewed=False, logo_source_kind='photographed_print')
++        self.assertEqual(row['logo_annotation']['source_kind'], 'reference_artwork')
++        with self.assertRaisesRegex(ValueError, 'Reference artwork'):
++            self.review(logo_reviewed=False, logo_source_kind='uncertain')
++        row = self.review()  # Explicit confirmed photographed-print correction is permitted.
++        self.assertEqual(row['logo_annotation']['source_kind'], 'photographed_print')
++
++    def test_original_crop_read_is_bounded(self):
++        self.review()
++        with patch('core.uniform_dataset.MAX_FILE_BYTES', 32):
++            with self.assertRaisesRegex(ValueError, 'size limit'):
++                self.ds.logo_image(self.image_id)
++
++    def test_explicit_printed_logo_review_and_exact_native_crop(self):
++        before = self.path.read_bytes()
++        row = self.review()
++        annotation = row["logo_annotation"]
++        self.assertEqual(annotation["schema"], "printed-logo-v1")
++        self.assertTrue(annotation["reviewed"])
++        self.assertEqual(annotation["image_sha256"], hashlib.sha256(self.data).hexdigest())
++        self.assertEqual(annotation["torso_crop"], [8, 8, 120, 88])
++        self.assertEqual(annotation["box"], [30, 24, 52, 42])
++        self.assertEqual(annotation["source_kind"], "photographed_print")
++        self.assertEqual(annotation["provenance"]["capture_group"], "camera-a")
++        logo = self.ds.logo_image(self.image_id)
++        with Image.open(io.BytesIO(self.data)) as original:
++            expected = original.convert("RGB").crop((30, 24, 52, 42))
++        self.assertEqual(logo.size, (22, 18))
++        self.assertTrue(np.array_equal(np.asarray(logo), np.asarray(expected)))
++        self.assertEqual(self.path.read_bytes(), before)
++        readiness = self.ds.snapshot()["logo"]
++        self.assertFalse(readiness["enabled"])
++        self.assertEqual(readiness["counts"]["reviewed_visible"], 1)
++        self.assertEqual(readiness["by_category"], {"campus_uniform": 1})
++        self.assertEqual(readiness["known_capture_groups"], 1)
++        self.assertEqual(readiness["eligible_visible_unknown_provenance"], 0)
++
++    def test_unreviewed_legacy_box_is_not_promoted(self):
++        self.ds.review(self.image_id, category="campus_uniform", crop=[8, 8, 120, 88], status="approved",
++                        logo_visibility="visible", logo_box=[30, 24, 52, 42], flags=[])
++        row = self.ds.snapshot()["records"][0]
++        self.assertNotIn("logo_annotation", row)
++        self.assertEqual(self.ds.snapshot()["logo"]["counts"]["reviewed_visible"], 0)
++        with self.assertRaisesRegex(ValueError, "current eligible"):
++            self.ds.logo_image(self.image_id)
++
++    def test_explicit_review_requires_box_inside_torso_and_confirmed_source(self):
++        with self.assertRaisesRegex(ValueError, "inside the reviewed crop"):
++            self.review(logo_box=[2, 20, 52, 42])
++        with self.assertRaisesRegex(ValueError, "confirmed torso association"):
++            self.review(logo_association_confirmed=False)
++        with self.assertRaisesRegex(ValueError, "photographed prints"):
++            self.review(status="pending_review", logo_source_kind="reference_artwork")
++        self.assertNotIn("logo_annotation", self.ds.snapshot()["records"][0])
++
++    def test_reference_artwork_is_separate_and_cannot_be_approved(self):
++        self.review(status="pending_review", logo_visibility="obscured", logo_box=None,
++                    logo_source_kind="reference_artwork")
++        with self.assertRaisesRegex(ValueError, "cannot be approved"):
++            self.ds.review(self.image_id, category="campus_uniform", crop=[8, 8, 120, 88],
++                           status="approved", flags=[])
++        row = self.ds.snapshot()["records"][0]
++        self.assertEqual(row["logo_annotation"]["visibility"], "obscured")
++        self.assertEqual(self.ds.snapshot()["logo"]["counts"]["reviewed_visible"], 0)
++        with self.assertRaisesRegex(ValueError, "current eligible"):
++            self.ds.logo_image(self.image_id)
++
++    def test_artwork_kind_blocks_approval_without_logo_review_and_persists_as_draft(self):
++        with self.assertRaisesRegex(ValueError, "cannot be approved"):
++            self.ds.review(self.image_id, category="campus_uniform", crop=[8, 8, 120, 88],
++                           status="approved", logo_source_kind="reference_artwork", flags=[])
++        draft = self.ds.review(self.image_id, category="campus_uniform", crop=[8, 8, 120, 88],
++                               status="pending_review", logo_visibility="uncertain",
++                               logo_source_kind="reference_artwork", flags=[])
++        self.assertFalse(draft["logo_annotation"]["reviewed"])
++        self.assertEqual(draft["logo_annotation"]["source_kind"], "reference_artwork")
++        pending = self.ds.review(self.image_id, category="campus_uniform", crop=[8, 8, 120, 88],
++                                 status="pending_review", flags=[])
++        self.assertEqual(pending["logo_annotation"]["source_kind"], "reference_artwork")
++        with self.assertRaisesRegex(ValueError, "cannot be approved"):
++            self.ds.review(self.image_id, category="campus_uniform", crop=[8, 8, 120, 88],
++                           status="approved", flags=[])
++
++    def test_annotation_versions_are_deep_copied_into_review_history(self):
++        self.review()
++        first = self.ds.snapshot()["records"][0]["review_history"][0]["logo_annotation"]
++        self.assertTrue(first["reviewed"])
++        self.ds.review(self.image_id, category="campus_uniform", crop=[8, 8, 120, 88],
++                       status="pending_review", logo_visibility="uncertain",
++                       logo_source_kind="photographed_print", flags=[])
++        row = self.ds.snapshot()["records"][0]
++        self.assertEqual(len(row["review_history"]), 2)
++        self.assertTrue(row["review_history"][0]["logo_annotation"]["reviewed"])
++        self.assertFalse(row["review_history"][1]["logo_annotation"]["reviewed"])
++        self.assertFalse(row["logo_annotation"]["reviewed"])
++        self.assertEqual(row["review_history"][0]["logo_annotation"]["box"], [30, 24, 52, 42])
++        self.assertEqual(self.ds.snapshot()["logo"]["counts"]["reviewed_visible"], 0)
++
++    def test_current_logo_box_and_visibility_must_match_review_annotation(self):
++        self.review()
++        catalog = json.loads(self.ds.index_path.read_text("utf-8"))
++        catalog["records"][0]["logo_visibility"] = "uncertain"
++        self.ds.index_path.write_text(json.dumps(catalog), encoding="utf-8")
++        self.assertEqual(self.ds.snapshot()["logo"]["counts"]["reviewed_visible"], 0)
++        with self.assertRaises(ValueError):
++            self.ds.logo_image(self.image_id)
++        catalog = json.loads(self.ds.index_path.read_text("utf-8"))
++        catalog["records"][0]["logo_visibility"] = "visible"
++        catalog["records"][0]["logo_box"] = [31, 24, 52, 42]
++        self.ds.index_path.write_text(json.dumps(catalog), encoding="utf-8")
++        self.assertEqual(self.ds.snapshot()["logo"]["counts"]["reviewed_visible"], 0)
++        with self.assertRaises(ValueError):
++            self.ds.logo_image(self.image_id)
++
++    def test_changes_to_crop_category_or_provenance_make_review_stale(self):
++        self.review()
++        self.ds.review(self.image_id, category="campus_uniform", crop=[4, 4, 118, 86],
++                       status="approved", flags=[])
++        self.assertEqual(self.ds.snapshot()["logo"]["counts"]["reviewed_visible"], 0)
++        with self.assertRaises(ValueError):
++            self.ds.logo_image(self.image_id)
++        self.review()
++        self.ds.review(self.image_id, category="other_clothing", crop=[8, 8, 120, 88],
++                       status="approved", flags=[])
++        self.assertEqual(self.ds.snapshot()["logo"]["counts"]["reviewed_visible"], 0)
++        self.review()
++        other = Path(self.tmp.name) / "second-source.png"
++        other.write_bytes(self.data)
++        self.ds.import_paths([other], "campus_uniform", capture_group="camera-b")
++        self.assertEqual(self.ds.snapshot()["logo"]["counts"]["reviewed_visible"], 0)
++        with self.assertRaises(ValueError):
++            self.ds.logo_image(self.image_id)
++
++    def test_reviewed_nonvisible_states_are_not_negative_examples(self):
++        for state in ("obscured", "too_small", "back_view", "uncertain"):
++            self.review(logo_visibility=state, logo_box=None)
++            self.assertEqual(self.ds.snapshot()["logo"]["counts"]["reviewed_visible"], 0)
++        self.assertEqual(self.ds.snapshot()["logo"]["counts"]["per_visibility"]["uncertain"], 1)
++        self.assertEqual(self.ds.snapshot()["logo"]["known_capture_groups"], 0)
++
++    def test_unknown_provenance_visible_rows_are_not_counted_as_known_groups(self):
++        iid = self.ds.import_paths([self.path], "campus_uniform")[0]
++        self.assertEqual(iid, self.image_id)
++        self.review()
++        self.assertEqual(self.ds.snapshot()["logo"]["known_capture_groups"], 0)
++        self.assertEqual(self.ds.snapshot()["logo"]["eligible_visible_unknown_provenance"], 1)
++
++    def test_readiness_rejects_malformed_annotation_coordinates(self):
++        self.review()
++        catalog = json.loads(self.ds.index_path.read_text("utf-8"))
++        row = catalog["records"][0]
++        row["logo_annotation"]["box"] = ["30", 24, 52, 42]
++        row["review_history"][-1]["logo_annotation"]["box"] = ["30", 24, 52, 42]
++        row["logo_box"] = ["30", 24, 52, 42]
++        self.ds.index_path.write_text(json.dumps(catalog), encoding="utf-8")
++        self.assertEqual(self.ds.snapshot()["logo"]["counts"]["reviewed_visible"], 0)
++
++    def test_quality_association_and_conflict_flags_block_visible_readiness(self):
++        for flag in ("possible_blur", "low_resolution", "obstruction", "multiple_people",
++                     "incorrect_association", "label_conflict"):
++            self.review(flags=[flag])
++            self.assertEqual(self.ds.snapshot()["logo"]["counts"]["reviewed_visible"], 0, flag)
++            with self.assertRaises(ValueError):
++                self.ds.logo_image(self.image_id)
++
++    def test_original_hash_is_checked_before_serving_logo_crop(self):
++        self.review()
++        record = self.ds.snapshot()["records"][0]
++        original = self.root / record["original_path"]
++        original.write_bytes(self.data + b"tamper")
++        with self.assertRaisesRegex(ValueError, "hash"):
++            self.ds.logo_image(self.image_id)
++
++
++if __name__ == "__main__":
++    unittest.main()
+--- /dev/null
++++ b/tests/test_uniform_logo_evaluation.py
+@@ -0,0 +1,93 @@
++"""Synthetic accounting fixtures only; no measured model accuracy/latency."""
++from copy import deepcopy
++import json
++from pathlib import Path
++import tempfile
++import unittest
++from core.uniform_logo_evaluation import compare_logo_runs, CRITERIA
++from core.uniform_model_registry import json_hash
++
++
++class LogoComparisonTests(unittest.TestCase):
++    def setUp(self):
++        self.criteria={key:'Reviewer fixture criterion; not a production threshold' for key in CRITERIA}
++        self.manifest={'schema':1,'purpose':'logo-held-out-comparison','reviewed':True,'footage_sha256':'a'*64,
++            'passages':[{'passage_alias':'A','garment_label':'campus_uniform','policy_label':'compliant',
++                         'logo_visibility':'visible','capture_group':'day1','camera':'fixture','lighting':'fixture'},
++                        {'passage_alias':'B','garment_label':'organizational_shirt','logo_visibility':'obscured'},
++                        {'passage_alias':'C'}]}
++        self.base={'mode':'torso_only','footage_sha256':'a'*64,'frame_sequence_sha256':'b'*64,
++            'annotation_manifest_sha256':json_hash(self.manifest),'torso_model_sha256':'c'*64,
++            'torso_preprocessing':'224-fixture','policy_version':'fixture-policy','configuration_sha256':'d'*64,
++            'test_conditions':{'synthetic':True,'backend':'fixture'},'criteria_sha256':json_hash(self.criteria),
++            'results':[{'passage_alias':'A','label':'other_clothing','policy_outcome':'violation','first_usable_to_decision_ms':100},
++                       {'passage_alias':'B','label':None,'first_usable_to_decision_ms':200}]}
++        self.logo=deepcopy(self.base)
++        self.logo.update(mode='torso_plus_logo',logo_model_sha256='e'*64,logo_preprocessing='fixture-print-v1')
++        self.logo['results']=[{'passage_alias':'A','label':'campus_uniform','policy_outcome':'compliant','first_usable_to_decision_ms':90},
++                              {'passage_alias':'B','label':None,'first_usable_to_decision_ms':230}]
++
++    def compare(self):return compare_logo_runs(self.manifest,self.base,self.logo,criteria=self.criteria)
++
++    def test_classification_policy_missing_and_paired_signed_latency(self):
++        report=self.compare();a,b=(report['per_mode'][m] for m in ('torso_only','torso_plus_logo'))
++        self.assertEqual((a['classification_errors'],b['classification_errors']),(1,0))
++        self.assertEqual((a['policy']['false_violation_count'],b['policy']['false_violation_count']),(1,0))
++        self.assertEqual(a['missed'],1);self.assertEqual(a['unassessed'],1)
++        self.assertEqual(a['unassessed_rate_on_returned'],.5)
++        self.assertEqual(report['paired_added_latency_ms']['median_ms'],10)
++        self.assertEqual(report['paired_added_latency_ms']['count'],2)
++        self.assertEqual(b['per_class']['organizational_shirt']['recall']['n'],1)
++        self.assertFalse(report['activation_allowed'])
++
++    def test_no_ground_truth_does_not_invent_error_or_policy_metrics(self):
++        for person in self.manifest['passages']:
++            person.pop('garment_label',None);person.pop('policy_label',None)
++        for run in (self.base,self.logo):run['annotation_manifest_sha256']=json_hash(self.manifest)
++        report=self.compare()
++        for mode in report['per_mode'].values():
++            self.assertIsNone(mode['classification_errors'])
++            self.assertIsNone(mode['policy']['false_violation_count'])
++            self.assertEqual(mode['policy']['explicit_truth_count'],0)
++
++    def test_mismatched_footage_frames_models_conditions_and_criteria_fail(self):
++        for key in ('footage_sha256','frame_sequence_sha256','torso_model_sha256','torso_preprocessing',
++                    'policy_version','configuration_sha256','test_conditions','criteria_sha256'):
++            with self.subTest(key=key):
++                bad=deepcopy(self.logo);bad[key]='f'*64
++                with self.assertRaises(ValueError):compare_logo_runs(self.manifest,self.base,bad,criteria=self.criteria)
++
++    def test_duplicate_unknown_and_unassessed_violation_rejected(self):
++        for result in ({'passage_alias':'A'},{'passage_alias':'unknown'},
++                       {'passage_alias':'C','label':None,'policy_outcome':'violation'}):
++            bad=deepcopy(self.logo);bad['results'].append(result)
++            with self.assertRaises(ValueError):compare_logo_runs(self.manifest,self.base,bad,criteria=self.criteria)
++
++    def test_manifest_and_criteria_are_pinned_without_default_thresholds(self):
++        self.manifest['passages'][0]['garment_label']='organizational_shirt'
++        with self.assertRaises(ValueError):self.compare()
++        with self.assertRaises(ValueError):compare_logo_runs(self.manifest,self.base,self.logo,criteria={})
++
++    def test_missing_latency_stays_null_and_bad_measurements_fail(self):
++        for run in (self.base,self.logo):
++            for row in run['results']:row.pop('first_usable_to_decision_ms')
++        self.assertIsNone(self.compare()['paired_added_latency_ms']['median_ms'])
++        self.logo['results'][0]['logo_ms']=float('nan')
++        with self.assertRaises(ValueError):self.compare()
++
++    def test_cli_writes_only_new_report_and_cannot_overwrite(self):
++        from scripts.compare_uniform_logo import main
++        with tempfile.TemporaryDirectory() as tmp:
++            root=Path(tmp);args=[]
++            for option,value in (('manifest',self.manifest),('torso-only',self.base),
++                                 ('torso-plus-logo',self.logo),('criteria',self.criteria)):
++                path=root/(option+'.json');path.write_text(json.dumps(value));args.extend(['--'+option,str(path)])
++            target=root/'report.json';args.extend(['--output',str(target)])
++            self.assertEqual(main(args),0)
++            saved=target.read_bytes()
++            self.assertFalse(json.loads(saved)['activation_allowed'])
++            with self.assertRaises(FileExistsError):main(args)
++            self.assertEqual(target.read_bytes(),saved)
++
++
++if __name__=='__main__':unittest.main()
+--- /dev/null
++++ b/tests/test_uniform_logo_ui.py
+@@ -0,0 +1,106 @@
++"""Native logo review on disposable synthetic images; no camera/model/records."""
++import gc
++from pathlib import Path
++import tempfile
++import threading
++import time
++import unittest
++from types import SimpleNamespace
++from unittest.mock import Mock
++
++from PIL import Image
++from core.uniform_dataset import UniformDataset
++from core.uniform_candidate import CandidateService
++from ui.uniform_workspace import UniformWorkspace
++from ui.window_lifecycle import WorkspaceWindow
++
++
++class LogoReviewUITests(unittest.TestCase):
++    def setUp(self):
++        gc.collect()
++        self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
++        base=Path(self.temp.name)
++        self.dataset=UniformDataset(base/'catalog')
++        image=Image.new('RGB',(400,300),'navy');image.paste('white',(100,80,160,120))
++        path=base/'fixture.png';image.save(path)
++        self.iid=self.dataset.import_paths([path],'organizational_shirt',capture_group='fixture-session')[0]
++        self.root=WorkspaceWindow();self.addCleanup(self.root.destroy);self.errors=[]
++        self.root.geometry('1100x850')
++        self.root.report_callback_exception=lambda *args:self.errors.append(args)
++        self.workspace=UniformWorkspace(self.root,capture=Mock(),dataset=self.dataset,
++            candidate_service=CandidateService(self.dataset,candidates_root=base/'candidates'))
++        self.workspace.pack(fill='both',expand=True);self.wait(self.workspace.task)
++        self.workspace.open_review(self.dataset.snapshot()['records'][0])
++        self.review=self.workspace._review;self.wait(self.review.task)
++
++    def tearDown(self):
++        self.root.destroy();gc.collect();self.assertEqual(self.errors,[])
++
++    def pump(self):self.root.after(35,self.root.quit);self.root.mainloop()
++
++    def wait(self,task):
++        until=time.monotonic()+6
++        while task.busy and time.monotonic()<until:self.pump()
++        self.assertFalse(task.busy);self.pump()
++
++    def set_logo(self):
++        r=self.review
++        r.set_crop([40,40,300,280])
++        r.logo_box.insert(0,'100, 80, 160, 120')
++        r.visibility.set('visible');r.logo_source.set('photographed_print')
++        for check in r.flags.values():check.deselect()
++
++    def test_original_preview_independent_review_and_readiness(self):
++        r=self.review;self.set_logo();main=threading.get_ident();calls=[]
++        original=self.dataset.image
++        def image(*a,**k):calls.append(threading.get_ident());return original(*a,**k)
++        self.dataset.image=image
++        r.preview();self.wait(r.task)
++        self.assertNotIn(main,calls)
++        self.assertIn('60 × 40 original pixels',r.logo_preview.cget('text'))
++        r.logo_confirm.select();r.logo_association.select();r.confirm.select()
++        r.save('approved');self.wait(r.task);self.wait(self.workspace.task)
++        snap=self.dataset.snapshot()
++        self.assertEqual(snap['logo']['counts']['reviewed_visible'],1)
++        self.assertEqual(self.dataset.logo_image(self.iid).size,(60,40))
++        self.assertIn('Not trained',self.workspace.readiness.cget('text'))
++        self.assertIn('1 eligible reviewed visible logos',self.workspace.readiness.cget('text'))
++        self.workspace.open_review(snap['records'][0]);self.review=self.workspace._review;self.wait(self.review.task)
++        self.assertFalse(self.review.logo_confirm.get())
++        self.assertFalse(self.review.logo_association.get())
++
++    def test_logo_drag_inside_torso_and_change_invalidates_confirmation(self):
++        r=self.review;r.set_crop([40,40,300,280]);r.draw_mode.set('Logo box')
++        r.start_crop(SimpleNamespace(x=100*r.scale,y=80*r.scale))
++        r.drag_crop(SimpleNamespace(x=160*r.scale,y=120*r.scale))
++        self.assertEqual(r.logo_coords(),[100,80,160,120])
++        self.assertEqual(r.crop(),[40,40,300,280])
++        r.logo_confirm.select();r.logo_association.select()
++        r.set_crop([50,50,310,290])
++        self.assertFalse(r.logo_confirm.get());self.assertFalse(r.logo_association.get())
++        r.logo_box.delete(0,'end');r.logo_box.insert(0,'0, 0, 20, 20');r.preview()
++        self.assertIn('inside',r.message.cget('text'))
++
++    def test_hidden_state_saves_without_logo_box_or_negative_label(self):
++        r=self.review;r.visibility.set('back_view');r.logo_source.set('photographed_print')
++        r.logo_confirm.select();r.logo_association.select();r.save('pending_review')
++        self.wait(r.task);self.wait(self.workspace.task)
++        row=self.dataset.snapshot()['records'][0]
++        self.assertEqual(row['logo_annotation']['visibility'],'back_view')
++        self.assertIsNone(row['logo_annotation']['box'])
++        self.assertEqual(self.dataset.snapshot()['logo']['counts']['reviewed_visible'],0)
++
++    def test_close_during_logo_decode_has_no_late_tk_access(self):
++        self.set_logo();started=threading.Event();release=threading.Event();done=threading.Event()
++        original=self.dataset.image
++        def image(*args,**kwargs):
++            started.set();release.wait(2)
++            try:return original(*args,**kwargs)
++            finally:done.set()
++        self.dataset.image=image
++        self.review.preview();self.assertTrue(started.wait(1));self.review.destroy();release.set()
++        self.assertTrue(done.wait(2))
++        for _ in range(4):self.pump()
++
++
++if __name__=='__main__':unittest.main()
+--- /dev/null
++++ b/docs/UNIFORM_LOGO_WORKFLOW.md
+@@ -0,0 +1,150 @@
++# Optional printed-logo verification — Stage 5
++
++**Not trained. Disabled.** Production models and the torso-only baseline remain unchanged.
++There are currently no approved photographed-logo annotations, trained logo bundles or
++independent paired footage. Stage 5 therefore supplies annotation/configuration support
++and tested scheduling/reporting contracts. It does not supply a working validated verifier,
++logo localization/fusion model, OCR, or an activation route.
++
++## Review actual photographed logos
++
++1. Open **Training → Uniform Check → Organizational Shirt** (or the correct garment
++   gallery), then **Review original & crop**. Keep collar, sleeves and garment body in
++   the torso; verify the face/body/torso association, especially in group photographs.
++2. Choose **Logo box** above the original and drag around the actual printed crest
++   including department lettering when visible. Coordinates are original raster pixels,
++   not classifier input pixels. The yellow box must stay inside this person's torso.
++   **Preview logo from original** shows the selected pixels; only the display is scaled.
++   Neither original nor derived pixels are mirrored automatically.
++3. Choose `visible`, `obscured`, `too_small`, `back_view` or `uncertain`. Hidden or
++   unreadable does not mean absent. Legacy `unknown`/`not_visible` becomes uncertain
++   for interpretation; `occluded` becomes obscured. Reading the old catalog does not
++   rewrite it. No negative label is generated from any visibility state.
++4. For an actual photographed print choose `photographed_print`; confirm the correct
++   torso association and the separate logo review checkbox. Visible reviewed logos need
++   a box. Hidden states can be reviewed without a box. If unsure, leave pending.
++   Review category and quality warnings separately; only confirm what the pixels support.
++5. Save pending review, approve the garment when justified, or exclude it. Logo review
++   does not automatically approve a garment. Reopening does not pre-confirm the logo;
++   changing a crop/label/visibility requires renewed confirmation. Association, obstruction,
++   blur, resolution and unresolved label flags exclude the logo from eligible-visible counts.
++
++The colored reference image belongs in the existing **DYCI Logo & Digital Shirts**
++library (`data/uniform_references`). It is artwork, not a photographed positive or negative.
++If artwork was accidentally imported as a garment, choose `reference_artwork` and exclude
++it. The backend blocks its approval even without the separate logo-review checkbox.
++Correcting a mistaken artwork designation requires explicit photographed-print re-review
++and confirmed association. No model trains automatically from either library.
++
++Annotations live beside the original record in `data/uniform_stage1/catalog.json` under
++`logo_annotation`, schema `printed-logo-v1`. Each version records original SHA256,
++original-pixel box, torso crop, garment category, preprocessing version, review timestamp,
++source kind, visibility, association confirmation and a provenance snapshot. Complete
++versions remain in `review_history`. Derived crops are not independent captures.
++`UniformDataset.logo_image(image_id)` returns original-resolution pixels only for a current,
++approved, eligible photographed annotation after verifying the source hash. Crop/category,
++source/provenance or subsequent review changes invalidate the old annotation's eligibility.
++Counts and known/unknown group coverage are descriptive, not an accuracy threshold.
++
++## Observation configuration and scheduling limits
++
++The Stage 4 observation JSON may include this optional section:
++
++```json
++"logo_verification": {"enabled": false, "max_added_latency_ms": 100}
++```
++
++Omitting it keeps the verifier disabled. Setting `enabled` to true is rejected with
++**Not trained** before any model is loaded. There is no model download, alternate
++architecture, production switch, camera owner or OCR fallback. Configuration is part
++of the existing observation version token. Missing logo evidence leaves the existing
++torso result and policy outcome unchanged; uncertain torso evidence stays unassessed.
++
++`LogoRequestGate` is a tested future-backend admission contract, not an executor.
++It admits at most one request, queues none, requires uncertain torso classification plus
++visible logo evidence, validates a box in the same original-resolution torso, and calls
++the existing ticket-current check for camera/session/generation/track/revision freshness.
++Results beyond the smaller of the frame deadline and configured added-time budget are
++discarded. Invalidating a running request does not free its slot until completion is
++acknowledged, preventing overlapping work. It retains no image or independent evidence
++cache. A future backend must reuse existing passage ownership and invalidation checks.
++
++The default 100 ms is an operational admission budget, **not a measured speed or acceptance
++threshold**. The allowed range is greater than 0 through 1000 ms. A future model executor
++also needs cooperative cancellation or process isolation: discarding late results does
++not stop a hung inference call. No real logo execution or hard latency limit has been
++validated in this stage. The current app never schedules a logo request.
++
++## What to collect before training or enablement
++
++- Original-resolution photographs of the white printed Organizational Shirt crest,
++  including genuinely readable department lettering where available. Retain the whole
++  associated torso, original bytes, camera/session and capture-group provenance.
++- Campus Uniform and Other Clothing examples, including any carrying the same crest.
++  Human-review garment category separately from logo presence. Include real comparison
++  examples; do not manufacture negatives, infer labels from filenames or use artwork as data.
++- Reviewed visible, obscured, too-small, back-view and uncertain cases across the intended
++  cameras, lighting, distances, pose and motion conditions. Keep all same-session captures,
++  near-duplicates and crops together; unknown provenance cannot establish independence.
++- Independent held-out footage with passage aliases, torso/logo associations, visibility,
++  camera/lighting conditions, assessment-zone entry and first usable torso times. Separate
++  training/development/final-test capture groups before augmentation. Freeze the final set.
++- Independent uniform-policy ground truth where false/missed violations are to be measured;
++  include relevant department/day/schedule rules. A shared crest is not a permission rule.
++  Decide acceptable classification errors, false violations, unassessed rate and added
++  latency **before** final evaluation. No count or threshold is supplied as proof of accuracy.
++
++No fixed number of photos establishes sufficient data. Coverage, independent groups,
++class balance and uncertainty must be assessed against the responsible reviewer's criteria.
++The optional reference-art path is still missing; it is not the blocker for photographed
++logo training. There is no reason to train from that artwork alone.
++
++## Paired evaluation support
++
++`core.uniform_logo_evaluation.compare_logo_runs` / `scripts/compare_uniform_logo.py` summarize
++recorded passage exports; they do not perform inference or certify independence. When a
++real verifier and compatible observation executor exist, run torso-only and torso-plus-logo
++on the identical held-out frames, torso bundle, preprocessing, policy and hardware/settings.
++Record actual backend/fallback and test conditions. Do not tune against final-test results.
++
++The manifest has schema `1`, purpose `logo-held-out-comparison`, `reviewed: true`,
++`footage_sha256`, and `passages`. Each passage has a unique `passage_alias`; optional
++`garment_label`, `policy_label`, `logo_visibility`, `camera`, `lighting`, `capture_group`
++must describe reviewed observations. Missing ground truth remains missing.
++
++Both run exports must match `footage_sha256`, `frame_sequence_sha256`,
++`annotation_manifest_sha256` (canonical JSON hash of that manifest), `torso_model_sha256`,
++`torso_preprocessing`, `policy_version`, `configuration_sha256` (common execution settings,
++excluding the logo toggle) and `test_conditions`. Pin the same `criteria_sha256` using
++`core.uniform_model_registry.json_hash`. The criteria JSON requires nonempty reviewer text
++for `classification_errors`, `false_violations`, `unassessed_rate` and `added_latency_ms`.
++
++The `mode` values are `torso_only` and `torso_plus_logo`. Only the augmented export supplies
++`logo_model_sha256` and `logo_preprocessing`. Each `results` entry is one final result per
++passage with `passage_alias`, `label` (stable garment ID or null), `policy_outcome`
++(`compliant`, `violation` or null) and measured `first_usable_to_decision_ms`,
++`zone_entry_to_decision_ms`, `logo_ms` when actually available. Missing result rows count
++as missed passages; null labels count as unassessed. Timing values must be nonnegative
++and finite. This is a future export contract, not evidence that current replay produces
++logo results; the current Stage 4 replay remains torso-only.
++
++```sh
++.venv/bin/python scripts/compare_uniform_logo.py \
++  --manifest /path/to/reviewed-footage-manifest.json \
++  --torso-only /path/to/torso-results.json \
++  --torso-plus-logo /path/to/logo-results.json \
++  --criteria /path/to/frozen-criteria.json \
++  --output /path/to/new-comparison.json
++```
++
++The new output reports per-class precision/recall with denominators and intervals,
++confusion matrices, classified errors separately from unresolved cases, explicit-policy
++false/missed violations, missing/unassessed counts, timing median/p95 and paired added
++latency. Signed latency differences retain improvements as negative values. Reports
++always set `activation_allowed: false`: matching hashes alone cannot establish genuine
++independence, truthful labels, acceptance criteria timing or a validated working verifier.
++
++Manual acceptance should use a disposable review dataset first. Confirm the box/visibility
++workflow, pending/approved separation, scrolling and close-during-load behavior, then
++review real examples only when authorized. Physical camera and real model accuracy/latency
++remain unverified. See `UNIFORM_UPGRADE_CHECKPOINT.md` and `output/uniform-stage5/report.md`.

@@ -1,0 +1,22 @@
+test_cancel_during_prepare_writes_only_flag_and_finishes (tests.test_uniform_candidate.CandidateFreezeTests.test_cancel_during_prepare_writes_only_flag_and_finishes) ... ok
+test_checkpoint_pointer_is_the_recoverable_marker (tests.test_uniform_candidate.CandidateFreezeTests.test_checkpoint_pointer_is_the_recoverable_marker) ... ok
+test_class_map_mutation_and_resume_checkpoint_tamper_are_rejected (tests.test_uniform_candidate.CandidateFreezeTests.test_class_map_mutation_and_resume_checkpoint_tamper_are_rejected) ... ok
+test_frozen_data_matches_live_letterbox_and_checksums (tests.test_uniform_candidate.CandidateFreezeTests.test_frozen_data_matches_live_letterbox_and_checksums) ... ok
+test_invalid_approved_crop_is_excluded_consistently_with_summary (tests.test_uniform_candidate.CandidateFreezeTests.test_invalid_approved_crop_is_excluded_consistently_with_summary) ... ok
+test_lock_probe_and_release (tests.test_uniform_candidate.CandidateFreezeTests.test_lock_probe_and_release) ... ok
+test_mutated_prepared_tensor_and_manifest_are_rejected (tests.test_uniform_candidate.CandidateFreezeTests.test_mutated_prepared_tensor_and_manifest_are_rejected) ... ok
+test_real_child_inherited_flock_blocks_competitor_and_releases_on_exit (tests.test_uniform_candidate.CandidateFreezeTests.test_real_child_inherited_flock_blocks_competitor_and_releases_on_exit) ... ok
+test_stale_status_recovers_and_latest_uses_microsecond_timestamp (tests.test_uniform_candidate.CandidateFreezeTests.test_stale_status_recovers_and_latest_uses_microsecond_timestamp) ... ok
+test_start_hands_lock_to_child_and_reaps_without_a_real_worker (tests.test_uniform_candidate.CandidateFreezeTests.test_start_hands_lock_to_child_and_reaps_without_a_real_worker) ... ok
+test_symlink_original_is_rejected_before_resolution (tests.test_uniform_candidate.CandidateFreezeTests.test_symlink_original_is_rejected_before_resolution) ... ok
+test_symlink_run_directories_are_not_scanned (tests.test_uniform_candidate.CandidateFreezeTests.test_symlink_run_directories_are_not_scanned) ... ok
+test_worker_checkpoint_sidecar_and_pointer_are_consistent (tests.test_uniform_candidate.CandidateFreezeTests.test_worker_checkpoint_sidecar_and_pointer_are_consistent) ... ok
+test_worker_cpu_cross_entropy_step_is_finite_and_updates_weights (tests.test_uniform_candidate.CandidateFreezeTests.test_worker_cpu_cross_entropy_step_is_finite_and_updates_weights) ... ok
+test_config_bounds_and_unknown_keys (tests.test_uniform_candidate.CandidateSummaryTests.test_config_bounds_and_unknown_keys) ... ok
+test_missing_approved_categories_are_not_eligible (tests.test_uniform_candidate.CandidateSummaryTests.test_missing_approved_categories_are_not_eligible) ... ok
+test_only_clean_approved_valid_crops_count_and_unknown_is_shared_group (tests.test_uniform_candidate.CandidateSummaryTests.test_only_clean_approved_valid_crops_count_and_unknown_is_shared_group) ... ok
+
+----------------------------------------------------------------------
+Ran 17 tests in 1.416s
+
+OK

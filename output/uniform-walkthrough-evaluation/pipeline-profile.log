@@ -1,0 +1,7 @@
+Matplotlib is building the font cache; this may take a moment.
+Applied providers: ['CPUExecutionProvider'], with options: {'CPUExecutionProvider': {}}
+Applied providers: ['CPUExecutionProvider'], with options: {'CPUExecutionProvider': {}}
+Creating new Ultralytics Settings v0.0.6 file ✅ 
+View Ultralytics Settings with 'yolo settings' or at '/var/folders/q9/8tgzldpx1dl7qg075j18g03w0000gn/T/cbvms-profile-yolo/settings.json'
+Update Settings with 'yolo settings key=value', i.e. 'yolo settings runs_dir=path/to/dir'. For help see https://docs.ultralytics.com/quickstart/#ultralytics-settings.
+Isolated real-model still profile completed. Real labeled passages: 0.

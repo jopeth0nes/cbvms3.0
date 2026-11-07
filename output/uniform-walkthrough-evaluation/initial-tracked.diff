@@ -1,0 +1,1289 @@
+diff --git a/auth/register.py b/auth/register.py
+index 98cac91..d965d52 100644
+--- a/auth/register.py
++++ b/auth/register.py
+@@ -17,6 +17,7 @@ import tkinter as tk
+ 
+ import cv2
+ import customtkinter as ctk
++from ui.scrolling import ScrollableFrame
+ import numpy as np
+ from PIL import Image, ImageTk
+ 
+@@ -182,7 +183,7 @@ class StudentRegistrationWindow(ctk.CTkToplevel):
+     # ── Left: registration form ─────────────────────────────────────────
+ 
+     def _build_form(self, parent) -> None:
+-        card = ctk.CTkScrollableFrame(parent, fg_color=COLOR_SURFACE,
++        card = ScrollableFrame(parent, fg_color=COLOR_SURFACE,
+                             corner_radius=CORNER_RADIUS,
+                             border_width=1, border_color=COLOR_BORDER)
+         card.grid(row=0, column=0, sticky="nsew", padx=(0, 6), pady=(0, 0))
+diff --git a/core/live_pipeline.py b/core/live_pipeline.py
+index 0374a8e..0197d4f 100644
+--- a/core/live_pipeline.py
++++ b/core/live_pipeline.py
+@@ -76,6 +76,11 @@ class MonitorTask:
+     observation_only: bool = False
+     passage_entered_at: float | None = None
+     first_usable_at: float | None = None
++    uniform_model_version: str | None = None
++    uniform_version_valid: object | None = None
++    uniform_tickets: tuple | None = None
++    assessment_queued_at: float | None = None
++    analysis_started_at: float | None = None
+ 
+     def __post_init__(self):
+         with measure("frame_copy"):
+@@ -94,6 +99,13 @@ class MonitorTask:
+         object.__setattr__(result, "observations", tuple(observations))
+         return result
+ 
++    def with_uniform_version(self, version, valid):
++        from copy import copy
++        result = copy(self)
++        object.__setattr__(result, 'uniform_model_version', version)
++        object.__setattr__(result, 'uniform_version_valid', valid)
++        return result
++
+     def for_observation_candidate(self, observations, presence_id, selected_at,
+                                   ticket_id, candidate_cancelled, passage_cancelled=None):
+         """Attach candidate metadata while sharing only this task's frozen frame."""
+@@ -126,9 +138,12 @@ class MonitorTask:
+         candidate_cancelled = self.candidate_cancelled is not None and self.candidate_cancelled.is_set()
+         passage_cancelled = self.passage_cancelled is not None and self.passage_cancelled.is_set()
+         return (not self.cancelled.is_set() and not candidate_cancelled and not passage_cancelled
++                and (self.uniform_version_valid is None or self.uniform_version_valid(self.uniform_model_version))
+                 and 0 <= now-self.context.captured_at <= 3.0)
+ 
+     def rejection(self):
++        if self.uniform_version_valid is not None and not self.uniform_version_valid(self.uniform_model_version):
++            return 'uniform_model_changed'
+         if self.cancelled.is_set():
+             return "session_cancelled"
+         if self.candidate_cancelled is not None and self.candidate_cancelled.is_set():
+@@ -217,7 +232,11 @@ class MotionProjection:
+ 
+ class LiveProcessor:
+     def __init__(self, database, recognizer, person_detector, trainer, uniform_matcher,
+-                 notifier, *, latest_sample=lambda:None, state=None, observation_only=False):
++                 notifier, *, latest_sample=lambda:None, state=None, observation_only=False,
++                 uniform_observation=None):
++        if uniform_observation is not None and not observation_only:
++            raise ValueError('Candidate assessment requires observation-only processing')
++        self.uniform_observation = uniform_observation
+         self.database=database
+         self.recognizer=recognizer
+         self.person_detector=person_detector
+@@ -242,12 +261,30 @@ class LiveProcessor:
+         self._assessment_cursor = 0
+         self.audio_task_valid = lambda task: True
+         self.observation_only = bool(observation_only)
++        self._uniform_model_version = None
+ 
+     def analyze(self,task):
++        candidate_session = self.uniform_observation
++        if candidate_session is not None:
++            if not self.observation_only:
++                raise RuntimeError('Observation candidate cannot run in production mode')
++            if task.uniform_tickets is None:
++                task = candidate_session.observe(task,task.observations)
++            task = task.with_uniform_version(candidate_session.version_token,candidate_session.matches)
++        elif task.uniform_enabled and callable(getattr(type(self.trainer), 'uniform_version', None)):
++            try:
++                version = self.trainer.uniform_version()
++            except Exception as exc:
++                event('uniform_version_unavailable', error=str(exc))
++                return None
++            if version != self._uniform_model_version:
++                self.state.clear_uniform_evidence()
++                self._uniform_model_version = version
++            task = task.with_uniform_version(version,self.trainer.uniform_version_matches)
+         if not task.valid():
+             event("frame_rejected", stage="analysis_start", reason=task.rejection())
+             return None
+-        key = (task.context.generation, task.context.frame_id)
++        key = (task.source_id,task.cancelled,task.camera_generation,task.context.generation,task.context.frame_id)
+         if key in self._analyzed_frames:
+             return None
+         self._analyzed_frames.append(key)
+@@ -321,7 +358,7 @@ class LiveProcessor:
+             self.publish_identity(MonitorResult(task, identities, time.monotonic(),
+                 "Face detected · Identity uncertain" if rows and not any(a.reliable_identity for a in identities)
+                 else "Recognition ready · Uniform not assessed" if rows else "No faces detected"))
+-        uniform_available=(task.uniform_enabled and self.person_detector is not None and
++        uniform_available=(candidate_session is None and task.uniform_enabled and self.person_detector is not None and
+                            (self.readiness is None or self.readiness.ready('uniform')) and
+                            self.trainer.is_trained('uniform'))
+         bodies=[]
+@@ -396,23 +433,14 @@ class LiveProcessor:
+                             if skin_ratio>MAX_TORSO_SKIN_FRACTION:
+                                 row['reason']='Shirt obscured or mostly skin; show more of your shirt'
+                             else:
+-                                p_cls=p_col=None
+-                                if self.trainer.is_trained('uniform'):
+-                                    proba=self.trainer.predict_proba('uniform',crop)
+-                                    p_cls=proba.get('correct_uniform') if proba else None
+-                                if self.uniform_matcher.is_loaded():
+-                                    verdict,p=self.uniform_matcher.is_uniform(crop)
+-                                    p_col=p if verdict is not None else None
+-                                # A colour match is supplementary evidence; it cannot
+-                                # classify a garment when the trained classifier failed.
+-                                fused=fuse_uniform_prob(p_cls,p_col) if p_cls is not None else None
+-                                if fused is not None and np.isfinite(fused):
+-                                    confidence=max(fused,1-fused)
+-                                    row.update(uniform_available=True,
+-                                               uniform_label=('correct_uniform' if fused>=.5 else 'wrong_uniform') if confidence>=.60 else None,
+-                                               uniform_confidence=float(confidence),reason='Checking uniform')
++                                if task.uniform_model_version is not None:
++                                    decision = self.trainer.uniform_decision(crop,self.uniform_matcher,task.uniform_model_version)
++                                    row.update(uniform_available=decision.get('available',True),
++                                               uniform_label={'compliant':'correct_uniform','violation':'wrong_uniform'}.get(decision.get('policy_label')),
++                                               uniform_confidence=float(decision.get('policy_confidence') or 0),
++                                               reason='Checking uniform' if decision.get('policy_label') else 'Unable to assess uniform confidently')
+                                 else:
+-                                    row['reason']='Uniform classifier could not assess this crop'
++                                    self._legacy_uniform_decision(row,crop)
+                     except Exception as exc:
+                         row['reason']='Uniform assessment unavailable'
+                         event("uniform_assessment_failed", error=str(exc))
+@@ -443,6 +471,25 @@ class LiveProcessor:
+         if observations is not None:
+             assessments=tuple(replace(a, track_id=o.track_id, presence_id=o.presence_id)
+                               for a,o in zip(assessments,observations))
++        if candidate_session is not None and task.uniform_enabled:
++            tickets = {t.key[-2:]:t for t in task.uniform_tickets or ()}
++            updated = []
++            bound_tickets = []
++            for assessment,observation,row in zip(assessments,observations or (),rows):
++                ticket = tickets.get((observation.track_id,observation.presence_id))
++                if ticket is not None:
++                    ticket = candidate_session.bind_identity(ticket,str(row.get('student_id') or '') if row.get('matched') else 'unknown')
++                    bound_tickets.append(ticket)
++                garment = candidate_session.assess(task,ticket) if ticket is not None else None
++                updated.append(replace(assessment,garment=garment,
++                    state=garment.state if garment else 'Unable to assess',
++                    reason=garment.reason if garment else 'No fresh associated candidate evidence',
++                    torso_box=observation.torso_box,body_box=observation.body_box,
++                    body_index=observation.body_index,uniform_label=None,uniform_confidence=0.,
++                    accepted_categories=tuple(c for c in assessment.accepted_categories if c!='wrong_uniform')))
++            assessments=tuple(updated)
++            task = candidate_session._attach(task,tuple(bound_tickets))
++            if not task.valid(): return None
+         for a in assessments:
+             event('person_assessed', frame_id=task.context.frame_id, presence_id=a.presence_id,
+                   state=a.state, reason=a.reason, reliable_identity=a.reliable_identity,
+@@ -455,6 +502,7 @@ class LiveProcessor:
+         if not self.observation_only and not task.observation_only:
+             self.submit_detection_audio(MonitorResult(task, assessments, time.monotonic()))
+         return MonitorResult(task,assessments,time.monotonic(),
++                             candidate_session.status_text() if candidate_session is not None else
+                              "No faces detected" if not rows else
+                              "Face detected · Identity uncertain" if not any(a.reliable_identity for a in assessments) else
+                              "Uniform not assessed" if not any(r.get('uniform_available') for r in rows) else "")
+@@ -495,6 +543,8 @@ class LiveProcessor:
+ 
+     def assessment_failed(self, task):
+         """An unobserved frame breaks evidence without recycling presence IDs."""
++        if self.uniform_observation is not None:
++            self.uniform_observation.invalidate()
+         if task.valid():
+             self.state.update(task.context, (), now=time.monotonic())
+             self.submit_detection_audio(MonitorResult(task, (), time.monotonic()))
+@@ -629,7 +679,32 @@ class LiveProcessor:
+             except Exception as exc:
+                 event('unknown_write_failed', error=str(exc))
+ 
++    def _legacy_uniform_decision(self,row,crop):
++        p_cls=p_col=None
++        if self.trainer.is_trained('uniform'):
++            proba=self.trainer.predict_proba('uniform',crop)
++            p_cls=proba.get('correct_uniform') if proba else None
++        if self.uniform_matcher.is_loaded():
++            verdict,p=self.uniform_matcher.is_uniform(crop)
++            p_col=p if verdict is not None else None
++        fused=fuse_uniform_prob(p_cls,p_col) if p_cls is not None else None
++        if fused is not None and np.isfinite(fused):
++            confidence=max(fused,1-fused)
++            row.update(uniform_available=True,
++                       uniform_label=('correct_uniform' if fused>=.5 else 'wrong_uniform') if confidence>=.60 else None,
++                       uniform_confidence=float(confidence),reason='Checking uniform')
++        else:
++            row['reason']='Uniform classifier could not assess this crop'
++
+     def persist(self,result):
++        if result.task.uniform_model_version is not None:
++            with self.trainer.uniform_result_guard(result.task.uniform_model_version) as valid:
++                if valid:
++                    return self._persist(result)
++            return None
++        return self._persist(result)
++
++    def _persist(self,result):
+         """Side effects consume the very same accepted assessment as the UI.
+ 
+         Revalidate immediately before each write, inside DB transactions, and before
+@@ -906,7 +981,7 @@ class LiveWorker:
+                     self._ack_candidate(task, None, "worker_busy")
+                     return False
+                 self.requests.put_nowait(task)
+-                if PERF.enabled or TRACES.enabled:
++                if PERF.enabled or TRACES.enabled or getattr(self.processor,'uniform_observation',None) is not None:
+                     with self._queue_clock_lock:
+                         self._queue_clock[id(task)] = time.monotonic()
+                 self._request_ready.set()
+@@ -915,7 +990,7 @@ class LiveWorker:
+         if not candidate and not self.stop_event.is_set():
+             event("frame_submitted", worker=type(self.processor).__name__, frame_id=task.context.frame_id)
+             with self._dispatch_lock:
+-                if not PERF.enabled and not TRACES.enabled:
++                if not PERF.enabled and not TRACES.enabled and getattr(self.processor,'uniform_observation',None) is None:
+                     put_latest(self.requests, task)
+                 else:
+                     with self._queue_clock_lock:
+@@ -983,6 +1058,12 @@ class LiveWorker:
+                         self._request_ready.clear()
+                 with self._queue_clock_lock:
+                     offered_at = self._queue_clock.pop(id(task), None)
++                if (task is not None and isinstance(self.processor,LiveProcessor)
++                        and self.processor.uniform_observation is not None):
++                    from copy import copy
++                    task = copy(task)
++                    object.__setattr__(task,'assessment_queued_at',offered_at)
++                    object.__setattr__(task,'analysis_started_at',time.monotonic())
+                 if task is None or not task.valid():
+                     with self._dispatch_lock:
+                         self.active_task = None
+diff --git a/core/live_state.py b/core/live_state.py
+index 5f411cb..830d15d 100644
+--- a/core/live_state.py
++++ b/core/live_state.py
+@@ -213,6 +213,7 @@ class LiveAssessment:
+     active_suspension: bool = False
+     enrollment_status: str = ""
+     lifecycle_version: int = 0
++    garment: object | None = None  # Observation-only, separate from policy/discipline evidence.
+ 
+     @property
+     def matched(self) -> bool:
+@@ -295,6 +296,11 @@ class LiveState:
+         self._last_at = -math.inf
+         self._next_id = 1
+ 
++    def clear_uniform_evidence(self):
++        """A model version change does not reset identity, earrings or cooldowns."""
++        for track in self._tracks:
++            track.clear_uniform()
++
+     def _pair_cost(self, track, box, emb, captured_at):
+         dt = max(0., captured_at - track.last_at)
+         predicted = tuple(c + v * min(dt, 1.5) for c, v in zip(_center(track.box), track.velocity))
+diff --git a/core/monitor_models.py b/core/monitor_models.py
+index 36b0e9f..48c274d 100644
+--- a/core/monitor_models.py
++++ b/core/monitor_models.py
+@@ -67,6 +67,13 @@ class MonitorModels(metaclass=_SharedBundle):
+         return True
+ 
+     def _load_uniform(self):
++        if callable(getattr(type(self.trainer), 'uniform_version', None)):
++            token = self.trainer.uniform_version()
++            if token != 'legacy-default':
++                self.trainer.uniform_decision(np.zeros((224,224,3),np.uint8),self.uniform_matcher,token)
++                if not self.trainer.uniform_version_matches(token):
++                    raise RuntimeError('Uniform model changed during warmup; retry')
++                return True
+         # The colour matcher is supplementary; the trained classifier remains
+         # useful on its own when no colour reference has been calibrated.
+         if not self.uniform_matcher.is_loaded():
+diff --git a/core/trainer.py b/core/trainer.py
+index 1ef3c70..5e1e0e3 100644
+--- a/core/trainer.py
++++ b/core/trainer.py
+@@ -74,6 +74,47 @@ class ViolationTrainer:
+         self._model_lock = RLock()
+         self._models: dict[str, object] = {}  # module -> loaded YOLO model
+         self.last_error = {}
++        from core.uniform_model_registry import UniformModelRegistry
++        self.uniform_registry = UniformModelRegistry()
++        self._uniform_deployment = None
++        self._uniform_deployment_token = None
++
++    def uniform_version(self):
++        return self.uniform_registry.token()
++
++    def uniform_version_matches(self, token):
++        return self.uniform_registry.matches(token)
++
++    def uniform_result_guard(self, token):
++        return self.uniform_registry.result_guard(token)
++
++    def uniform_decision(self, crop, matcher, token):
++        """Called by the serial inference worker, never Tk. No implicit fallback."""
++        with self._model_lock:
++            if not self.uniform_version_matches(token):
++                raise ValueError('Uniform model version changed')
++            if token != 'legacy-default':
++                if self._uniform_deployment_token != token:
++                    from core.uniform_model_registry import DeploymentPredictor
++                    loaded = DeploymentPredictor(self.uniform_registry.current())
++                    if not self.uniform_version_matches(token):
++                        raise ValueError('Uniform model changed while loading')
++                    self._uniform_deployment = loaded
++                    self._uniform_deployment_token = token
++                return self._uniform_deployment(crop)
++            # Keep the existing default live policy exactly, including no
++            # color-only verdict if classifier inference fails.
++            from core.uniform_matcher import fuse_uniform_prob
++            proba = self.predict_proba('uniform', crop) if self.is_trained('uniform') else None
++            p_cls = proba.get('correct_uniform') if proba else None
++            p_col = None
++            if matcher.is_loaded():
++                verdict, p = matcher.is_uniform(crop)
++                p_col = p if verdict is not None else None
++            fused = fuse_uniform_prob(p_cls,p_col) if p_cls is not None else None
++            confidence = max(fused,1-fused) if fused is not None and np.isfinite(fused) else 0.
++            return {'policy_label': ('compliant' if fused>=.5 else 'violation') if confidence>=.60 else None,
++                    'policy_confidence':float(confidence), 'available':fused is not None}
+ 
+     # ------------------------------------------------------------------
+     # Helpers
+@@ -432,6 +473,8 @@ class ViolationTrainer:
+ 
+     def is_trained(self, module: str) -> bool:
+         self._validate(module)
++        if module == 'uniform' and self.uniform_registry.pointer() is not None:
++            return True  # Actual bundle/model validity is checked by uniform_decision.
+         return (ROOT / MODULES[module]["model_out"]).exists()
+ 
+     def model_mtime(self, module: str) -> float | None:
+diff --git a/scripts/replay_camera_assessment.py b/scripts/replay_camera_assessment.py
+index d18a31d..2f1a3bc 100644
+--- a/scripts/replay_camera_assessment.py
++++ b/scripts/replay_camera_assessment.py
+@@ -289,6 +289,9 @@ def main():
+                         help="candidate mode: retain/select clearer original frames per passage")
+     parser.add_argument("--prioritized-assessment", action="store_true",
+                         help="candidate mode: enable fair prioritized candidate scheduling")
++    parser.add_argument('--uniform-observation-config',type=Path,
++                        help='Explicit Stage 4 candidate config; observation-only, no activation')
++    parser.add_argument('--body-backend',choices=('cpu','mps'),default=None)
+     args = parser.parse_args()
+     if not args.video.is_file() or (args.evaluation_db and not args.evaluation_db.is_file()):
+         parser.error("video and optional evaluation DB must be local files")
+@@ -298,6 +301,8 @@ def main():
+         parser.error("identity alias map must be a local JSON file")
+     if args.max_frames < 0:
+         parser.error("--max-frames cannot be negative")
++    if args.uniform_observation_config and args.mode!='candidate':
++        parser.error('Uniform observation config requires candidate mode')
+     try:
+         labels = load_annotations(args.annotations)
+     except ValueError as exc:
+@@ -313,6 +318,16 @@ def main():
+     from core.trainer import ViolationTrainer
+     from core.uniform_matcher import UniformColorMatcher
+     from core.performance import PERF, TRACES
++    from core.uniform_observation import ObservationConfig,ObservationUniformSession
++    from core.uniform_latency import UniformPassageMetrics
++    from core.uniform_model_registry import digest
++    from dataclasses import replace
++
++    uniform_session = (ObservationUniformSession(ObservationConfig.load(args.uniform_observation_config))
++                       if args.uniform_observation_config else None)
++    uniform_metrics = UniformPassageMetrics()
++    for annotation in labels:
++        uniform_metrics.observe_labels(annotation['people'])
+ 
+     capture = cv2.VideoCapture(str(args.video))
+     if not capture.isOpened():
+@@ -327,7 +342,7 @@ def main():
+     skipped_for_lag = 0
+     worker = None
+     database = None
+-    detector = PersonDetector()
++    detector = PersonDetector(backend=args.body_backend or (uniform_session.config.backend if uniform_session else None))
+     trainer = ViolationTrainer()
+     started = time.monotonic()
+     try:
+@@ -354,16 +369,21 @@ def main():
+             recognizer._ensure_models()
+             detector._ensure_model()
+             detector.detect_persons(first_frame)
+-            if trainer.is_trained("uniform"):
++            if uniform_session is not None:
++                uniform_session.prepare()
++                uniform_session.predictor.timed_probabilities(first_frame)
++            elif trainer.is_trained("uniform"):
+                 trainer.predict_proba("uniform", first_frame)
+             warmup_wall_ms = round((time.monotonic() - warm_started) * 1000, 2)
+             capture.set(cv2.CAP_PROP_POS_FRAMES, 0)
+             tracker = FaceTrackingProcessor(recognizer, detector)
+             processor = LiveProcessor(database, recognizer, detector, trainer, matcher,
+-                                      SimpleNamespace(), state=LiveState(), observation_only=True)
++                                      SimpleNamespace(), state=LiveState(), observation_only=True,
++                                      uniform_observation=uniform_session)
+             candidate_route = args.mode == "candidate" and (
+-                args.clear_frame_selection or args.prioritized_assessment)
+-            router = ClearFrameRouter() if candidate_route else None
++                args.clear_frame_selection or args.prioritized_assessment or uniform_session is not None)
++            router = (ClearFrameRouter(fresh_selection=True,ttl=uniform_session.config.frame_ttl)
++                      if uniform_session is not None else ClearFrameRouter() if candidate_route else None)
+             aliases = {}
+             if args.identity_alias_map:
+                 aliases = json.loads(args.identity_alias_map.read_text(encoding="utf-8"))
+@@ -402,6 +422,11 @@ def main():
+                 assessment_rows += len(result.assessments)
+                 metric.record_assessments(selected_index, selected_ms, selected_labels,
+                     result.task.observations or (), result.assessments, completion_ms=completion_ms)
++                if uniform_session is not None:
++                    for li,oi in metric._matches(selected_labels,result.task.observations or ()).items():
++                        if oi<len(result.assessments):
++                            uniform_metrics.record(selected_labels[li]['passage_alias'],
++                                result.assessments[oi].garment,completion_ms)
+             def dispatch_candidate():
+                 nonlocal selected_count, assessment_calls
+                 if router is None or worker.stop_event.is_set():
+@@ -440,6 +465,7 @@ def main():
+                 _camera_generation=0, _monitor_offer_time=-1e9,
+                 _live_worker=SimpleNamespace(offer=baseline_offer))
+             index = 0
++            replay_cancelled = threading.Event()
+             next_frame_at = time.monotonic()
+             while args.max_frames == 0 or index < args.max_frames:
+                 delay = next_frame_at-time.monotonic()
+@@ -463,18 +489,20 @@ def main():
+                     next_frame_at = replay_clock_start + index / fps
+                     continue
+                 task = MonitorTask(FrameContext(1, ("replay", index), captured), frame,
+-                    time.time(), threading.Event(), source_id="local-replay",
++                    time.time(), replay_cancelled, source_id="local-replay",
+                     source_label="Local evaluation replay", observation_only=True)
+                 with TRACES.observation(task, 'tracking', captured):
+                     tracked = tracker.analyze(task)
+                     TRACES.result(tracked)
+                 if tracked is not None:
++                    if uniform_session is not None:
++                        tracked = replace(tracked,task=uniform_session.observe(tracked.task,tracked.observations))
+                     if people and tracked.observations:
+                         metric.record_detections(index, media_ms, people, tracked.observations)
+                         metric.record_usable(index, media_ms, people, tracked.observations)
+                     if router is not None:
+                         router.observe(tracked, prioritize=args.prioritized_assessment,
+-                                       select=args.clear_frame_selection)
++                                       select=args.clear_frame_selection or uniform_session is not None)
+                         dispatch_candidate()
+                     else:
+                         CBVMSDashboard._on_localized(baseline_owner, tracked)
+@@ -532,7 +560,7 @@ def main():
+         "stage_timings": PERF.snapshot(), "observation_traces": TRACES.snapshot(),
+         "compute_latency_samples_dropped": compute_samples_dropped,
+         "frames_skipped_for_lag": skipped_for_lag,
+-        "passage_latency_verified": skipped_for_lag == 0,
++        "passage_latency_verified": skipped_for_lag == 0 and metrics.get('passage_count',0)>0,
+         "latency_clock": "paced video playback monotonic completion time; capture evidence uses video frame timeline; timing unverified if frames skipped",
+         "elapsed_wall_ms": round(elapsed*1000, 2),
+         "warmup_wall_ms": warmup_wall_ms,
+@@ -546,6 +574,19 @@ def main():
+         "evaluation_database_copied_to_private_temp_and_discarded": bool(args.evaluation_db),
+         "passage_details_written": False,
+         "comparison_requires_same_video_annotations_evaluation_db_and_flags": True}
++    if uniform_session is not None:
++        uniform_report = uniform_metrics.report()
++        report.update(uniform_passage_metrics=uniform_report,
++            uniform_candidate={'sha256':uniform_session.config.candidate_sha256,
++                'config_version':uniform_session.config.version,
++                'descriptor':{k:uniform_session.descriptor.get(k) for k in
++                    ('id','dataset_version','preprocessing_version','synthetic')},
++                'backend':uniform_session.predictor.backend_status()},
++            input_hashes={'video':digest(args.video),'annotations':digest(args.annotations)},
++            physical_camera_measurement=False,
++            passage_latency_verified=(skipped_for_lag==0 and
++                uniform_report['annotated_zone_entry_to_first_decision']['count']>0 and
++                uniform_report['annotated_first_usable_to_first_decision']['count']>0))
+     args.output.parent.mkdir(parents=True, exist_ok=True)
+     args.output.write_text(json.dumps(report, sort_keys=True) + "\n", encoding="utf-8")
+     print(json.dumps(report, sort_keys=True))
+diff --git a/ui/appeals_panel.py b/ui/appeals_panel.py
+index 459070d..802c958 100644
+--- a/ui/appeals_panel.py
++++ b/ui/appeals_panel.py
+@@ -5,6 +5,7 @@ import io
+ from concurrent.futures import ThreadPoolExecutor
+ from tkinter import messagebox
+ import customtkinter as ctk
++from ui.scrolling import ScrollableFrame
+ from PIL import Image, ImageOps
+ from core.appeal_categories import CATEGORIES, BY_CODE, BY_OPTION, SELECT_CATEGORY, category_display, validate_category
+ from core.discipline import display_local_datetime as ts
+@@ -302,7 +303,7 @@ class AppealsPanel(ctk.CTkFrame):
+ 
+     def _inbox_loaded(self, result):
+         self.subtitle.configure(text=f"{result['total']} appeals in this view  /  {self.filter.get()}" )
+-        listing = self.listing = ctk.CTkScrollableFrame(self.body, fg_color=COLOR_BG,
++        listing = self.listing = ScrollableFrame(self.body, fg_color=COLOR_BG,
+             scrollbar_button_color=BORDER, scrollbar_button_hover_color='#49677D')
+         listing.grid(row=0, column=0, sticky='nsew')
+         listing.grid_columnconfigure(0, weight=1)
+@@ -416,7 +417,7 @@ class AppealsPanel(ctk.CTkFrame):
+         self.subtitle.configure(text='Review the evidence, read the explanation, and record your decision.')
+         self.heading.configure(text=f"Appeal #{case['id']} · Violation #{case['violation_id']}")
+         # Only the evidence/details area scrolls at small sizes. Decisions stay in a fixed footer.
+-        content = ctk.CTkScrollableFrame(self.body, fg_color=CARD, corner_radius=16,
++        content = ScrollableFrame(self.body, fg_color=CARD, corner_radius=16,
+             border_width=1, border_color=BORDER)
+         content.grid(row=0, column=0, sticky='nsew')
+         content.grid_columnconfigure((0,1), weight=1, uniform='evidence')
+@@ -628,7 +629,7 @@ class AppealsPanel(ctk.CTkFrame):
+         window.title(f'Evidence analysis history · #{evidence_id}')
+         window.geometry('520x360')
+         self._case_windows.append(window)
+-        listing=ctk.CTkScrollableFrame(window,fg_color=COLOR_BG)
++        listing=ScrollableFrame(window,fg_color=COLOR_BG)
+         listing.pack(fill='both',expand=True,padx=12,pady=12)
+         for index, report in enumerate(runs):
+             ctk.CTkButton(listing,text=f"{report['status']} · {report.get('classification','inconclusive')} · {report.get('created_at','date unavailable')}",
+diff --git a/ui/attendance_panel.py b/ui/attendance_panel.py
+index c127645..b24a515 100644
+--- a/ui/attendance_panel.py
++++ b/ui/attendance_panel.py
+@@ -7,6 +7,7 @@ from database.security_events import UNKNOWN_COLUMNS
+ import tkinter as tk
+ from tkinter import ttk, filedialog
+ import customtkinter as ctk
++from ui.scrolling import ScrollableFrame
+ 
+ from core.academics import COLLEGES, COURSES, YEAR_LEVELS, NEEDS_REVIEW, courses_for
+ from core.attendance import TITLE, MANILA, SUMMARY_COLUMNS, EVENT_COLUMNS, display_time, validate_filters, export_csv
+@@ -41,7 +42,7 @@ class AttendancePanel(ctk.CTkFrame):
+             wraplength=950,justify='left',anchor='w',text_color=COLOR_TEXT_MUTED,font=body_small_font())
+         self.description.grid(row=1,column=0,sticky='ew',pady=6)
+         self.known_description = self.description.cget('text')
+-        form=self.form=ctk.CTkScrollableFrame(self,height=145,fg_color='transparent')
++        form=self.form=ScrollableFrame(self,height=145,fg_color='transparent')
+         form.grid(row=2,column=0,sticky='ew')
+         for col in range(3):
+             form.columnconfigure(col,weight=1,uniform='attendance_filters')
+diff --git a/ui/camera_configuration.py b/ui/camera_configuration.py
+index 2fee5e4..694dbff 100644
+--- a/ui/camera_configuration.py
++++ b/ui/camera_configuration.py
+@@ -8,6 +8,7 @@ from collections.abc import Callable
+ from typing import Any
+ 
+ import customtkinter as ctk
++from ui.scrolling import ScrollableFrame
+ 
+ from api.camera_manager import probe_ip_camera, scan_usb_cameras, test_ip_camera
+ from api.camera_store import (
+@@ -163,7 +164,7 @@ class CameraConfigurationSection(ctk.CTkFrame):
+ 
+     self._add_modal: ctk.CTkToplevel | None = None
+ 
+-    self._list_host = ctk.CTkScrollableFrame(self, fg_color="transparent", height=220)
++    self._list_host = ScrollableFrame(self, fg_color="transparent", height=220)
+     self._list_host.pack(fill="both", expand=True, padx=PADDING, pady=(0, 8))
+ 
+     stream = ctk.CTkFrame(self, fg_color="transparent")
+diff --git a/ui/components.py b/ui/components.py
+index 3162c25..7f6cacf 100644
+--- a/ui/components.py
++++ b/ui/components.py
+@@ -239,52 +239,9 @@ class MirrorController:
+ 
+ 
+ def enable_trackpad_scroll(scroll_frame) -> None:
+-    """Make a CTkScrollableFrame scroll reliably with the macOS trackpad / mouse wheel.
+-
+-    CustomTkinter binds the wheel globally (``bind_all``) and routes it by walking widget
+-    masters; with several scrollable panels in one app that routing is flaky on macOS, so
+-    the trackpad often does nothing. This binds the wheel directly on the frame's canvas and
+-    every current descendant, forwarding to the canvas and stopping propagation (``"break"``)
+-    so there's exactly one scroll per gesture. Call once after the frame's contents are built.
+-    """
+-    canvas = getattr(scroll_frame, "_parent_canvas", None)
+-    if canvas is None:
+-        return
+-
+-    def _on_wheel(event):
+-        try:
+-            if canvas.yview() != (0.0, 1.0):       # only when there's overflow to scroll
+-                if sys.platform.startswith("win"):
+-                    canvas.yview_scroll(-int(event.delta / 120) or (-1 if event.delta > 0 else 1), "units")
+-                else:                              # macOS + Linux <MouseWheel>
+-                    canvas.yview_scroll(-int(event.delta), "units")
+-        except Exception:
+-            pass
+-        return "break"
+-
+-    def _on_button(direction):
+-        def _handler(_event):
+-            try:
+-                if canvas.yview() != (0.0, 1.0):
+-                    canvas.yview_scroll(direction, "units")
+-            except Exception:
+-                pass
+-            return "break"
+-        return _handler
+-
+-    def _bind(widget):
+-        try:
+-            widget.bind("<MouseWheel>", _on_wheel, add="+")
+-            widget.bind("<Button-4>", _on_button(-1), add="+")   # Linux X11 wheel up
+-            widget.bind("<Button-5>", _on_button(1), add="+")    # Linux X11 wheel down
+-        except Exception:
+-            pass
+-        for child in widget.winfo_children():
+-            _bind(child)
+-
+-    # Binding the canvas recurses into the windowed inner frame and all content widgets,
+-    # covering every widget exactly once.
+-    _bind(canvas)
++    """Compatibility entry point for the shared, idempotent router."""
++    from ui.scrolling import install_scrolling
++    install_scrolling(scroll_frame)
+ 
+ 
+ def make_mirror_button(master, controller: MirrorController, on_toggle=None) -> ctk.CTkButton:
+diff --git a/ui/dashboard.py b/ui/dashboard.py
+index 07ead59..0109ef3 100644
+--- a/ui/dashboard.py
++++ b/ui/dashboard.py
+@@ -14,6 +14,7 @@ from datetime import timezone
+ 
+ import cv2
+ import customtkinter as ctk
++from ui.scrolling import ScrollableFrame
+ import numpy as np
+ from PIL import Image
+ from io import BytesIO
+@@ -31,6 +32,7 @@ from core.performance import PERF, TRACES, measure
+ from core.live_pipeline import LiveProcessor, LiveWorker, MonitorTask, MotionProjection, FaceTrackingProcessor
+ from core.assessment_candidates import (ClearFrameRouter, OBSERVATION_ONLY,
+     CLEAR_FRAME_SELECTION, PRIORITIZED_ASSESSMENT)
++from core.uniform_observation import ObservationUniformSession
+ from ui.live_alerts import LiveAlerts
+ from ui.live_overlay import draw_assessments
+ from core.uniform_matcher import UniformColorMatcher
+@@ -240,12 +242,14 @@ class CBVMSDashboard(WorkspaceWindow):
+         self._notification_out = queue.Queue(maxsize=50)
+         self._stats_out = queue.Queue(maxsize=1)
+         self._stats_busy = threading.Event()
++        self._uniform_observation = ObservationUniformSession.from_environment(observation_only=OBSERVATION_ONLY)
+         self._processor = LiveProcessor(
+             self._database, self._recognizer, self._person_detector,
+             self._trainer, self._uniform_matcher, self._notifier,
+             latest_sample=self._latest_monitor_sample,
+             state=LiveState(LiveConfig(violation_min_confidence=UNIFORM_VIOLATION_CONF)),
+             observation_only=OBSERVATION_ONLY,
++            uniform_observation=self._uniform_observation,
+         )
+         self._monitor_session_id = self._processor.security_session
+         self._monitor_session_started_at = datetime.now(timezone.utc)
+@@ -257,7 +261,9 @@ class CBVMSDashboard(WorkspaceWindow):
+             and task.earring_enabled == self._checker.check_earring)
+         self._processor.readiness = self._readiness
+         self._observation_only = OBSERVATION_ONLY
+-        self._candidate_router = ClearFrameRouter() if (CLEAR_FRAME_SELECTION or PRIORITIZED_ASSESSMENT) else None
++        self._candidate_router = (ClearFrameRouter(fresh_selection=True,ttl=self._uniform_observation.config.frame_ttl)
++            if self._uniform_observation is not None else
++            ClearFrameRouter() if (CLEAR_FRAME_SELECTION or PRIORITIZED_ASSESSMENT) else None)
+         if self._candidate_router is not None:
+             self._gallery_listener = self._on_gallery_revision
+             self._recognizer.add_gallery_listener(self._gallery_listener)
+@@ -400,7 +406,7 @@ class CBVMSDashboard(WorkspaceWindow):
+         # Placed/forgotten dynamically in _update_bell_badge().
+ 
+         # Only the menu shrinks/scrolls; reserve the footer even on short displays.
+-        navigation = ctk.CTkScrollableFrame(
++        navigation = ScrollableFrame(
+             sidebar, height=1, fg_color="transparent", corner_radius=0,
+             scrollbar_button_color=COLOR_BORDER,
+             scrollbar_button_hover_color=COLOR_ACCENT_HOVER,
+@@ -601,6 +607,8 @@ class CBVMSDashboard(WorkspaceWindow):
+             self._view_host,
+             trainer=self._trainer,
+             get_frame=self._get_camera_frame,
++            model_actor_provider=lambda: (None if self._closed.is_set() else
++                self._database.get_staff_session_info(self.staff_session_token)),
+         )),
+             "settings": ("_settings_panel", lambda: SettingsPanel(
+             self._view_host,
+@@ -1526,15 +1534,26 @@ class CBVMSDashboard(WorkspaceWindow):
+ 
+     def _prewarm_models(self) -> None:
+         self._monitor_models.start()
++        candidate = getattr(self,'_uniform_observation',None)
++        if candidate is not None:
++            try:
++                candidate.prepare()
++            except Exception as exc:
++                event('observation_candidate_unavailable',error=str(exc))
+ 
+     def _retry_models(self):
+         self._monitor_models.start(retry=True)
+ 
+     def _on_localized(self, result):
+         """Tracking worker submits its original pixels, landmarks and ownership token."""
++        candidate = getattr(self,'_uniform_observation',None)
++        if (candidate is not None and result.task.valid()
++                and result.task.context.generation == self._monitor_generation
++                and result.task.camera_generation == self._camera_generation):
++            result = replace(result,task=candidate.observe(result.task,result.observations))
+         candidate_observation_route = (getattr(self, "_observation_only", False)
+             and getattr(self, "_candidate_router", None) is not None
+-            and (CLEAR_FRAME_SELECTION or PRIORITIZED_ASSESSMENT))
++            and (CLEAR_FRAME_SELECTION or PRIORITIZED_ASSESSMENT or candidate is not None))
+         if (not result.task.valid() or not self._readiness.ready('recognition')
+                 or result.task.context.generation != self._monitor_generation
+                 or result.task.camera_generation != self._camera_generation
+@@ -1545,7 +1564,7 @@ class CBVMSDashboard(WorkspaceWindow):
+             if getattr(self, "_candidate_router", None) is not None:
+                 self._candidate_router.observe(result,
+                     prioritize=PRIORITIZED_ASSESSMENT,
+-                    select=CLEAR_FRAME_SELECTION)
++                    select=CLEAR_FRAME_SELECTION or candidate is not None)
+                 self._dispatch_assessment_candidate()
+                 return
+             else:
+@@ -1576,6 +1595,9 @@ class CBVMSDashboard(WorkspaceWindow):
+         router = getattr(self, "_candidate_router", None)
+         if router is not None:
+             router.reset()
++        candidate = getattr(self,'_uniform_observation',None)
++        if candidate is not None:
++            candidate.invalidate()
+ 
+     def _latest_monitor_sample(self):
+         """Worker-safe read; never starts devices or touches Tk."""
+@@ -1609,6 +1631,9 @@ class CBVMSDashboard(WorkspaceWindow):
+         self._tracking_times.clear()
+         if getattr(self, "_candidate_router", None) is not None:
+             self._candidate_router.reset()
++        candidate = getattr(self,'_uniform_observation',None)
++        if candidate is not None:
++            candidate.invalidate()
+         _drain(self._live_worker.requests)
+         _drain(self._live_worker.results)
+         if getattr(self, "_alerts_scroll", None) is not None:
+@@ -1644,7 +1669,7 @@ class CBVMSDashboard(WorkspaceWindow):
+                         assessed.update(face_box=current['face_box'],torso_box=current['torso_box'])
+                         if current['torso_box'] is None and assessed.get('state') != 'Enrollment review':
+                             assessed.update(state='Uniform not assessed',reason=current['reason'],
+-                                            detail=current['reason'],accepted_categories=())
++                                            detail=current['reason'],accepted_categories=(),garment=None)
+                         current=assessed
+                 combined.append(current)
+             return combined
+@@ -1669,6 +1694,14 @@ class CBVMSDashboard(WorkspaceWindow):
+         for assessment in result.assessments:
+             row = asdict(assessment)
+             row.update(observed_at=result.task.observed_at, detail=assessment.reason)
++            candidate = getattr(self,'_uniform_observation',None)
++            if candidate is not None and assessment.garment is not None:
++                ticket = next((t for t in result.task.uniform_tickets or ()
++                    if t.key[-2:]==(assessment.track_id,assessment.presence_id)),None)
++                if ticket is None or not candidate.result_valid(assessment.garment,ticket):
++                    row.update(state='Unable to assess',garment=None,
++                        reason='Candidate evidence expired or association changed',
++                        detail='Candidate evidence expired or association changed')
+             projection = projections.get(assessment.track_id)
+             if sample.frame_id == result.task.context.frame_id:
+                 box = assessment.face_box
+@@ -1724,6 +1757,9 @@ class CBVMSDashboard(WorkspaceWindow):
+                 self._halt_camera()
+             if self._active_nav == "live":
+                 model_message = self._readiness.message()
++                candidate = getattr(self,'_uniform_observation',None)
++                if candidate is not None:
++                    model_message += ' · '+candidate.status_text()
+                 if model_message != getattr(self, '_model_status_text', None):
+                     self._status_models.configure(text=model_message)
+                     self._model_status_text = model_message
+diff --git a/ui/enrollment.py b/ui/enrollment.py
+index d223df6..9f924e3 100644
+--- a/ui/enrollment.py
++++ b/ui/enrollment.py
+@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Callable
+ 
+ import cv2
+ import customtkinter as ctk
++from ui.scrolling import ScrollableFrame
+ import numpy as np
+ from PIL import Image, ImageTk
+ 
+@@ -882,7 +883,7 @@ class EnrollmentPanel(ctk.CTkFrame):
+         ).grid(row=1, column=0, sticky="w", padx=PADDING_LG, pady=(2, 14))
+ 
+         card.grid_rowconfigure(2, weight=1)
+-        form = ctk.CTkScrollableFrame(card, fg_color="transparent", height=310)
++        form = ScrollableFrame(card, fg_color="transparent", height=310)
+         form.grid(row=2, column=0, sticky="nsew", padx=PADDING_LG, pady=(0, 4))
+         form.grid_columnconfigure(1, weight=1)
+ 
+diff --git a/ui/live_alerts.py b/ui/live_alerts.py
+index b4d3681..6d0bccb 100644
+--- a/ui/live_alerts.py
++++ b/ui/live_alerts.py
+@@ -16,6 +16,7 @@ from typing import Iterable, Mapping
+ from core.attendance import MANILA
+ 
+ import customtkinter as ctk
++from ui.scrolling import ScrollableFrame
+ from PIL import Image, ImageTk
+ from core.attendance import MANILA
+ 
+@@ -37,6 +38,10 @@ _STATE_LABELS = {
+     "uniform_not_assessed": ("Uniform not assessed", COLOR_TEXT_MUTED),
+     "enrollment_review": ("Enrollment review", "#C778DD"),
+     "unknown_person": ("Unknown person", COLOR_WARNING),
++    "campus_uniform_recognized": ("Campus Uniform recognized", COLOR_ACCENT),
++    "organizational_shirt_recognized": ("Organizational Shirt recognized", COLOR_ACCENT),
++    "other_clothing_recognized": ("Other clothing recognized", COLOR_ACCENT),
++    "unable_to_assess": ("Unable to assess", COLOR_TEXT_MUTED),
+ }
+ 
+ 
+@@ -244,7 +249,7 @@ class _PresenceCard(ctk.CTkFrame):
+         self._presentation = values
+ 
+ 
+-class LiveAlerts(ctk.CTkScrollableFrame):
++class LiveAlerts(ScrollableFrame):
+     """Tk-thread-only sidebar: stable widgets, wrapped text, no forced scrolling."""
+ 
+     def __init__(self, master, *, max_cards: int = 50, **kwargs) -> None:
+diff --git a/ui/multi_select_checklist.py b/ui/multi_select_checklist.py
+index e1dd104..6c79441 100644
+--- a/ui/multi_select_checklist.py
++++ b/ui/multi_select_checklist.py
+@@ -1,6 +1,7 @@
+ """Compact keyboard-friendly multi-select checklist for report filters."""
+ import tkinter as tk
+ import customtkinter as ctk
++from ui.scrolling import ScrollableFrame
+ 
+ 
+ def selection_after_toggle(values, selected, value, checked):
+@@ -43,7 +44,7 @@ class MultiSelectChecklist(ctk.CTkFrame):
+         win.bind('<Escape>',lambda _e:win.destroy())
+         search=tk.StringVar(); entry=ctk.CTkEntry(win,textvariable=search,placeholder_text='Search options'); entry.pack(fill='x',padx=10,pady=8)
+         controls=ctk.CTkFrame(win,fg_color='transparent'); controls.pack(fill='x',padx=8)
+-        scroll=ctk.CTkScrollableFrame(win); scroll.pack(fill='both',expand=True,padx=8,pady=8)
++        scroll=ScrollableFrame(win); scroll.pack(fill='both',expand=True,padx=8,pady=8)
+         checks={}
+         initial=set(self.values if self.selected is None else self.selected)
+         all_mode=self.selected is None
+diff --git a/ui/notifications_panel.py b/ui/notifications_panel.py
+index 8db23ed..1f13136 100644
+--- a/ui/notifications_panel.py
++++ b/ui/notifications_panel.py
+@@ -6,6 +6,7 @@ from datetime import datetime
+ from typing import TYPE_CHECKING, Callable
+ 
+ import customtkinter as ctk
++from ui.scrolling import ScrollableFrame
+ from core.discipline import parse_db_datetime
+ from core.notifier import Notification
+ 
+@@ -65,7 +66,7 @@ class NotificationsPanel(ctk.CTkFrame):
+         self._build_categories()
+         self._build_filter()
+ 
+-        self._list = ctk.CTkScrollableFrame(self, fg_color="transparent")
++        self._list = ScrollableFrame(self, fg_color="transparent")
+         self._list.grid(row=3, column=0, sticky="nsew", padx=PADDING, pady=(0, PADDING))
+         self._list.grid_columnconfigure(0, weight=1)
+ 
+diff --git a/ui/portal_scroll.py b/ui/portal_scroll.py
+index 114e269..8cb1496 100644
+--- a/ui/portal_scroll.py
++++ b/ui/portal_scroll.py
+@@ -3,6 +3,7 @@ import tkinter as tk
+ from tkinter import ttk
+ 
+ import customtkinter as ctk
++from ui.scrolling import install_scrolling
+ 
+ 
+ class PortalScrollFrame(ctk.CTkFrame):
+@@ -22,8 +23,8 @@ class PortalScrollFrame(ctk.CTkFrame):
+         self._layout_job = None
+         self._parent_canvas.bind("<Configure>", self._resize)
+         self.body.bind("<Configure>", self._schedule_region)
+-        self._wheel_root = self.winfo_toplevel()
+-        self._wheel_binding = self._wheel_root.bind("<MouseWheel>", self._wheel, add="+")
++        install_scrolling(self)
++        self._parent_canvas.configure(yscrollincrement=1)
+ 
+     def _resize(self, event):
+         if int(float(self._parent_canvas.itemcget(self._window, "width"))) != event.width:
+@@ -44,19 +45,8 @@ class PortalScrollFrame(ctk.CTkFrame):
+         if region:
+             self._parent_canvas.configure(scrollregion=region)
+ 
+-    def _wheel(self, event):
+-        widget = event.widget
+-        while widget is not None:
+-            if widget is self:
+-                delta = event.delta
+-                units = -int(delta / 120) if abs(delta) >= 120 else -int(delta)
+-                self._parent_canvas.yview_scroll(units, "units")
+-                return "break"
+-            widget = getattr(widget, "master", None)
+-
+     def destroy(self):
+         if self._layout_job is not None:
+             self.after_cancel(self._layout_job)
+             self._layout_job = None
+-        self._wheel_root.unbind("<MouseWheel>", self._wheel_binding)
+         super().destroy()
+diff --git a/ui/records_panel.py b/ui/records_panel.py
+index 2c9fe76..16b52bf 100644
+--- a/ui/records_panel.py
++++ b/ui/records_panel.py
+@@ -15,6 +15,7 @@ from datetime import datetime
+ from tkinter import filedialog, ttk, messagebox
+ 
+ import customtkinter as ctk
++from ui.scrolling import ScrollableFrame
+ from PIL import Image, ImageTk
+ 
+ from database.db_manager import CBVMSDatabase
+@@ -263,7 +264,7 @@ class RecordsPanel(ctk.CTkFrame):
+         self._viol_split.add(right, minsize=int(self._apply_widget_scaling(280)), stretch="never")
+         self._viol_split.bind("<Configure>", self._initialize_violation_split)
+         self._viol_split.bind("<ButtonRelease-1>", self._remember_violation_split, add="+")
+-        self._viol_detail = ctk.CTkScrollableFrame(
++        self._viol_detail = ScrollableFrame(
+             right, fg_color=COLOR_SURFACE,
+             corner_radius=CORNER_RADIUS,
+             border_width=1, border_color=COLOR_BORDER)
+diff --git a/ui/reports_panel.py b/ui/reports_panel.py
+index 3905664..7731865 100644
+--- a/ui/reports_panel.py
++++ b/ui/reports_panel.py
+@@ -4,6 +4,7 @@ import json
+ import tkinter as tk
+ from tkinter import ttk, filedialog, messagebox
+ import customtkinter as ctk
++from ui.scrolling import ScrollableFrame
+ 
+ from core.report_csv import ROSTER, read_csv, write_csv, import_roster
+ from core.report_snapshot import SECTIONS, create_snapshot, export_snapshot_csv, dependent_options, is_current_generation, sort_snapshot
+@@ -42,7 +43,7 @@ class ReportsPanel(ctk.CTkFrame):
+         self.applied_summary=ctk.CTkLabel(self,text='Applied filters: All',anchor='w',justify='left',width=1,wraplength=900,text_color=COLOR_TEXT_MUTED)
+         self.applied_summary.grid(row=1,column=0,sticky='ew',padx=8,pady=(0,5))
+         self.bind('<Configure>', self._resize_summaries, add='+')
+-        self.filter_box=ctk.CTkScrollableFrame(self,fg_color=COLOR_SURFACE,corner_radius=10,height=255);self.filter_box.grid(row=2,column=0,sticky='ew',pady=(0,8))
++        self.filter_box=ScrollableFrame(self,fg_color=COLOR_SURFACE,corner_radius=10,height=255);self.filter_box.grid(row=2,column=0,sticky='ew',pady=(0,8))
+         for col in range(4):self.filter_box.grid_columnconfigure(col,weight=1)
+         self.sections={}
+         for i,name in enumerate(SECTIONS):
+diff --git a/ui/settings.py b/ui/settings.py
+index c1072ec..99131d3 100644
+--- a/ui/settings.py
++++ b/ui/settings.py
+@@ -10,6 +10,7 @@ from typing import Callable
+ from typing import TYPE_CHECKING
+ 
+ import customtkinter as ctk
++from ui.scrolling import ScrollableFrame
+ 
+ from core.trainer import MODULES
+ from core.detection_audio import LABELS
+@@ -87,7 +88,7 @@ class SettingsPanel(ctk.CTkFrame):
+         self._refresh_model_status()
+ 
+     def _build(self) -> None:
+-        scroll = ctk.CTkScrollableFrame(self, fg_color="transparent")
++        scroll = ScrollableFrame(self, fg_color="transparent")
+         scroll.grid(row=0, column=0, sticky="nsew")
+         scroll.grid_columnconfigure(0, weight=1)
+ 
+diff --git a/ui/student_management.py b/ui/student_management.py
+index 6e463c7..b1fcf23 100644
+--- a/ui/student_management.py
++++ b/ui/student_management.py
+@@ -2,6 +2,7 @@
+ import tkinter as tk
+ from tkinter import ttk
+ import customtkinter as ctk
++from ui.scrolling import ScrollableFrame
+ 
+ from ui.academic_fields import AcademicFields
+ from ui.background_task import BackgroundTask
+@@ -62,7 +63,7 @@ def open_student_details(parent, database, student_id, actor, on_saved):
+         term_task=BackgroundTask(term_tab)
+         term_task.run(read_terms,lambda result:term_text.insert('end',json.dumps(result,indent=2,default=str,ensure_ascii=False)),
+                       lambda error:term_text.insert('end',error))
+-        form = ctk.CTkScrollableFrame(details, fg_color=COLOR_SURFACE)
++        form = ScrollableFrame(details, fg_color=COLOR_SURFACE)
+         form.pack(fill="both", expand=True)
+         ctk.CTkLabel(form, text=f"{student['name']} · {student_id}", font=heading_font(16),
+                      text_color=COLOR_TEXT).pack(anchor="w", pady=8)
+@@ -102,7 +103,7 @@ def open_student_details(parent, database, student_id, actor, on_saved):
+                       corner_radius=CORNER_RADIUS, command=save)
+         save_button.pack(fill="x", pady=8)
+ 
+-        log = ctk.CTkScrollableFrame(history, fg_color=COLOR_SURFACE)
++        log = ScrollableFrame(history, fg_color=COLOR_SURFACE)
+         log.pack(fill="both", expand=True)
+         messages = []
+         for item in history_rows:
+diff --git a/ui/suspension_overview.py b/ui/suspension_overview.py
+index 8a181b5..432afb4 100644
+--- a/ui/suspension_overview.py
++++ b/ui/suspension_overview.py
+@@ -4,6 +4,7 @@ import tkinter as tk
+ from tkinter import ttk
+ 
+ import customtkinter as ctk
++from ui.scrolling import ScrollableFrame
+ 
+ from core.academics import COLLEGES, YEAR_LEVELS, NEEDS_REVIEW, courses_for, COURSES
+ from core.discipline import parse_db_datetime, violation_display_name
+@@ -161,7 +162,7 @@ class SuspensionsWorkspace(ctk.CTkFrame):
+         self.nav.set('Overview')
+         self.host=ctk.CTkFrame(self,fg_color='transparent')
+         self.host.grid(row=2,column=0,sticky='nsew'); self.host.grid_columnconfigure(0,weight=1); self.host.grid_rowconfigure(0,weight=1)
+-        self.overview=ctk.CTkScrollableFrame(self.host,fg_color=COLOR_BG)
++        self.overview=ScrollableFrame(self.host,fg_color=COLOR_BG)
+         self.overview.grid(row=0,column=0,sticky='nsew'); self.overview.grid_columnconfigure(0,weight=1)
+         enable_trackpad_scroll(self.overview)
+         self._build_overview()
+diff --git a/ui/suspensions_panel.py b/ui/suspensions_panel.py
+index c930da8..6be9a47 100644
+--- a/ui/suspensions_panel.py
++++ b/ui/suspensions_panel.py
+@@ -6,6 +6,7 @@ import tkinter as tk
+ from tkinter import ttk
+ 
+ import customtkinter as ctk
++from ui.scrolling import ScrollableFrame
+ 
+ from core.discipline import parse_db_datetime, utc_now, violation_display_name
+ from core.academics import YEAR_LEVELS, legacy_year_section, resolve_pair, NEEDS_REVIEW, display_academics
+@@ -244,7 +245,7 @@ class SuspensionsPanel(ctk.CTkFrame):
+ 
+         # Suspensions is a summary page. History and lifting belong together
+         # on Violation History, where staff can select the suspension to lift.
+-        history_frame = ctk.CTkScrollableFrame if self.history_view == "violations" else ctk.CTkFrame
++        history_frame = ScrollableFrame if self.history_view == "violations" else ctk.CTkFrame
+         self._history_area = history_frame(self, fg_color=COLOR_SURFACE,
+                                         corner_radius=CORNER_RADIUS)
+         if self.history_view == "violations":
+diff --git a/ui/training_panel.py b/ui/training_panel.py
+index 6be5736..bb63fd9 100644
+--- a/ui/training_panel.py
++++ b/ui/training_panel.py
+@@ -8,6 +8,7 @@ import subprocess
+ import sys
+ import threading
+ import time
++import uuid
+ from datetime import datetime
+ from pathlib import Path
+ from tkinter import filedialog
+@@ -15,6 +16,7 @@ from typing import Callable
+ 
+ import cv2
+ import customtkinter as ctk
++from ui.scrolling import ScrollableFrame
+ import numpy as np
+ from PIL import Image, ImageOps
+ 
+@@ -69,21 +71,11 @@ _MODULE_TABS = [
+ ]
+ 
+ _HELP_TEXT = (
+-    "Photos you upload or capture build the reference set for each check.\n\n"
+-    f"Minimum {MIN_SAMPLES_PER_CLASS} photos per class is recommended. "
+-    "More diverse photos (different angles, lighting, people) = better accuracy.\n\n"
+-    "UNIFORM: live detection uses a pretrained-image-embedding 'fingerprint' built "
+-    "automatically from your CORRECT-uniform photos (no gradient training needed — just add "
+-    "good correct photos and it rebuilds), cross-checked by a uniform-colour match.\n"
+-    "IMPORTANT: reference photos must look like the LIVE view — a CHEST/TORSO close-up of the "
+-    "shirt (like a webcam selfie), NOT full-body shots where the uniform is tiny and the "
+-    "background fills the frame. The most reliable way is 'Capture from Camera' here, framed on "
+-    "your chest. A few dozen good chest-framed photos beat hundreds of full-body ones. A few "
+-    "'wrong uniform' photos help calibrate the threshold.\n\n"
+-    "EARRING: trains a YOLOv8 image classifier — provide a BALANCED set (roughly as many "
+-    "'with' as 'without' photos). 'Evaluate Model' tests on held-out photos the model never "
+-    "trained on, so its accuracy reflects real-world performance. Everything runs on your "
+-    "machine."
++    "Uniform Check uses a separate review dataset and isolated candidate training. Uploads do not rebuild "
++    "or replace the active model. Review labels, crops, provenance and quality first.\n\n"
++    "Earring Check retains its existing training workflow. A minimum photo count is "
++    "only a software requirement, not evidence of accuracy. Independent people, "
++    "capture sessions and conditions are needed for meaningful evaluation."
+ )
+ 
+ 
+@@ -128,11 +120,14 @@ class TrainingPanel(ctk.CTkFrame):
+         *,
+         trainer: ViolationTrainer,
+         get_frame: Callable[[], np.ndarray | None],
++        model_actor_provider=None,
+         **kwargs,
+     ) -> None:
+         super().__init__(master, fg_color=COLOR_BG, **kwargs)
+         self.trainer = trainer
+         self.get_frame = get_frame
++        self.model_actor_provider = model_actor_provider
++        self._uniform_capture_group = "camera-session:" + uuid.uuid4().hex
+ 
+         # Per-module widget references and runtime state
+         self._ui: dict[str, dict] = {}
+@@ -172,8 +167,18 @@ class TrainingPanel(ctk.CTkFrame):
+             tab = tabview.add(title)
+             self._ui[module] = {}
+             self._training[module] = False
+-            self._build_module_tab(tab, module)
+-            self._refresh_counts(module)
++            if module == "uniform":
++                from ui.uniform_workspace import UniformWorkspace
++                tab.grid_columnconfigure(0, weight=1)
++                tab.grid_rowconfigure(0, weight=1)
++                self._uniform_workspace = UniformWorkspace(tab,
++                    model_actor_provider=self.model_actor_provider,
++                    capture=lambda category: self._open_capture_screen("uniform_stage1", category),
++                    training_busy=lambda: any(self._training.values()) or any(self._evaluating.values()))
++                self._uniform_workspace.grid(row=0, column=0, sticky="nsew")
++            else:
++                self._build_module_tab(tab, module)
++                self._refresh_counts(module)
+ 
+         references = tabview.add('DYCI Logo & Digital Shirts')
+         self._reference_task = BackgroundTask(self)
+@@ -181,8 +186,9 @@ class TrainingPanel(ctk.CTkFrame):
+             font=heading_font()).pack(anchor='w', padx=20, pady=(20, 8))
+         ctk.CTkLabel(references, text=(
+             'Save approved DYCI logos and digital shirt designs at full resolution.\n'
+-            'Artwork is kept separate from camera training photos. Use real chest-framed photos\n'
+-            'with visible logos in Uniform Check to train and evaluate detection accuracy.'),
++            'Artwork is kept separate from photographed training examples and is not training evidence.\n'
++            'Review actual white printed crests and their torso association in Uniform Check.\n'
++            'Optional logo verifier: Not trained; disabled. The crest can appear on more than one garment category.'),
+             justify='left', wraplength=800, text_color=COLOR_TEXT_MUTED).pack(anchor='w', padx=20, pady=8)
+         for kind, title in KINDS.items():
+             ctk.CTkButton(references, text=f'Save {title}',
+@@ -232,7 +238,7 @@ class TrainingPanel(ctk.CTkFrame):
+             self._build_class_column(left, module, label, col)
+ 
+         # RIGHT — training controls (scrollable: results card can be tall)
+-        right = ctk.CTkScrollableFrame(tab, fg_color="transparent")
++        right = ScrollableFrame(tab, fg_color="transparent")
+         right.grid(row=0, column=1, sticky="nsew", pady=PADDING)
+         self._build_training_controls(right, module)
+ 
+@@ -259,7 +265,7 @@ class TrainingPanel(ctk.CTkFrame):
+         count_badge.grid(row=0, column=1, sticky="e")
+ 
+         # Thumbnail grid (3 columns)
+-        thumbs = ctk.CTkScrollableFrame(
++        thumbs = ScrollableFrame(
+             frame, fg_color=COLOR_BG, corner_radius=CORNER_RADIUS, height=170,
+         )
+         thumbs.grid(row=1, column=0, sticky="nsew", padx=PADDING, pady=(0, 8))
+@@ -649,7 +655,7 @@ class TrainingPanel(ctk.CTkFrame):
+         ctk.CTkLabel(strip_card, text="Captured photos  ·  not saved yet",
+                      font=body_small_font(), text_color=COLOR_TEXT_MUTED).grid(
+             row=0, column=0, sticky="w", padx=12, pady=(10, 4))
+-        strip = ctk.CTkScrollableFrame(strip_card, fg_color="transparent",
++        strip = ScrollableFrame(strip_card, fg_color="transparent",
+                                        orientation="horizontal", height=84)
+         strip.grid(row=1, column=0, sticky="ew", padx=8, pady=(0, 10))
+         state["strip"] = strip
+@@ -973,7 +979,7 @@ class TrainingPanel(ctk.CTkFrame):
+                       hover_color=COLOR_ACCENT_HOVER, font=body_small_font(),
+                       command=lambda: self._back_to_camera(state)).grid(row=0, column=1, sticky="e")
+ 
+-        grid = ctk.CTkScrollableFrame(review, fg_color=COLOR_SURFACE, corner_radius=CORNER_RADIUS,
++        grid = ScrollableFrame(review, fg_color=COLOR_SURFACE, corner_radius=CORNER_RADIUS,
+                                       border_width=1, border_color=COLOR_BORDER)
+         grid.grid(row=1, column=0, sticky="nsew", padx=PADDING)
+         cols = 6
+@@ -1066,6 +1072,24 @@ class TrainingPanel(ctk.CTkFrame):
+ 
+     def _save_changes(self, state: dict) -> None:
+         module, label = state["module"], state["label"]
++        if module == "uniform_stage1":
++            if state.get("saving"):
++                return
++            frames = tuple(state["buffer"])
++            state["saving"] = True
++            def done(_value):
++                state["buffer"] = []
++                state["saving"] = False
++                if self._capture_state is state:
++                    self._close_capture_screen()
++            def error(message):
++                if not self._uniform_workspace.task.busy:
++                    state["saving"] = False
++                show_toast(self, message, type="error")
++            accepted = self._uniform_workspace.import_frames(frames, label, self._uniform_capture_group, done, error)
++            if not accepted:
++                state["saving"] = False
++            return
+         n = 0
+         for frame in state["buffer"]:
+             try:
+@@ -1117,12 +1141,14 @@ class TrainingPanel(ctk.CTkFrame):
+         self._capture_state = None
+         if self._tabview is not None:
+             self._tabview.grid()
+-        if module is not None:
++        if module == "uniform_stage1":
++            self._uniform_workspace.refresh()
++        elif module is not None:
+             self._refresh_thumbnails(module, label)
+             self._refresh_counts(module)
+ 
+     def on_show(self) -> None:
+-        return
++        self._uniform_workspace.refresh()
+ 
+     def on_hide(self) -> None:
+         # Leaving Training mid-capture: stop the camera loop and restore the tabs.
+@@ -1156,7 +1182,15 @@ class TrainingPanel(ctk.CTkFrame):
+         eval_state = "normal" if (enabled and self.trainer.is_trained(module)) else "disabled"
+         controls["evaluate_btn"].configure(state=eval_state)
+ 
++    def _candidate_job_blocks(self) -> bool:
++        if self._uniform_workspace.candidate_busy():
++            show_toast(self, 'Finish or cancel the uniform candidate operation first.', type='warning')
++            return True
++        return False
++
+     def _start_training(self, module: str) -> None:
++        if self._candidate_job_blocks():
++            return
+         if self._training.get(module):
+             return
+         self._training[module] = True
+@@ -1204,6 +1238,8 @@ class TrainingPanel(ctk.CTkFrame):
+     # ------------------------------------------------------------------
+ 
+     def _start_evaluation(self, module: str) -> None:
++        if self._candidate_job_blocks():
++            return
+         if self._training.get(module) or self._evaluating.get(module):
+             return
+         if not self.trainer.is_trained(module):
+diff --git a/ui/window_lifecycle.py b/ui/window_lifecycle.py
+index 7283ad8..029461e 100644
+--- a/ui/window_lifecycle.py
++++ b/ui/window_lifecycle.py
+@@ -4,6 +4,11 @@ import customtkinter as ctk
+ 
+ 
+ class WorkspaceWindow(ctk.CTk):
++    def __init__(self, *args, **kwargs):
++        super().__init__(*args, **kwargs)
++        from ui.scrolling import install_scrolling
++        install_scrolling(self)
++
+     def destroy(self):
+         if getattr(self, "_destroying", False):
+             return

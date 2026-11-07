@@ -1,0 +1,3 @@
+Applied providers: ['CPUExecutionProvider'], with options: {'CPUExecutionProvider': {}}
+Applied providers: ['CPUExecutionProvider'], with options: {'CPUExecutionProvider': {}}
+{"output": "output/uniform-walkthrough-evaluation/replay-telemetry-smoke.json", "observation_only": true, "labeled_passages": 0, "accuracy_status": "unavailable_no_passages"}

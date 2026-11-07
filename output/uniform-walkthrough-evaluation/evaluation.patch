@@ -1,0 +1,1674 @@
+--- /dev/null
++++ b/core/uniform_walkthrough.py
+@@ -0,0 +1,594 @@
++"""Human-labeled, all-passage scoring for paced camera replay.
++
++Annotations are independent ground truth. Predictions are joined through the
++tracked observation presence/track keys and never used to create passage labels.
++"""
++from __future__ import annotations
++
++import math
++
++from core.uniform_model_registry import CLASSES
++from core.uniform_latency import distribution as latency_distribution
++
++MATCH_IOU = 0.25
++MAX_HISTORY = 10_000
++_POLICY_LABELS = {"compliant", "violation"}
++
++
++def box_iou(a, b):
++    x1, y1 = max(a[0], b[0]), max(a[1], b[1])
++    x2, y2 = min(a[2], b[2]), min(a[3], b[3])
++    inter = max(0.0, x2 - x1) * max(0.0, y2 - y1)
++    union = max(0.0, (a[2]-a[0])*(a[3]-a[1])) + max(0.0, (b[2]-b[0])*(b[3]-b[1])) - inter
++    return inter / union if union > 0 else 0.0
++
++
++def _time(value, name, *, optional=True):
++    if value is None and optional:
++        return None
++    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
++        raise ValueError(f"Invalid {name} timestamp")
++    return float(value)
++
++
++def _box(value, frame_size=None):
++    if value is None:
++        return None
++    if not isinstance(value, (tuple, list)) or len(value) != 4:
++        raise ValueError("Reviewed boxes must contain four coordinates")
++    if any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) for v in value):
++        raise ValueError("Reviewed box coordinates must be finite numbers")
++    x1, y1, x2, y2 = map(float, value)
++    if x1 < 0 or y1 < 0 or x2 <= x1 or y2 <= y1:
++        raise ValueError("Reviewed box has invalid bounds")
++    if frame_size is not None:
++        width, height = frame_size
++        if x2 > width or y2 > height:
++            raise ValueError("Reviewed box extends outside the source raster")
++    return [x1, y1, x2, y2]
++
++
++def _prediction_garment(assessment):
++    garment = getattr(assessment, "garment", None)
++    value = getattr(garment, "label", None) if garment is not None else None
++    return value if value in CLASSES else None
++
++
++def _prediction_policy(assessment):
++    garment = getattr(assessment, "garment", None)
++    value = getattr(garment, "policy_outcome", None) if garment is not None else None
++    if value in _POLICY_LABELS:
++        return value
++    legacy = getattr(assessment, "uniform_assessment", None)
++    legacy = getattr(legacy, "value", legacy)
++    return {"correct_uniform": "compliant", "wrong_uniform": "violation"}.get(legacy)
++
++
++class WalkthroughMetrics:
++    """Aggregate independently annotated passages and per-frame associations."""
++
++    def __init__(self, *, history_limit=MAX_HISTORY):
++        if type(history_limit) is not int or not 1 <= history_limit <= MAX_HISTORY:
++            raise ValueError("history_limit must be in 1..10000")
++        self.history_limit = history_limit
++        self.passages = {}
++        self.frames = {}
++        self.last_annotated_frame = -1
++        self.dropped_frame_history = 0
++        self.dropped_result_history = 0
++        self.dropped_passages = 0
++        self.history_used = 0
++        self.logical_ids_used = 0
++        self.scoring_truncated = False
++        self.unmatched_results = 0
++        self._matched_presence_by_frame = {}
++        self._association_by_frame_presence = {}
++
++    @staticmethod
++    def _new_passage(alias):
++        return {
++            "passage_alias": alias, "truth": {}, "frame_rows": [], "frames_seen": 0,
++            "detected": False, "missed": True, "first_detection_ms": None,
++            "first_face_ms": None, "first_body_ms": None, "first_torso_ms": None,
++            "association_correct": False, "association_mismatch": False,
++            "association_unscorable": False, "wrong_person_association": False,
++            "prediction_presence_ids": set(), "prediction_logical_ids": set(), "duplicate_logical_result_ids": 0,
++            "result_rows": [],
++            "attempts": 0, "unassessed_attempts": 0, "late_results": 0,
++            "timeout": False, "first_decision_ms": None, "first_decision_label": None,
++            "first_policy_ms": None, "first_policy_label": None,
++            "correct_before_exit": False, "first_correct_recognition_ms": None,
++            "any_wrong_before_exit": False, "first_associated_result_ms": None,
++            "garment_assessed_before_exit": False, "policy_assessed_before_exit": False,
++            "first_result_ms": None,
++            "first_result_after_usable_ms": None,
++        }
++
++    def _store_history(self, state, row, kind):
++        if self.history_used >= self.history_limit:
++            self.scoring_truncated = True
++            if kind == "frame":
++                self.dropped_frame_history += 1
++            else:
++                self.dropped_result_history += 1
++            return False
++        self.history_used += 1
++        if kind == "frame":
++            state["frame_rows"].append(row)
++        else:
++            state["result_rows"].append(row)
++        return True
++
++    def observe_frame(self, frame_index, media_ms, people, *, frame_size=None):
++        if type(frame_index) is not int or frame_index < 0:
++            raise ValueError("frame_index must be a nonnegative integer")
++        media_ms = _time(media_ms, "media", optional=False)
++        if frame_index <= self.last_annotated_frame:
++            raise ValueError("Annotation frame rows must be unique and ordered by frame_index")
++        self.last_annotated_frame = frame_index
++        if not isinstance(people, list):
++            raise ValueError("people annotations must be a list")
++        if len(people) > 100:
++            raise ValueError("At most 100 person rows are allowed per frame")
++        frame_people = {}
++        for row in people:
++            if not isinstance(row, dict):
++                raise ValueError("Each person annotation must be an object")
++            alias = row.get("passage_alias")
++            if not isinstance(alias, str) or not alias.strip() or len(alias) > 160:
++                raise ValueError("Each labeled passage requires a bounded passage_alias")
++            alias = alias.strip()
++            if alias in frame_people:
++                raise ValueError("Duplicate passage_alias in one frame annotation row")
++            if alias not in self.passages:
++                if len(self.passages) >= self.history_limit:
++                    self.dropped_passages += 1
++                    self.scoring_truncated = True
++                    continue
++                self.passages[alias] = self._new_passage(alias)
++            state = self.passages[alias]
++            truth = state["truth"]
++            updates = {
++                "garment_label": row.get("garment_label"),
++                "policy_label": row.get("policy_label"),
++                "scenario": row.get("scenario"),
++                "camera": row.get("camera", row.get("camera_label")),
++                "camera_mode": row.get("camera_mode"),
++                "zone_entry_ms": row.get("zone_entry_ms"),
++                "zone_exit_ms": row.get("zone_exit_ms"),
++                "first_usable_torso_ms": row.get("first_usable_torso_ms"),
++                "first_usable_face_ms": row.get("first_usable_face_ms"),
++                "usable_torso_status": row.get("usable_torso_status"),
++                "usable_face_status": row.get("usable_face_status"),
++            }
++            if updates["garment_label"] is not None and updates["garment_label"] not in CLASSES:
++                raise ValueError("Invalid garment ground truth")
++            if updates["policy_label"] == "unknown":
++                updates["policy_label"] = None
++                truth["policy_label_explicit_unknown"] = True
++            elif updates["policy_label"] is not None and updates["policy_label"] not in _POLICY_LABELS:
++                raise ValueError("Invalid policy ground truth")
++            for key in ("zone_entry_ms", "zone_exit_ms", "first_usable_torso_ms", "first_usable_face_ms"):
++                updates[key] = _time(updates[key], key)
++            for kind in ("torso", "face"):
++                status_key = f"usable_{kind}_status"
++                timestamp_key = f"first_usable_{kind}_ms"
++                status = updates[status_key]
++                if status is None:
++                    status = "visible" if updates[timestamp_key] is not None else "unknown"
++                if status not in {"visible", "never_usable", "unknown"}:
++                    raise ValueError(f"{status_key} must be visible, never_usable, or unknown")
++                if status == "visible" and updates[timestamp_key] is None:
++                    raise ValueError(f"{status_key}=visible requires {timestamp_key}")
++                if status != "visible" and updates[timestamp_key] is not None:
++                    raise ValueError(f"{timestamp_key} requires {status_key}=visible")
++                updates[status_key] = status
++            for key in ("scenario", "camera", "camera_mode"):
++                if updates[key] is not None and (not isinstance(updates[key], str) or len(updates[key]) > 160):
++                    raise ValueError(f"Invalid {key} annotation")
++            if updates["camera_mode"] is not None and updates["camera_mode"] not in {
++                "color", "infrared", "unknown",
++            }:
++                raise ValueError("camera_mode must be color, infrared, or unknown")
++            for key, value in updates.items():
++                if value is None:
++                    continue
++                if key in truth and truth[key] != value:
++                    raise ValueError(f"Conflicting passage annotation for {alias}: {key}")
++                truth[key] = value
++            if (truth.get("zone_entry_ms") is not None and truth.get("zone_exit_ms") is not None
++                    and truth["zone_exit_ms"] < truth["zone_entry_ms"]):
++                raise ValueError("zone_exit_ms precedes zone_entry_ms")
++            for key in ("first_usable_torso_ms", "first_usable_face_ms"):
++                if truth.get(key) is not None and truth.get("zone_entry_ms") is not None and truth[key] < truth["zone_entry_ms"]:
++                    raise ValueError(f"{key} precedes zone entry")
++                if truth.get(key) is not None and truth.get("zone_exit_ms") is not None and truth[key] > truth["zone_exit_ms"]:
++                    raise ValueError(f"{key} follows zone exit")
++            frame = {"passage_alias": alias, "face_box": _box(row.get("face_box"), frame_size),
++                     "body_box": _box(row.get("body_box"), frame_size),
++                     "torso_box": _box(row.get("torso_box"), frame_size), "media_ms": media_ms}
++            state["frames_seen"] += 1
++            if self._store_history(state, {"frame_index": frame_index, **frame}, "frame"):
++                frame_people[alias] = frame
++        if frame_people and len(self.frames) < self.history_limit:
++            self.frames[frame_index] = frame_people
++        else:
++            if frame_people:
++                self.dropped_frame_history += 1
++                self.scoring_truncated = True
++
++    @staticmethod
++    def _face_matches(frame_people, observations):
++        pairs = []
++        aliases = list(frame_people)
++        for li, alias in enumerate(aliases):
++            face = frame_people[alias].get("face_box")
++            if face is None:
++                continue
++            for oi, observation in enumerate(observations):
++                detected_face = getattr(observation, "box", None)
++                if detected_face is None:
++                    continue
++                try:
++                    score = box_iou(face, detected_face)
++                except (TypeError, ValueError, IndexError):
++                    continue
++                if score >= MATCH_IOU:
++                    pairs.append((score, alias, oi))
++        pairs.sort(reverse=True, key=lambda item: item[0])
++        used_aliases, used_observations, matched = set(), set(), {}
++        for _, alias, oi in pairs:
++            if alias not in used_aliases and oi not in used_observations:
++                used_aliases.add(alias)
++                used_observations.add(oi)
++                matched[alias] = oi
++        return matched
++
++    def record_detections(self, frame_index, media_ms, observations):
++        frame_people = self.frames.get(frame_index)
++        if frame_people is None:
++            return {}
++        media_ms = _time(media_ms, "detection", optional=False)
++        observations = tuple(observations or ())
++        matches = self._face_matches(frame_people, observations)
++        presence_map = {}
++        association_map = {}
++        for alias, oi in matches.items():
++            observation = observations[oi]
++            presence_id = getattr(observation, "presence_id", None)
++            if not isinstance(presence_id, str) or not presence_id:
++                continue
++            presence_map[presence_id] = alias
++            state = self.passages[alias]
++            state["detected"] = True
++            state["missed"] = False
++            if state["first_detection_ms"] is None:
++                state["first_detection_ms"] = media_ms
++            gt = frame_people[alias]
++            if gt.get("face_box") is not None and state["first_face_ms"] is None:
++                state["first_face_ms"] = media_ms
++            body = getattr(observation, "body_box", None)
++            torso = getattr(observation, "torso_box", None)
++            if gt.get("body_box") is not None and body is not None:
++                try:
++                    if box_iou(gt["body_box"], body) >= MATCH_IOU and state["first_body_ms"] is None:
++                        state["first_body_ms"] = media_ms
++                except (TypeError, ValueError, IndexError):
++                    pass
++            gt_torso = gt.get("torso_box")
++            own_iou = None
++            other_ious = []
++            if gt_torso is not None and torso is not None:
++                try:
++                    own_iou = box_iou(gt_torso, torso)
++                    for other_alias, other in frame_people.items():
++                        if other_alias != alias and other.get("torso_box") is not None:
++                            other_ious.append((other_alias, box_iou(other["torso_box"], torso)))
++                except (TypeError, ValueError, IndexError):
++                    own_iou = None
++            matched_others = [other for other, iou in other_ious if iou >= MATCH_IOU]
++            if own_iou is None:
++                state["association_unscorable"] = True
++                association_map[presence_id] = "unscorable"
++            elif own_iou >= MATCH_IOU and not matched_others:
++                state["association_correct"] = True
++                association_map[presence_id] = "correct"
++                if state["first_torso_ms"] is None:
++                    state["first_torso_ms"] = media_ms
++            elif own_iou < MATCH_IOU and matched_others:
++                state["wrong_person_association"] = True
++                association_map[presence_id] = "wrong_person"
++            elif own_iou < MATCH_IOU:
++                state["association_mismatch"] = True
++                association_map[presence_id] = "mismatch"
++            else:
++                # Both own and neighboring torsos overlap: identity cannot be
++                # assigned from geometry alone, even when their garment labels match.
++                state["association_unscorable"] = True
++                association_map[presence_id] = "unscorable"
++            self._store_history(state, {"frame_index": frame_index,
++                    "detected_face_box": list(getattr(observation, "box", ())),
++                    "detected_body_box": list(body) if body is not None else None,
++                    "detected_torso_box": list(torso) if torso is not None else None,
++                    "matched_ground_truth_alias": alias,
++                    "own_torso_iou": own_iou,
++                    "other_torso_matches": matched_others}, "frame")
++        self._matched_presence_by_frame[frame_index] = presence_map
++        self._association_by_frame_presence[frame_index] = association_map
++        if len(self._matched_presence_by_frame) > self.history_limit:
++            oldest = min(self._matched_presence_by_frame)
++            self._matched_presence_by_frame.pop(oldest, None)
++            self._association_by_frame_presence.pop(oldest, None)
++        return presence_map
++
++    def record_results(self, frame_index, completion_ms, observations, assessments):
++        completion_ms = _time(completion_ms, "completion", optional=False)
++        frame_presence = self._matched_presence_by_frame.get(frame_index, {})
++        frame_associations = self._association_by_frame_presence.get(frame_index, {})
++        observations_by_presence = {
++            getattr(observation, "presence_id", None): observation
++            for observation in (observations or ())
++            if isinstance(getattr(observation, "presence_id", None), str)
++        }
++        seen_assessment_ids = set()
++        for assessment in assessments or ():
++            presence_id = getattr(assessment, "presence_id", None)
++            if not isinstance(presence_id, str) or presence_id in seen_assessment_ids:
++                continue
++            seen_assessment_ids.add(presence_id)
++            observation = observations_by_presence.get(presence_id)
++            if observation is None:
++                continue
++            alias = frame_presence.get(presence_id)
++            if alias is None or alias not in self.passages:
++                self.unmatched_results += 1
++                continue
++            state = self.passages[alias]
++            association_correct = frame_associations.get(presence_id) == "correct"
++            garment_obj = getattr(assessment, "garment", None)
++            logical_id = getattr(garment_obj, "passage_id", None) or presence_id
++            if isinstance(logical_id, str) and logical_id not in state["prediction_logical_ids"]:
++                if state["prediction_logical_ids"]:
++                    state["duplicate_logical_result_ids"] += 1
++                if self.logical_ids_used < self.history_limit:
++                    self.logical_ids_used += 1
++                    state["prediction_logical_ids"].add(logical_id)
++                    state["prediction_presence_ids"].add(presence_id)
++                else:
++                    self.scoring_truncated = True
++            garment = _prediction_garment(assessment)
++            policy = _prediction_policy(assessment)
++            state["attempts"] += 1
++            truth = state["truth"]
++            entry_ms = truth.get("zone_entry_ms")
++            exit_ms = truth.get("zone_exit_ms")
++            after_entry = entry_ms is not None and completion_ms >= entry_ms
++            before_exit = None if exit_ms is None else completion_ms <= exit_ms
++            if after_entry and state["first_result_ms"] is None:
++                state["first_result_ms"] = completion_ms
++            usable = truth.get("first_usable_torso_ms")
++            if (usable is not None and completion_ms >= usable and
++                    state["first_result_after_usable_ms"] is None):
++                state["first_result_after_usable_ms"] = completion_ms
++            reason = getattr(assessment, "reason", None)
++            if reason is None and garment_obj is not None:
++                reason = getattr(garment_obj, "reason", None)
++            self._store_history(state, {"presence_id": presence_id,
++                    "logical_result_id": logical_id,
++                    "completion_media_ms": completion_ms, "garment_label": garment,
++                    "policy_label": policy,
++                    "reason": reason if isinstance(reason, str) else None,
++                    "after_zone_entry": after_entry,
++                    "association": frame_associations.get(presence_id, "unscorable"),
++                    "before_zone_exit": before_exit}, "result")
++            if (not after_entry or before_exit is not True or
++                    truth.get("usable_torso_status") == "never_usable" or
++                    truth.get("usable_face_status") == "never_usable"):
++                if before_exit is False:
++                    state["late_results"] += 1
++                continue
++            if association_correct and state["first_associated_result_ms"] is None:
++                state["first_associated_result_ms"] = completion_ms
++            if garment is None:
++                state["unassessed_attempts"] += 1
++            elif association_correct and state["first_decision_ms"] is None:
++                state["first_decision_ms"] = completion_ms
++                state["first_decision_label"] = garment
++            if garment is not None and association_correct:
++                state["garment_assessed_before_exit"] = True
++            if policy is not None and association_correct and state["first_policy_ms"] is None:
++                state["first_policy_ms"] = completion_ms
++                state["first_policy_label"] = policy
++            if (association_correct and garment is not None and truth.get("garment_label") is not None
++                    and garment != truth["garment_label"]):
++                state["any_wrong_before_exit"] = True
++            if (garment is not None and garment == truth.get("garment_label")
++                    and association_correct):
++                state["correct_before_exit"] = True
++                if state["first_correct_recognition_ms"] is None:
++                    state["first_correct_recognition_ms"] = completion_ms
++            if policy is not None and truth.get("policy_label") is not None and association_correct:
++                state["policy_assessed_before_exit"] = True
++
++    def report(self, *, interval_end_ms=None, input_complete=True):
++        interval_end_ms = _time(interval_end_ms, "interval end")
++        rows = list(self.passages.values())
++        garment_labeled = [p for p in rows if p["truth"].get("garment_label") is not None]
++        missing = {
++            "passage_alias": self.dropped_passages,
++            "garment_label": sum(p["truth"].get("garment_label") is None for p in rows),
++            "policy_label": sum(p["truth"].get("policy_label") is None for p in rows),
++            "zone_entry_ms": sum(p["truth"].get("zone_entry_ms") is None for p in rows),
++            "zone_exit_ms": sum(p["truth"].get("zone_exit_ms") is None for p in rows),
++            "first_usable_torso_ms": sum(p["truth"].get("first_usable_torso_ms") is None for p in rows),
++            "first_usable_face_ms": sum(p["truth"].get("first_usable_face_ms") is None for p in rows),
++            "usable_torso_status": sum(p["truth"].get("usable_torso_status") == "unknown" for p in rows),
++            "usable_face_status": sum(p["truth"].get("usable_face_status") == "unknown" for p in rows),
++            "scenario": sum(p["truth"].get("scenario") is None for p in rows),
++            "camera": sum(p["truth"].get("camera") is None for p in rows),
++            "camera_mode": sum(p["truth"].get("camera_mode") is None for p in rows),
++            "face_box": sum(p["truth"].get("usable_face_status") == "visible" and
++                             not any(r.get("face_box") is not None for r in p["frame_rows"]) for p in rows),
++            "torso_box": sum(p["truth"].get("usable_torso_status") == "visible" and
++                             not any(r.get("torso_box") is not None for r in p["frame_rows"]) for p in rows),
++        }
++        complete_labels = all(missing[key] == 0 for key in (
++            "garment_label", "zone_entry_ms", "zone_exit_ms", "usable_torso_status", "usable_face_status",
++            "face_box", "torso_box"))
++        incomplete_at_cutoff = sum(not input_complete and (
++            p["truth"].get("zone_exit_ms") is None or
++            (interval_end_ms is not None and p["truth"].get("zone_exit_ms", 0) > interval_end_ms))
++            for p in rows)
++        score_complete = complete_labels and incomplete_at_cutoff == 0 and not self.scoring_truncated and bool(rows)
++        scored_correct = sum(p["correct_before_exit"] for p in garment_labeled)
++        denom = len(garment_labeled)
++        class_metrics = {}
++        for category in CLASSES:
++            members = [p for p in garment_labeled if p["truth"].get("garment_label") == category]
++            class_metrics[category] = {
++                "support": len(members),
++                "correct_associated_before_exit": sum(p["correct_before_exit"] for p in members),
++                "recognized_errors": sum(p["any_wrong_before_exit"] or p["wrong_person_association"]
++                                         for p in members),
++                "unassessed": sum(not p["garment_assessed_before_exit"] for p in members),
++            }
++        policy_rows = [p for p in rows if p["truth"].get("policy_label") is not None]
++        policy_scored = [p for p in policy_rows if p["policy_assessed_before_exit"]]
++        policy_false = sum(p["truth"].get("policy_label") == "compliant" and p["first_policy_label"] == "violation"
++                           for p in policy_scored)
++        policy_missed = sum(p["truth"].get("policy_label") == "violation" and p["first_policy_label"] == "compliant"
++                            for p in policy_scored)
++        entry_to_result = []
++        usable_to_result = []
++        entry_to_correct = []
++        usable_to_correct = []
++        latency_face = []
++        for p in rows:
++            entry = p["truth"].get("zone_entry_ms")
++            first_result = p["first_result_ms"]
++            usable = p["truth"].get("first_usable_torso_ms")
++            face = p["truth"].get("first_usable_face_ms")
++            correct = p["first_correct_recognition_ms"]
++            if entry is not None and first_result is not None and first_result >= entry:
++                entry_to_result.append(first_result - entry)
++            usable_result = p["first_result_after_usable_ms"]
++            if usable is not None and usable_result is not None:
++                usable_to_result.append(usable_result - usable)
++            if entry is not None and correct is not None and correct >= entry:
++                entry_to_correct.append(correct - entry)
++            if usable is not None and correct is not None and correct >= usable:
++                usable_to_correct.append(correct - usable)
++            if face is not None and correct is not None and correct >= face:
++                latency_face.append(correct - face)
++        trial_population = [p for p in garment_labeled if p["truth"].get("usable_torso_status") in {"visible", "never_usable"}]
++        successes_500 = sum(p["first_correct_recognition_ms"] is not None
++            and p["first_correct_recognition_ms"] >= p["truth"]["first_usable_torso_ms"]
++            and p["first_correct_recognition_ms"] - p["truth"]["first_usable_torso_ms"] <= 500
++            for p in trial_population if p["truth"].get("usable_torso_status") == "visible")
++
++        def distribution(values, valid=True):
++            result = latency_distribution(values if valid else [])
++            return {**result, "values_ms": values,
++                    "status": ("unavailable_truncated" if not valid else
++                               "measured" if values else "unavailable_no_results"),
++                    "small_sample": len(values) < 30,
++                    "caveat": "Descriptive sample percentiles, not a validated population p95."}
++        scenarios = {}
++        cameras = {}
++        for p in rows:
++            for key, bucket in (("scenario", scenarios), ("camera", cameras)):
++                value = p["truth"].get(key)
++                if value is not None:
++                    bucket[value] = bucket.get(value, 0) + 1
++        detailed = []
++        for p in rows:
++            truth = p["truth"]
++            detail = {k: truth.get(k) for k in (
++                "garment_label", "policy_label", "scenario", "camera", "camera_mode",
++                "zone_entry_ms", "zone_exit_ms", "first_usable_torso_ms", "first_usable_face_ms",
++                "usable_torso_status", "usable_face_status")}
++            detail["passage_alias"] = p["passage_alias"]
++            detail.update({k: p[k] for k in (
++                "detected", "missed", "first_detection_ms", "first_face_ms", "first_body_ms",
++                "first_torso_ms", "association_correct", "association_mismatch", "association_unscorable",
++                "wrong_person_association", "duplicate_logical_result_ids", "attempts",
++                "unassessed_attempts", "late_results", "first_decision_ms", "first_decision_label",
++                "first_result_ms", "first_result_after_usable_ms",
++                "first_policy_ms", "first_policy_label", "correct_before_exit",
++                "first_correct_recognition_ms", "any_wrong_before_exit")})
++            detail["frame_rows"] = p["frame_rows"][:self.history_limit]
++            detail["result_rows"] = p["result_rows"][:self.history_limit]
++            detailed.append(detail)
++        return {
++            "schema": "uniform-walkthrough-v1",
++            "passage_count": len(rows),
++            "labeled_garment_passages": denom,
++            "garment_correct_associated_before_exit": scored_correct if score_complete else None,
++            "garment_accuracy_all_labeled_passages": scored_correct / denom if denom and score_complete else None,
++            "garment_accuracy_status": ("unavailable_no_passages" if not rows else
++                "unavailable_history_truncated" if self.scoring_truncated else
++                "scored" if score_complete else
++                "incomplete_at_cutoff" if complete_labels and incomplete_at_cutoff else
++                "unavailable_incomplete_ground_truth"),
++            "garment_scored_denominator": denom,
++            "association_scored_passages": sum(p["association_correct"] or p["wrong_person_association"] or p["association_mismatch"]
++                                                for p in rows),
++            "correct_association_passages": sum(p["association_correct"] for p in rows),
++            "wrong_person_association_passages": sum(p["wrong_person_association"] for p in rows),
++            "association_mismatch_passages": sum(p["association_mismatch"] for p in rows),
++            "association_unscorable_passages": sum(p["association_unscorable"] for p in rows),
++            "detected_passages": sum(p["detected"] for p in rows),
++            "missed_passages": sum(p["missed"] for p in rows),
++            "garment_per_class": class_metrics,
++            "unassessed_passages": sum(not p["garment_assessed_before_exit"] for p in garment_labeled),
++            "human_never_usable_view_passages": sum(p['truth'].get('usable_face_status') == 'never_usable' or
++                p['truth'].get('usable_torso_status') == 'never_usable' for p in rows),
++            "assessed_before_exit_passages": sum(p["garment_assessed_before_exit"] for p in garment_labeled),
++            "policy": {"ground_truth_passages": len(policy_rows), "scored_passages": len(policy_scored),
++                       "false_violations": policy_false if policy_rows else None,
++                       "missed_violations": policy_missed if policy_rows else None,
++                       "unassessed_passages": len(policy_rows) - len(policy_scored)},
++            "timing": {"first_detection_media_ms": [p["first_detection_ms"] for p in rows if p["first_detection_ms"] is not None],
++                       "entry_to_first_result": distribution(entry_to_result, not self.scoring_truncated),
++                       "usable_torso_to_first_result": distribution(usable_to_result, not self.scoring_truncated),
++                       "entry_to_first_correct_associated_recognition": distribution(entry_to_correct, not self.scoring_truncated),
++                       "usable_torso_to_first_correct_associated_recognition": distribution(usable_to_correct, not self.scoring_truncated),
++                       "first_correct_recognition_from_usable_torso_ms": usable_to_correct,
++                       "first_correct_recognition_from_usable_face_ms": latency_face,
++                       "fixed_500ms_torso_trial": {"successes": successes_500, "denominator": len(trial_population),
++                           "eligible": len(trial_population), "target_ms": 500,
++                           "success_rate": successes_500 / len(trial_population) if trial_population and score_complete else None,
++                           "status": "measured" if score_complete else "unavailable_incomplete_or_truncated",
++                           "failures_including_never_usable": len(trial_population) - successes_500,
++                           "caveat": "Small-sample replay target; not a physical-camera guarantee."}},
++            "late_results": sum(p["late_results"] for p in rows),
++            "timed_out_passages": sum(p["truth"].get("zone_exit_ms") is not None and
++                (interval_end_ms is None or p["truth"].get("zone_exit_ms") <= interval_end_ms) and
++                not p["garment_assessed_before_exit"] for p in garment_labeled),
++            "duplicate_logical_result_ids": sum(p["duplicate_logical_result_ids"] for p in rows),
++            "scenario_coverage": scenarios,
++            "camera_coverage": cameras,
++            "camera_mode_coverage": {mode: sum(p["truth"].get("camera_mode") == mode for p in rows)
++                                     for mode in ("color", "infrared", "unknown")},
++            "missing_data": missing,
++            "incomplete_at_cutoff_passages": incomplete_at_cutoff,
++            "input_complete": bool(input_complete),
++            "history": {"limit": self.history_limit, "used": self.history_used,
++                        "logical_ids_used": self.logical_ids_used,
++                        "stored_frame_rows": sum(len(p["frame_rows"]) for p in rows),
++                        "dropped_frame_rows": self.dropped_frame_history,
++                        "dropped_result_rows": self.dropped_result_history,
++                        "dropped_passages": self.dropped_passages,
++                        "scoring_truncated": self.scoring_truncated,
++                        "unmatched_results": self.unmatched_results},
++            "matching": {"face_iou_threshold": MATCH_IOU,
++                          "association_rule": "Own reviewed torso overlap required; another person's torso match is wrong-person; own+other overlap is unscorable.",
++                          "ground_truth_source": "human annotation only; no tracks/predictions infer labels or passage exits."},
++            "passages": detailed,
++            "limitations": [
++                "All-passage garment rate is null when required independent passage, time, or geometry labels are incomplete.",
++                "Identity remains the separate authorized-gallery metric; this scorer does not measure identity accuracy.",
++                "Policy counts use only explicit human policy truth and are separate from garment classification.",
++                "A result arriving after annotated zone exit is late and cannot replace a prior timely result.",
++            ],
++        }
+--- a/scripts/replay_camera_assessment.py
++++ b/scripts/replay_camera_assessment.py
+@@ -14,6 +14,7 @@
+ """
+ import argparse
+ import json
++import hashlib
+ import os
+ import queue
+ import shutil
+@@ -37,6 +38,8 @@
+ 
+ 
+ def load_annotations(path):
++    if path.stat().st_size > 32 * 1024 * 1024:
++        raise ValueError('Annotation file exceeds 32 MiB; split into complete-passage clips')
+     rows = []
+     with path.open(encoding="utf-8") as stream:
+         for line_no, line in enumerate(stream, 1):
+@@ -44,12 +47,20 @@
+                 continue
+             try:
+                 row = json.loads(line)
+-                if not isinstance(row.get("frame_index"), int) or not isinstance(row.get("people"), list):
++                if (not isinstance(row, dict) or type(row.get("frame_index")) is not int
++                        or row["frame_index"] < 0 or not isinstance(row.get("people"), list)):
+                     raise ValueError("expected frame_index and people")
++                if len(rows) >= 10000 or len(row['people']) > 48:
++                    raise ValueError('Annotation limit: 10000 frames, 48 people per frame')
++                if any(not isinstance(person, dict) for person in row['people']):
++                    raise ValueError('people must contain objects')
+                 rows.append(row)
+             except (json.JSONDecodeError, ValueError) as exc:
+                 raise ValueError(f"invalid annotation line {line_no}: {exc}") from exc
+-    return sorted(rows, key=lambda row: row["frame_index"])
++    rows.sort(key=lambda row: row["frame_index"])
++    if any(rows[index - 1]["frame_index"] == rows[index]["frame_index"] for index in range(1, len(rows))):
++        raise ValueError("duplicate annotation frame_index rows are not allowed")
++    return rows
+ 
+ 
+ def overlap(a, b):
+@@ -58,6 +69,16 @@
+     inter = max(0, x2-x1) * max(0, y2-y1)
+     union = max(1, (a[2]-a[0])*(a[3]-a[1]) + (b[2]-b[0])*(b[3]-b[1]) - inter)
+     return inter / union
++
++
++def validate_replay_fps(value):
++    try:
++        fps = float(value)
++    except (TypeError, ValueError) as exc:
++        raise ValueError("video reports an invalid or missing FPS") from exc
++    if not np.isfinite(fps) or fps <= 0:
++        raise ValueError("video reports an invalid or missing FPS; replay cadence will not be guessed")
++    return fps
+ 
+ 
+ class ReplayMetrics:
+@@ -292,6 +313,8 @@
+     parser.add_argument('--uniform-observation-config',type=Path,
+                         help='Explicit Stage 4 candidate config; observation-only, no activation')
+     parser.add_argument('--body-backend',choices=('cpu','mps'),default=None)
++    parser.add_argument('--camera-label', default='local video', help='Human-readable source label in the report')
++    parser.add_argument('--camera-mode', choices=('color','infrared','unknown'), default='unknown')
+     args = parser.parse_args()
+     if not args.video.is_file() or (args.evaluation_db and not args.evaluation_db.is_file()):
+         parser.error("video and optional evaluation DB must be local files")
+@@ -301,6 +324,10 @@
+         parser.error("identity alias map must be a local JSON file")
+     if args.max_frames < 0:
+         parser.error("--max-frames cannot be negative")
++    if args.output.exists():
++        parser.error('Output already exists; choose a new report path')
++    if not isinstance(args.camera_label, str) or not args.camera_label.strip():
++        parser.error("--camera-label must be a nonempty label")
+     if args.uniform_observation_config and args.mode!='candidate':
+         parser.error('Uniform observation config requires candidate mode')
+     try:
+@@ -315,33 +342,48 @@
+     from core.live_state import FrameContext, LiveState
+     from core.person_detector import PersonDetector
+     from core.recognizer import FaceRecognizer
+-    from core.trainer import ViolationTrainer
++    from core.trainer import ViolationTrainer, MODULES, ROOT as TRAINER_ROOT
+     from core.uniform_matcher import UniformColorMatcher
+     from core.performance import PERF, TRACES
+     from core.uniform_observation import ObservationConfig,ObservationUniformSession
+     from core.uniform_latency import UniformPassageMetrics
++    from core.uniform_walkthrough import WalkthroughMetrics
+     from core.uniform_model_registry import digest
+     from dataclasses import replace
++
++    # This CLI is explicitly an evaluation tool. Exclude warmup and enable the
++    # existing bounded telemetry for the measured replay regardless of shell flags.
++    PERF.enabled = TRACES.enabled = False
+ 
+     uniform_session = (ObservationUniformSession(ObservationConfig.load(args.uniform_observation_config))
+                        if args.uniform_observation_config else None)
+     uniform_metrics = UniformPassageMetrics()
+-    for annotation in labels:
+-        uniform_metrics.observe_labels(annotation['people'])
+ 
+     capture = cv2.VideoCapture(str(args.video))
+     if not capture.isOpened():
+         parser.error("could not open local video")
++    reported_fps = float(capture.get(cv2.CAP_PROP_FPS) or 0.0)
++    try:
++        fps = validate_replay_fps(reported_fps)
++    except ValueError as exc:
++        capture.release()
++        parser.error(str(exc))
++    reported_width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
++    reported_height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
++    expected_frame_count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+     by_frame = {row["frame_index"]: row for row in labels}
++    walkthrough = WalkthroughMetrics()
+     metric = None
+     decoded_frames = annotated_frames = 0
+     selected_count = 0
+     assessment_calls = assessment_results = assessment_rows = 0
+     compute_ms = deque(maxlen=10_000)
++    decoded_read_times = deque(maxlen=10_000)
+     compute_samples_dropped = 0
+     skipped_for_lag = 0
+     worker = None
+     database = None
++    reached_eof = False
+     detector = PersonDetector(backend=args.body_backend or (uniform_session.config.backend if uniform_session else None))
+     trainer = ViolationTrainer()
+     started = time.monotonic()
+@@ -365,16 +407,35 @@
+             first_ok, first_frame = capture.read()
+             if not first_ok:
+                 parser.error("video contains no decodable frames")
++            actual_resolution = [int(first_frame.shape[1]), int(first_frame.shape[0])]
+             warm_started = time.monotonic()
+-            recognizer._ensure_models()
++            if not recognizer._ensure_models():
++                raise RuntimeError('Installed face models unavailable; no replacement downloaded')
+             detector._ensure_model()
+-            detector.detect_persons(first_frame)
++            # Warm the same installed face/body stages before starting the replay clock.
++            warmup_face_count = 0
++            for _ in range(3):
++                faces = recognizer.detect_faces(first_frame)
++                warmup_face_count = len(faces)
++                recognizer.recognize_faces(first_frame, detections=faces)
++                detector.detect_persons(first_frame)
+             if uniform_session is not None:
+                 uniform_session.prepare()
+                 uniform_session.predictor.timed_probabilities(first_frame)
+             elif trainer.is_trained("uniform"):
+                 trainer.predict_proba("uniform", first_frame)
+             warmup_wall_ms = round((time.monotonic() - warm_started) * 1000, 2)
++            def actual_providers(model):
++                session = getattr(model, "session", None)
++                getter = getattr(session, "get_providers", None)
++                try:
++                    return list(getter()) if getter else []
++                except Exception:
++                    return []
++            face_providers = {
++                "detection": actual_providers(getattr(recognizer, "_detector", None)),
++                "recognition": actual_providers(getattr(recognizer, "_recognition", None)),
++            }
+             capture.set(cv2.CAP_PROP_POS_FRAMES, 0)
+             tracker = FaceTrackingProcessor(recognizer, detector)
+             processor = LiveProcessor(database, recognizer, detector, trainer, matcher,
+@@ -390,9 +451,7 @@
+                 if not isinstance(aliases, dict):
+                     parser.error("identity alias map must be a JSON object")
+             metric = ReplayMetrics({student_id: alias for alias, student_id in aliases.items()})
+-            fps = float(capture.get(cv2.CAP_PROP_FPS) or 0.0)
+-            if fps <= 0:
+-                fps = 30.0
++            PERF.enabled = TRACES.enabled = True
+             worker_results = None
+             compute_lock = threading.Lock()
+             replay_clock_start = time.monotonic()
+@@ -422,11 +481,16 @@
+                 assessment_rows += len(result.assessments)
+                 metric.record_assessments(selected_index, selected_ms, selected_labels,
+                     result.task.observations or (), result.assessments, completion_ms=completion_ms)
++                walkthrough.record_results(selected_index, completion_ms,
++                    result.task.observations or (), result.assessments)
+                 if uniform_session is not None:
++                    by_presence = {a.presence_id:a for a in result.assessments}
+                     for li,oi in metric._matches(selected_labels,result.task.observations or ()).items():
+-                        if oi<len(result.assessments):
++                        observation = result.task.observations[oi]
++                        assessment = by_presence.get(observation.presence_id)
++                        if assessment is not None:
+                             uniform_metrics.record(selected_labels[li]['passage_alias'],
+-                                result.assessments[oi].garment,completion_ms)
++                                assessment.garment,completion_ms)
+             def dispatch_candidate():
+                 nonlocal selected_count, assessment_calls
+                 if router is None or worker.stop_event.is_set():
+@@ -473,13 +537,23 @@
+                     time.sleep(delay)
+                 ok, frame = capture.read()
+                 if not ok:
++                    reached_eof = True
+                     break
++                decoded_read_times.append(time.monotonic())
+                 row = by_frame.get(index)
+                 if row is not None:
+                     annotated_frames += 1
+                 media_ms = index * 1000.0 / fps
+                 people = row.get("people", []) if row else []
+                 metric.observe_labels(index, media_ms, people)
++                if row is not None:
++                    uniform_metrics.observe_labels(people)
++                    walkthrough_people = [dict(person,
++                        camera=person.get("camera", args.camera_label),
++                        camera_mode=person.get("camera_mode", args.camera_mode))
++                        for person in people]
++                    walkthrough.observe_frame(index, media_ms, walkthrough_people,
++                                              frame_size=(frame.shape[1], frame.shape[0]))
+                 captured = time.monotonic()
+                 if captured - next_frame_at > 1.0 / fps:
+                     # Preserve labels as misses, but never burst overdue image work.
+@@ -500,6 +574,8 @@
+                     if people and tracked.observations:
+                         metric.record_detections(index, media_ms, people, tracked.observations)
+                         metric.record_usable(index, media_ms, people, tracked.observations)
++                    if row is not None and tracked.observations:
++                        walkthrough.record_detections(index, media_ms, tracked.observations)
+                     if router is not None:
+                         router.observe(tracked, prioritize=args.prioritized_assessment,
+                                        select=args.clear_frame_selection or uniform_session is not None)
+@@ -547,6 +623,23 @@
+ 
+     elapsed = time.monotonic() - started
+     metrics = metric.report() if metric is not None else {}
++    processed_interval_ms = decoded_frames * 1000.0 / fps
++    input_complete = (reached_eof if expected_frame_count <= 0 else decoded_frames >= expected_frame_count)
++    if args.max_frames and decoded_frames >= args.max_frames and expected_frame_count > args.max_frames:
++        input_complete = False
++    walkthrough_report = walkthrough.report(interval_end_ms=processed_interval_ms,
++                                           input_complete=input_complete)
++    face_detection_path = recognizer.model_dir / "det_10g.onnx"
++    face_recognition_path = recognizer.model_dir / "w600k_r50.onnx"
++    uniform_legacy_path = TRAINER_ROOT / MODULES["uniform"]["model_out"]
++    model_hashes = {
++        "body_yolo": digest(detector._MODEL_PATH) if Path(detector._MODEL_PATH).is_file() else None,
++        "face_detection_onnx": digest(face_detection_path) if face_detection_path.is_file() else None,
++        "face_recognition_onnx": digest(face_recognition_path) if face_recognition_path.is_file() else None,
++        "legacy_uniform_classifier": digest(uniform_legacy_path) if uniform_legacy_path.is_file() else None,
++        "candidate_uniform_classifier": (uniform_session.config.candidate_sha256
++            if uniform_session is not None else None),
++    }
+     compute_latency = {"n": len(compute_ms),
+         "p50_ms": round(float(np.percentile(compute_ms, 50)), 2) if compute_ms else None,
+         "p95_ms": round(float(np.percentile(compute_ms, 95)), 2) if compute_ms else None,
+@@ -556,23 +649,49 @@
+         "selected_assessment_frames": selected_count, "passages": metrics.get("passage_count", 0),
+         "live_processor_calls": assessment_calls, "live_processor_results": assessment_results,
+         "assessment_rows": assessment_rows, "passage_metrics": metrics,
++        "walkthrough_metrics": walkthrough_report,
+         "compute_wall_latency": compute_latency,
+         "stage_timings": PERF.snapshot(), "observation_traces": TRACES.snapshot(),
++        "telemetry_enabled": True, "telemetry_excludes_warmup": True,
+         "compute_latency_samples_dropped": compute_samples_dropped,
+         "frames_skipped_for_lag": skipped_for_lag,
+         "passage_latency_verified": skipped_for_lag == 0 and metrics.get('passage_count',0)>0,
+         "latency_clock": "paced video playback monotonic completion time; capture evidence uses video frame timeline; timing unverified if frames skipped",
+         "elapsed_wall_ms": round(elapsed*1000, 2),
+         "warmup_wall_ms": warmup_wall_ms,
++        "face_body_warmup_frames": 3, "faces_on_warmup_frame": warmup_face_count,
++        "source_metadata": {"camera_label": args.camera_label, "camera_mode": args.camera_mode,
++            "physical_capture_fps": None, "video_reported_fps": reported_fps,
++            "video_reported_resolution": [reported_width, reported_height],
++            "decoded_raster_resolution": actual_resolution,
++            "measured_paced_decode_cadence_fps": ((len(decoded_read_times)-1) /
++                (decoded_read_times[-1]-decoded_read_times[0]) if len(decoded_read_times) > 1 and
++                decoded_read_times[-1] > decoded_read_times[0] else None),
++            "decode_cadence_note": "Measured source-frame read cadence during paced replay; not physical camera capture FPS."},
+         "identity_scoring_enabled": bool(args.evaluation_db and args.identity_alias_map),
+-        "model_backends": {"body_yolo": detector.backend_status(), "face": "ONNX CPUExecutionProvider"},
++        "model_backends": {"body_yolo": detector.backend_status(), "face": {
++            "detection_providers": face_providers["detection"],
++            "recognition_providers": face_providers["recognition"]}},
++        "model_hashes": model_hashes,
++        "input_hashes": {"video": digest(args.video), "annotations": digest(args.annotations)},
++        "configuration_sha256": hashlib.sha256(json.dumps({
++            "mode": args.mode, "max_frames": args.max_frames, "camera_label": args.camera_label,
++            "camera_mode": args.camera_mode, "clear_frame_selection": args.clear_frame_selection,
++            "prioritized_assessment": args.prioritized_assessment,
++            "body_backend": args.body_backend,
++            "uniform_observation_config_sha256": digest(args.uniform_observation_config)
++                if args.uniform_observation_config else None,
++        }, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
++        "logo_verification": {"enabled": False, "executor_available": False, "calls": 0,
++            "reason": "No Stage 5 logo-verification executor is available in the replay path."},
++        "passage_metrics_scope": "Legacy ReplayMetrics aggregate; independently annotated all-passage scoring is in walkthrough_metrics.",
+         "uniform_model_loaded": trainer.is_trained("uniform"),
+         "observation_only": True, "database_writes": 0,
+         "candidate_flags": {"clear_frame_selection": args.clear_frame_selection,
+                              "fresh_selection": router.fresh_selection if router else False,
+                              "prioritized_assessment": args.prioritized_assessment},
+         "evaluation_database_copied_to_private_temp_and_discarded": bool(args.evaluation_db),
+-        "passage_details_written": False,
++        "passage_details_written": True,
+         "comparison_requires_same_video_annotations_evaluation_db_and_flags": True}
+     if uniform_session is not None:
+         uniform_report = uniform_metrics.report()
+@@ -588,8 +707,11 @@
+                 uniform_report['annotated_zone_entry_to_first_decision']['count']>0 and
+                 uniform_report['annotated_first_usable_to_first_decision']['count']>0))
+     args.output.parent.mkdir(parents=True, exist_ok=True)
+-    args.output.write_text(json.dumps(report, sort_keys=True) + "\n", encoding="utf-8")
+-    print(json.dumps(report, sort_keys=True))
++    with args.output.open('x', encoding='utf-8') as stream:
++        stream.write(json.dumps(report, sort_keys=True) + "\n")
++    print(json.dumps({'output':str(args.output),'observation_only':True,
++        'labeled_passages':walkthrough_report['passage_count'],
++        'accuracy_status':walkthrough_report['garment_accuracy_status']}))
+ 
+ 
+ if __name__ == "__main__":
+--- /dev/null
++++ b/scripts/profile_uniform_pipeline.py
+@@ -0,0 +1,190 @@
++"""Isolated still-image timing through real tracking and assessment models.
++
++No camera, authorized identity gallery, passage labels, production writes or
++accuracy claims. Images must be explicitly supplied; installed public fixtures
++are suitable only for computational profiling, never entrance evaluation.
++"""
++import argparse
++from collections import defaultdict
++import json
++import os
++from pathlib import Path
++import queue
++import sys
++import tempfile
++import threading
++import time
++from types import SimpleNamespace
++from unittest.mock import patch
++
++ROOT = Path(__file__).resolve().parents[1]
++sys.path.insert(0, str(ROOT))
++os.environ.setdefault('MPLCONFIGDIR', str(Path(tempfile.gettempdir())/'cbvms-profile-mpl'))
++os.environ.setdefault('YOLO_CONFIG_DIR', str(Path(tempfile.gettempdir())/'cbvms-profile-yolo'))
++
++
++def assessment_task(session, tracked):
++    """Mirror the dashboard/router handoff, retaining same-frame landmarks."""
++    return session.observe(tracked.task.with_observations(tracked.observations), tracked.observations)
++
++
++def profile(candidate, image_paths, *, repeats=20, warmup=4):
++    if not 1 <= repeats <= 100 or not 1 <= warmup <= 20:
++        raise ValueError('Bound repeats to 1–100 and warmup to 1–20')
++    import torch
++    import core.live_pipeline as pipeline
++    from core.live_state import FrameContext, LiveState
++    from core.person_detector import PersonDetector
++    from core.recognizer import FaceRecognizer, DET_FAST_SIZE, MATCH_THRESHOLD, IDENTITY_MARGIN
++    from core.trainer import ViolationTrainer
++    from core.uniform_matcher import UniformColorMatcher
++    from core.uniform_observation import ObservationConfig, ObservationUniformSession
++    from core.uniform_model_registry import candidate_descriptor, digest
++    from core.uniform_latency import distribution
++    from core.uniform_logo import LogoRequestGate
++    from core.performance import PERF
++    from database.db_manager import CBVMSDatabase
++    from scripts.benchmark_uniform_backends import _load_input_images, _set_benchmark_threads, _runtime_environment
++
++    images, metadata = _load_input_images([str(p) for p in image_paths], synthetic_fixture=False)
++    descriptor = candidate_descriptor(candidate)
++    config = ObservationConfig(str(Path(candidate).resolve()), descriptor['id'], .8, backend='cpu',
++                               policy=None, logo_verification={'enabled':False})
++    PERF.enabled = True
++    reports = []
++    with tempfile.TemporaryDirectory(prefix='cbvms-uniform-profile-') as tmp:
++        database = CBVMSDatabase(Path(tmp)/'evaluation.sqlite')
++        database.initialize(process_deadlines=False)
++        recognizer = FaceRecognizer(database)
++        if not recognizer._ensure_models():
++            raise RuntimeError('Installed face models unavailable: '+str(recognizer.last_error))
++        session = ObservationUniformSession(config)
++        session.prepare()
++        providers = {name:getattr(recognizer, attr).session.get_providers()
++                     for name,attr in (('detection','_detector'),('recognition','_recognition'))}
++        weights = {name:digest(recognizer.model_dir/name) for name in ('det_10g.onnx','w600k_r50.onnx')}
++        weights.update(body=digest(PersonDetector._MODEL_PATH), candidate=descriptor['id'])
++        for backend in ('cpu','mps'):
++            detector = PersonDetector(backend=backend)
++            detector._ensure_model()
++            if detector.backend_status()['active'] != backend:
++                reports.append({'body_requested':backend, 'status':'unavailable',
++                                'body_backend':detector.backend_status()})
++                continue
++            tracker = pipeline.FaceTrackingProcessor(recognizer, detector)
++            processor = pipeline.LiveProcessor(database, recognizer, detector, ViolationTrainer(),
++                UniformColorMatcher(), SimpleNamespace(), observation_only=True, uniform_observation=session)
++            worker = pipeline.LiveWorker(processor, observation_only=True)
++            samples = []
++            components = defaultdict(list)
++            active = False
++            logo_calls = 0
++            original_association = pipeline.associate_faces_to_bodies
++            original_region = detector.chest_region
++            original_logo = LogoRequestGate.reserve
++            def timed(name, function):
++                def call(*args, **kwargs):
++                    started = time.monotonic()
++                    try:return function(*args, **kwargs)
++                    finally:
++                        if active:components[name].append((time.monotonic()-started)*1000)
++                return call
++            def logo(*args, **kwargs):
++                nonlocal logo_calls
++                logo_calls += 1
++                return original_logo(*args, **kwargs)
++            worker.start()
++            try:
++                with patch.object(pipeline, 'associate_faces_to_bodies', timed('association_ms',original_association)), \
++                     patch.object(detector, 'chest_region', timed('torso_localization_ms',original_region)), \
++                     patch.object(LogoRequestGate, 'reserve', logo):
++                    for index in range(warmup+repeats):
++                        active = index >= warmup
++                        if index == warmup:
++                            with PERF._lock:
++                                PERF._samples.clear(); PERF._counts.clear()
++                        threads = _set_benchmark_threads()
++                        # Independent still images are NOT a continuous person track.
++                        tracker.state = LiveState(); processor.state = LiveState(); session.invalidate()
++                        cancelled = threading.Event()
++                        captured = time.monotonic()
++                        task = pipeline.MonitorTask(FrameContext(1,('public-fixture',index),captured),
++                            images[index % len(images)],time.time(),cancelled,
++                            source_id='public-still-profile',observation_only=True,earring_enabled=False)
++                        tracking_started=time.monotonic()
++                        tracked=tracker.analyze(task)
++                        localized=time.monotonic()
++                        if tracked is None:
++                            raise RuntimeError('Tracking failed or expired; do not hide slow cases')
++                        task=assessment_task(session,tracked)
++                        gated=time.monotonic()
++                        if not worker.offer(task):
++                            raise RuntimeError('Unexpected competing assessment')
++                        try:result=worker.results.get(timeout=5)
++                        except queue.Empty:raise RuntimeError('Assessment timeout; no passage claim') from None
++                        received=time.monotonic()
++                        if result is None:raise RuntimeError('Assessment returned no result')
++                        if tracked.observations and not result.assessments:
++                            raise RuntimeError('Missing assessment rows for localized faces; invalid profile handoff')
++                        row={'image_index':index % len(images), 'frame_copy_ms':1000*(tracking_started-captured),
++                            'tracking_ms':1000*(localized-tracking_started),
++                            'usable_evidence_gate_ms':1000*(gated-localized),
++                            'publication_to_consumer_ms':1000*(received-result.finished_at),
++                            'frame_to_result_ms':1000*(result.finished_at-captured),
++                            'frame_to_consumer_ms':1000*(received-captured),
++                            'faces':len(tracked.observations),
++                            'associated_torsos':sum(o.torso_box is not None for o in tracked.observations),
++                            'garment_results':len(result.assessments),
++                            'garment_inferences':sum(bool(a.garment and a.garment.timings) for a in result.assessments),
++                            'recognized':sum(bool(a.garment and a.garment.label) for a in result.assessments),
++                            'unassessed_reasons':[a.garment.reason for a in result.assessments if a.garment and a.garment.label is None]}
++                        if active:
++                            samples.append(row)
++                            for assessment in result.assessments:
++                                garment=assessment.garment
++                                if garment:
++                                    for key,value in garment.timings.items():
++                                        if value is not None:components['garment_'+key].append(value)
++                        if detector.backend_status()['active'] != backend:
++                            raise RuntimeError('Body fell back during measured workload; comparison invalid')
++            finally:
++                worker.stop()
++                if not worker.done.wait(5):raise RuntimeError('Owned profile worker did not stop')
++            reports.append({'body_requested':backend,'status':'completed','body_backend':detector.backend_status(),
++                'face_providers':providers,'candidate_backend':session.predictor.backend_status(),
++                'threads':threads, 'samples':samples, 'logo_schedule_calls':logo_calls,
++                'logo_inference_calls':0, 'logo_backend_present':False,
++                'stage_metrics':PERF.snapshot(),
++                'components':{k:distribution(v) for k,v in components.items()},
++                'frame_timings':{k:distribution([r[k] for r in samples]) for k in samples[0] if k.endswith('_ms')},
++                'gallery_size':0, 'identity_accuracy':None, 'worker_stopped':worker.done.is_set()})
++        return {'kind':'real_models_on_public_stills_not_walkthroughs', 'environment':_runtime_environment(),
++            'inputs':metadata,'model_hashes':weights,'candidate_synthetic':descriptor.get('synthetic'),
++            'candidate_config':config.__dict__, 'configuration':{'warmup_frames_per_backend':warmup,
++                'measured_frames_per_backend':repeats,'face_input':DET_FAST_SIZE,'body_input':'existing predictor default (640)',
++                'garment_input':224,'recognition_distance':MATCH_THRESHOLD,'identity_margin':IDENTITY_MARGIN,
++                'recognition_confidence':.8,'camera_workload':0,'earrings':False,'pose':False,
++                'independent_still_frames':True,'logo_enabled':False,'torch_threads_requested':2},
++            'results':reports,'real_labeled_passages':0,'physical_camera_measurement':False,
++            'limitations':['No entry/exit, human associations, independent garment/policy labels or authorized identity gallery.',
++                'Still-image completion timings are not walking-speed, capture-FPS, rendering or before-exit results.',
++                'Serial fresh still frames intentionally do not test evidence reuse, concurrent preview or camera queues.',
++                'Recognition uses actual ArcFace with an empty gallery; no identity correctness is measured.',
++                'No smaller input, threshold change, model activation or training.']}
++
++
++def main():
++    parser=argparse.ArgumentParser(description=__doc__)
++    parser.add_argument('--candidate',required=True,type=Path)
++    parser.add_argument('--images',required=True,nargs='+',type=Path)
++    parser.add_argument('--repeats',default=20,type=int)
++    parser.add_argument('--warmup',default=4,type=int)
++    parser.add_argument('--output',required=True,type=Path)
++    args=parser.parse_args()
++    if args.output.exists():parser.error('Output already exists; choose a new report path')
++    result=profile(args.candidate,args.images,repeats=args.repeats,warmup=args.warmup)
++    with args.output.open('x') as stream:json.dump(result,stream,indent=2,allow_nan=False)
++    print('Isolated real-model still profile completed. Real labeled passages: 0.')
++
++
++if __name__=='__main__':main()
+--- /dev/null
++++ b/scripts/launch_uniform_observation.py
+@@ -0,0 +1,129 @@
++"""Launch the normal app in a disposable, private observation-only workspace.
++
++Copies code/model files, never production DB, datasets, activation pointers or
++cloud/email configuration. Camera definitions are private copies; original
++preferences are never edited. No symlinks/hardlinks to writable production data.
++"""
++import argparse
++from dataclasses import asdict
++import json
++import os
++from pathlib import Path
++import shutil
++import subprocess
++import sys
++import tempfile
++
++ROOT = Path(__file__).resolve().parents[1]
++sys.path.insert(0, str(ROOT))
++
++
++def prepare_workspace(destination, config_path, primary, *, source=ROOT):
++    from core.uniform_observation import ObservationConfig
++    source, destination = Path(source).resolve(), Path(destination).resolve()
++    if destination == source or source in destination.parents:
++        raise ValueError('Private application workspace must be outside the source checkout')
++    if any(destination.iterdir()):
++        raise ValueError('Private application workspace must be empty')
++    config = ObservationConfig.load(config_path)
++    config_data = {'schema':1,'mode':'observation_only',**asdict(config)}
++    config_data['candidate_bundle'] = str(Path(config.candidate_bundle).resolve())
++    config_data['logo_verification'] = {'enabled':False}
++    os.chmod(destination,0o700)
++    for package in ('core','ui','auth','database','api','web','assets','models'):
++        folder=source/package
++        if folder.exists():
++            if folder.is_symlink():raise ValueError('Application packages must be regular directories')
++            for path in folder.rglob('*'):
++                if path.is_symlink():
++                    raise ValueError('Symlink in copied application package: '+str(path.relative_to(source)))
++            shutil.copytree(folder,destination/package,ignore=shutil.ignore_patterns('__pycache__','*.pyc'))
++    for filename in ('main.py','web_portal.py'):
++        if (source/filename).is_symlink():raise ValueError('Application entry points must be regular files')
++        shutil.copy2(source/filename,destination/filename)
++    for path in source.glob('yolo*.pt'):
++        if path.is_symlink():raise ValueError('Model assets must be regular files')
++        shutil.copy2(path,destination/path.name)
++    data=destination/'data';data.mkdir(mode=0o700)
++    if primary.casefold() == 'macbook camera':
++        preference={'id':'usb_0','type':'usb','index':0,'label':'MacBook Camera'}
++    else:
++        camera_file=source/'data/ip_cameras.json'
++        cameras=json.loads(camera_file.read_text()).get('cameras',[])
++        matches=[c for c in cameras if str(c.get('label','')).casefold()==primary.casefold()]
++        if len(matches)!=1:raise ValueError('Primary camera label must match exactly one saved camera')
++        camera=matches[0]
++        # A copied secret_ref may resolve through the existing authorized Keychain.
++        # Do not print or resolve stream URLs/credentials during setup/preflight.
++        (data/'ip_cameras.json').write_text(json.dumps({'cameras':[camera]}))
++        os.chmod(data/'ip_cameras.json',0o600)
++        preference={'id':'ip_'+str(camera['id']).removeprefix('ip_'),'type':'rj45','label':camera['label']}
++    (data/'camera_preference.json').write_text(json.dumps(preference))
++    # Empty preview selection prevents an extra preview-camera workload by default.
++    (data/'camera_view_preference.json').write_text(json.dumps({'sources':[],'destination':'Separate window'}))
++    private_config=destination/'observation.json'
++    private_config.write_text(json.dumps(config_data,indent=2))
++    return private_config, preference
++
++
++def child_environment(private, config, backend):
++    env={k:v for k,v in os.environ.items() if not k.startswith('CBVMS_') and k!='PYTHONPATH'}
++    env.update(CBVMS_ASSESSMENT_OBSERVATION_ONLY='1',CBVMS_UNIFORM_OBSERVATION_CONFIG=str(config),
++        CBVMS_BODY_YOLO_BACKEND=backend,CBVMS_PERF='1',CBVMS_TRACE='1',
++        MPLCONFIGDIR=str(private/'cache/mpl'),YOLO_CONFIG_DIR=str(private/'cache/yolo'))
++    if os.environ.get('CBVMS_FACE_MODEL_DIR'):
++        env['CBVMS_FACE_MODEL_DIR']=str(Path(os.environ['CBVMS_FACE_MODEL_DIR']).expanduser().resolve())
++    return env
++
++
++PREFLIGHT = '''
++import json, os, sys
++from pathlib import Path
++root=Path.cwd();sys.path.insert(0,str(root))
++from database.db_manager import CBVMSDatabase
++from core.uniform_observation import ObservationUniformSession
++from core.uniform_model_registry import candidate_descriptor
++from core.assessment_candidates import OBSERVATION_ONLY
++from api.camera_store import get_camera_preference
++import main
++from core.cloud_sync import start_cloud_sync
++db=CBVMSDatabase();assert db.db_path==root/'data/cbvms.db'
++db.initialize(process_deadlines=False)
++session=ObservationUniformSession.from_environment(observation_only=OBSERVATION_ONLY)
++descriptor=candidate_descriptor(session.config.candidate_bundle)
++assert descriptor['id']==session.config.candidate_sha256
++assert not (root/'data/cloud-sync.json').exists()
++assert not (root/'data/uniform_models/active.json').exists()
++assert not (root/'data/uniform_stage1').exists()
++assert not (root/'data/recovery-relay.json').exists()
++assert start_cloud_sync(db) is None
++with db.connect() as connection:
++    assert connection.execute('SELECT count(*) FROM students').fetchone()[0]==0
++print(json.dumps({'observation_only':OBSERVATION_ONLY,'isolated_database':True,
++    'empty_gallery':True,'candidate_synthetic':descriptor.get('synthetic'),
++    'candidate_sha256':descriptor['id'],'primary_camera':get_camera_preference(),
++    'logo_enabled':False,'camera_opened':False,'cloud_config_copied':False}))
++'''
++
++
++def main(argv=None):
++    parser=argparse.ArgumentParser(description=__doc__)
++    parser.add_argument('--config',required=True,type=Path)
++    parser.add_argument('--primary',default='front gate')
++    parser.add_argument('--body-backend',choices=('cpu','mps'),default='cpu')
++    parser.add_argument('--check',action='store_true',help='Verify isolation/bundle/primary selection; no camera or UI opens')
++    args=parser.parse_args(argv)
++    with tempfile.TemporaryDirectory(prefix='cbvms-observation-') as tmp:
++        private=Path(tmp)
++        config,preference=prepare_workspace(private,args.config,args.primary)
++        env=child_environment(private,config,args.body_backend)
++        print('Isolated observation workspace; primary='+preference['label']+
++              '. Empty evaluation roster. No production datasets or activation pointer copied.',flush=True)
++        command=([sys.executable,'-I','-c',PREFLIGHT] if args.check else
++                 [sys.executable,'-I',str(private/'main.py')])
++        # Normal app authentication and camera ownership are preserved. Only the
++        # storage root and explicit observation configuration differ.
++        return subprocess.call(command,cwd=private,env=env)
++
++
++if __name__=='__main__':raise SystemExit(main())
+--- /dev/null
++++ b/tests/test_uniform_walkthrough.py
+@@ -0,0 +1,295 @@
++import json
++import tempfile
++import subprocess
++import sys
++import unittest
++from pathlib import Path
++from types import SimpleNamespace
++
++from core.uniform_walkthrough import MATCH_IOU, WalkthroughMetrics
++from scripts.replay_camera_assessment import load_annotations, validate_replay_fps
++
++
++def observation(pid, face, torso=None, body=None, track=1):
++    return SimpleNamespace(presence_id=pid, track_id=track, box=face,
++                           torso_box=torso, body_box=body)
++
++
++def assessment(pid, garment="campus_uniform", policy="compliant"):
++    return SimpleNamespace(presence_id=pid,
++        garment=SimpleNamespace(label=garment, policy_outcome=policy))
++
++
++def label(alias="a", *, garment="campus_uniform", policy="compliant", face=(0, 0, 20, 20),
++          torso=(0, 30, 20, 60), entry=0, exit=300, usable=50, scenario="day", camera="gate"):
++    return {"passage_alias": alias, "garment_label": garment, "policy_label": policy,
++        "face_box": list(face) if face else None, "torso_box": list(torso) if torso else None,
++        "body_box": [*face[:2], face[2], 80] if face else None,
++        "zone_entry_ms": entry, "zone_exit_ms": exit,
++        "first_usable_torso_ms": usable, "first_usable_face_ms": usable,
++        "scenario": scenario, "camera": camera, "camera_mode": "color"}
++
++
++class UniformWalkthroughTests(unittest.TestCase):
++    def feed(self, metrics, frame_index=0, people=None, observations=(), results=(), media_ms=None,
++             frame_size=(100, 100)):
++        if media_ms is None:
++            media_ms = frame_index * 33.3
++        metrics.observe_frame(frame_index, media_ms, people or [], frame_size=frame_size)
++        metrics.record_detections(frame_index, media_ms, observations)
++        if results:
++            metrics.record_results(frame_index, results[0].completion_ms, observations, results)
++
++    def test_own_torso_required_and_same_garment_neighbor_is_wrong_person(self):
++        metrics = WalkthroughMetrics()
++        a = label("a", face=(0, 0, 20, 20), torso=(0, 30, 20, 60))
++        b = label("b", face=(40, 0, 60, 20), torso=(40, 30, 60, 60))
++        metrics.observe_frame(0, 0, [a, b], frame_size=(100, 100))
++        wrong_owner = observation("presence-a", (0, 0, 20, 20), (40, 30, 60, 60))
++        metrics.record_detections(0, 0, [wrong_owner])
++        metrics.record_results(0, 100, [wrong_owner], [assessment("presence-a", "campus_uniform")])
++        report = metrics.report(interval_end_ms=300)
++        self.assertEqual(report["wrong_person_association_passages"], 1)
++        self.assertEqual(report["garment_correct_associated_before_exit"], 0)
++        self.assertEqual(report["garment_scored_denominator"], 2)
++        self.assertEqual(report["association_unscorable_passages"], 0)
++        self.assertIn("b", [p["passage_alias"] for p in report["passages"]])
++
++    def test_poor_overlap_without_neighbor_match_is_mismatch_not_wrong_person(self):
++        metrics = WalkthroughMetrics()
++        metrics.observe_frame(0, 0, [label()], frame_size=(100, 100))
++        obs = observation("p", (0, 0, 20, 20), (70, 70, 90, 90))
++        metrics.record_detections(0, 0, [obs])
++        report = metrics.report()
++        self.assertEqual(report["association_mismatch_passages"], 1)
++        self.assertEqual(report["wrong_person_association_passages"], 0)
++        self.assertEqual(report["association_unscorable_passages"], 0)
++
++    def test_result_assessments_join_by_presence_when_lists_are_reordered(self):
++        metrics = WalkthroughMetrics()
++        a = label("a", garment="campus_uniform", face=(0, 0, 20, 20), torso=(0, 30, 20, 60))
++        b = label("b", garment="other_clothing", face=(40, 0, 60, 20), torso=(40, 30, 60, 60))
++        metrics.observe_frame(0, 0, [a, b], frame_size=(100, 100))
++        obs_a = observation("presence-a", (0, 0, 20, 20), (0, 30, 20, 60))
++        obs_b = observation("presence-b", (40, 0, 60, 20), (40, 30, 60, 60))
++        observations = [obs_b, obs_a]
++        metrics.record_detections(0, 0, observations)
++        metrics.record_results(0, 100, observations,
++            [assessment("presence-a", "campus_uniform"), assessment("presence-b", "other_clothing")])
++        report = metrics.report(interval_end_ms=300)
++        self.assertEqual(report["garment_correct_associated_before_exit"], 2)
++        self.assertEqual(report["garment_scored_denominator"], 2)
++        self.assertEqual(report["garment_accuracy_all_labeled_passages"], 1.0)
++
++    def test_late_bad_result_cannot_replace_timely_correct_and_updates_are_not_duplicates(self):
++        metrics = WalkthroughMetrics()
++        metrics.observe_frame(0, 0, [label(exit=200)], frame_size=(100, 100))
++        obs = observation("presence-a", (0, 0, 20, 20), (0, 30, 20, 60))
++        metrics.record_detections(0, 0, [obs])
++        metrics.record_results(0, 150, [obs], [assessment("presence-a", "campus_uniform")])
++        metrics.record_results(0, 250, [obs], [assessment("presence-a", "other_clothing")])
++        report = metrics.report(interval_end_ms=300)
++        self.assertEqual(report["garment_correct_associated_before_exit"], 1)
++        self.assertEqual(report["late_results"], 1)
++        self.assertEqual(report["duplicate_logical_result_ids"], 0)
++        self.assertEqual(report["passages"][0]["result_rows"][0]["completion_media_ms"], 150.0)
++
++    def test_distinct_presence_ids_duplicate_logical_results_but_same_presence_updates_do_not(self):
++        metrics = WalkthroughMetrics()
++        metrics.observe_frame(0, 0, [label(exit=300)], frame_size=(100, 100))
++        first = observation("p1", (0, 0, 20, 20), (0, 30, 20, 60))
++        metrics.record_detections(0, 0, [first])
++        metrics.record_results(0, 100, [first], [assessment("p1")])
++        metrics.record_results(0, 120, [first], [assessment("p1")])
++        second_label = label(exit=300)
++        metrics.observe_frame(1, 33, [second_label], frame_size=(100, 100))
++        second = observation("p2", (0, 0, 20, 20), (0, 30, 20, 60))
++        metrics.record_detections(1, 33, [second])
++        metrics.record_results(1, 140, [second], [assessment("p2")])
++        self.assertEqual(metrics.report()["duplicate_logical_result_ids"], 1)
++
++    def test_missed_unlabeled_and_missing_timestamps_do_not_create_accuracy(self):
++        metrics = WalkthroughMetrics()
++        metrics.observe_frame(0, 0, [{"passage_alias": "unknown"}], frame_size=(100, 100))
++        report = metrics.report(interval_end_ms=33)
++        self.assertEqual(report["missed_passages"], 1)
++        self.assertIsNone(report["garment_accuracy_all_labeled_passages"])
++        self.assertEqual(report["garment_accuracy_status"], "unavailable_incomplete_ground_truth")
++        self.assertEqual(report["missing_data"]["zone_entry_ms"], 1)
++        self.assertEqual(report["missing_data"]["garment_label"], 1)
++
++    def test_incomplete_cutoff_excludes_future_passages_and_marks_started_one(self):
++        metrics = WalkthroughMetrics()
++        metrics.observe_frame(0, 0, [label(entry=0, exit=500)], frame_size=(100, 100))
++        report = metrics.report(interval_end_ms=100, input_complete=False)
++        self.assertEqual(report["passage_count"], 1)
++        self.assertEqual(report["incomplete_at_cutoff_passages"], 1)
++
++    def test_fixed_500ms_timing_trial_and_policy_are_scored_separately(self):
++        metrics = WalkthroughMetrics()
++        metrics.observe_frame(0, 0, [label(entry=0, exit=1000, usable=50)], frame_size=(100, 100))
++        obs = observation("p", (0, 0, 20, 20), (0, 30, 20, 60))
++        metrics.record_detections(0, 80, [obs])
++        metrics.record_results(0, 400, [obs], [assessment("p", "campus_uniform", "violation")])
++        report = metrics.report(interval_end_ms=1000)
++        self.assertEqual(report["timing"]["fixed_500ms_torso_trial"]["successes"], 1)
++        self.assertEqual(report["timing"]["fixed_500ms_torso_trial"]["denominator"], 1)
++        self.assertEqual(report["policy"]["false_violations"], 1)
++        self.assertEqual(report["timing"]["first_correct_recognition_from_usable_torso_ms"], [350.0])
++
++    def test_policy_prediction_without_independent_policy_truth_is_not_scored(self):
++        metrics = WalkthroughMetrics()
++        row = label()
++        row["policy_label"] = None
++        metrics.observe_frame(0, 0, [row], frame_size=(100, 100))
++        obs = observation("p", (0, 0, 20, 20), (0, 30, 20, 60))
++        metrics.record_detections(0, 0, [obs])
++        metrics.record_results(0, 100, [obs], [assessment("p", policy="violation")])
++        self.assertIsNone(metrics.report()["policy"]["false_violations"])
++
++    def test_legacy_binary_uniform_output_is_policy_only_not_three_class_garment(self):
++        metrics = WalkthroughMetrics()
++        row = label()
++        row["garment_label"] = None
++        metrics.observe_frame(0, 0, [row], frame_size=(100, 100))
++        obs = observation("p", (0, 0, 20, 20), (0, 30, 20, 60))
++        metrics.record_detections(0, 0, [obs])
++        baseline = SimpleNamespace(presence_id="p", garment=None,
++                                   uniform_assessment=SimpleNamespace(value="wrong_uniform"))
++        metrics.record_results(0, 100, [obs], [baseline])
++        report = metrics.report(interval_end_ms=300)
++        self.assertEqual(report["policy"]["scored_passages"], 1)
++        self.assertEqual(report["garment_per_class"]["campus_uniform"]["support"], 0)
++        self.assertIsNone(report["garment_accuracy_all_labeled_passages"])
++
++    def test_assessed_and_timed_out_are_separate_from_detection(self):
++        metrics = WalkthroughMetrics()
++        row = label("timeout", exit=300)
++        metrics.observe_frame(0, 0, [row], frame_size=(100, 100))
++        obs = observation("p", (0, 0, 20, 20), (0, 30, 20, 60))
++        metrics.record_detections(0, 100, [obs])
++        report = metrics.report(interval_end_ms=300)
++        self.assertEqual(report["detected_passages"], 1)
++        self.assertEqual(report["assessed_before_exit_passages"], 0)
++        self.assertEqual(report["timed_out_passages"], 1)
++
++    def test_annotation_conflicts_types_bounds_and_duplicate_frames_reject(self):
++        metrics = WalkthroughMetrics()
++        metrics.observe_frame(0, 0, [label()], frame_size=(100, 100))
++        with self.assertRaisesRegex(ValueError, "unique and ordered"):
++            metrics.observe_frame(0, 1, [label()], frame_size=(100, 100))
++        other = WalkthroughMetrics()
++        bad = label(face=(0, 0, 200, 20))
++        with self.assertRaisesRegex(ValueError, "outside"):
++            other.observe_frame(0, 0, [bad], frame_size=(100, 100))
++        other = WalkthroughMetrics()
++        other.observe_frame(0, 0, [label()], frame_size=(100, 100))
++        with self.assertRaisesRegex(ValueError, "Conflicting"):
++            other.observe_frame(1, 33, [label(garment="other_clothing")], frame_size=(100, 100))
++
++    def test_history_is_bounded_and_dropped_rows_reported(self):
++        metrics = WalkthroughMetrics(history_limit=1)
++        metrics.observe_frame(0, 0, [label()], frame_size=(100, 100))
++        metrics.observe_frame(1, 33, [label()], frame_size=(100, 100))
++        report = metrics.report()
++        self.assertEqual(report["history"]["limit"], 1)
++        self.assertGreaterEqual(report["history"]["dropped_frame_rows"], 1)
++        self.assertEqual(report["passage_count"], 1)
++
++    def test_replay_annotation_rows_are_unique_and_fps_is_never_guessed(self):
++        with tempfile.TemporaryDirectory() as folder:
++            path = Path(folder) / "labels.jsonl"
++            path.write_text(json.dumps({"frame_index": 0, "people": []}) + "\n" +
++                            json.dumps({"frame_index": 0, "people": []}) + "\n")
++            with self.assertRaisesRegex(ValueError, "duplicate"):
++                load_annotations(path)
++            path.write_text(json.dumps([{"frame_index": 0}]) + "\n")
++            with self.assertRaisesRegex(ValueError, "invalid annotation line"):
++                load_annotations(path)
++        for fps in (0, -1, float("nan"), None, "not-a-rate"):
++            with self.assertRaises(ValueError):
++                validate_replay_fps(fps)
++        self.assertEqual(validate_replay_fps(29.97), 29.97)
++        self.assertEqual(MATCH_IOU, .25)
++
++    def test_never_usable_views_stay_in_all_passage_denominator(self):
++        metrics=WalkthroughMetrics()
++        unseen=label('hidden',face=None,torso=None,usable=None)
++        unseen.update(usable_face_status='never_usable',usable_torso_status='never_usable')
++        metrics.observe_frame(0,0,[label(),unseen],frame_size=(100,100))
++        obs=observation('p',(0,0,20,20),(0,30,20,60))
++        metrics.record_detections(0,0,[obs])
++        metrics.record_results(0,100,[obs],[assessment('p')])
++        result=metrics.report(interval_end_ms=300)
++        self.assertEqual(result['garment_accuracy_all_labeled_passages'],.5)
++        self.assertEqual(result['garment_scored_denominator'],2)
++        self.assertEqual(result['human_never_usable_view_passages'],1)
++        self.assertEqual(result['missed_passages'],1)
++
++    def test_first_unassessed_and_later_usable_results_have_distinct_clocks(self):
++        metrics=WalkthroughMetrics()
++        metrics.observe_frame(0,0,[label(usable=50)],frame_size=(100,100))
++        obs=observation('p',(0,0,20,20),(0,30,20,60))
++        metrics.record_detections(0,0,[obs])
++        metrics.record_results(0,20,[obs],[assessment('p',None,None)])
++        metrics.record_results(0,100,[obs],[assessment('p')])
++        timing=metrics.report(interval_end_ms=300)['timing']
++        self.assertEqual(timing['entry_to_first_result']['values_ms'],[20])
++        self.assertEqual(timing['usable_torso_to_first_result']['values_ms'],[50])
++        self.assertEqual(timing['entry_to_first_correct_associated_recognition']['median_ms'],100)
++        self.assertEqual(timing['usable_torso_to_first_correct_associated_recognition']['p95_ms'],50)
++        self.assertTrue(timing['entry_to_first_result']['small_sample'])
++
++    def test_shared_history_and_lost_denominator_disable_rates(self):
++        metrics=WalkthroughMetrics(history_limit=2)
++        metrics.observe_frame(0,0,[label('a'),label('b'),label('c')],frame_size=(100,100))
++        metrics.observe_frame(1,33,[label('a')],frame_size=(100,100))
++        result=metrics.report()
++        self.assertEqual(result['history']['used'],2)
++        self.assertEqual(result['history']['dropped_passages'],1)
++        self.assertIsNone(result['garment_accuracy_all_labeled_passages'])
++        self.assertIsNone(result['timing']['fixed_500ms_torso_trial']['success_rate'])
++        self.assertEqual(result['garment_accuracy_status'],'unavailable_history_truncated')
++
++    def test_zero_passages_missing_exit_and_preentry_results_never_score(self):
++        self.assertEqual(WalkthroughMetrics().report()['garment_accuracy_status'],'unavailable_no_passages')
++        metrics=WalkthroughMetrics()
++        row=label(entry=100,exit=None,usable=110)
++        metrics.observe_frame(0,100,[row],frame_size=(100,100))
++        obs=observation('p',(0,0,20,20),(0,30,20,60))
++        metrics.record_detections(0,100,[obs])
++        metrics.record_results(0,90,[obs],[assessment('p')])
++        metrics.record_results(0,120,[obs],[assessment('p')])
++        result=metrics.report()
++        self.assertIsNone(result['garment_accuracy_all_labeled_passages'])
++        self.assertFalse(result['passages'][0]['correct_before_exit'])
++        self.assertIsNone(result['passages'][0]['result_rows'][0]['before_zone_exit'])
++
++    def test_actual_logical_passage_ids_drive_duplicate_count(self):
++        metrics=WalkthroughMetrics()
++        metrics.observe_frame(0,0,[label()],frame_size=(100,100))
++        obs=observation('p',(0,0,20,20),(0,30,20,60))
++        metrics.record_detections(0,0,[obs])
++        item=assessment('p');item.garment.passage_id='logical-one'
++        metrics.record_results(0,100,[obs],[item])
++        metrics.record_results(0,110,[obs],[item])
++        item.garment.passage_id='logical-two'
++        metrics.record_results(0,120,[obs],[item])
++        self.assertEqual(metrics.report()['duplicate_logical_result_ids'],1)
++
++    def test_replay_rejects_oversize_annotations_and_existing_output_before_models(self):
++        with tempfile.TemporaryDirectory() as folder:
++            root=Path(folder); labels=root/'labels.jsonl'; video=root/'fixture.avi'; report=root/'report.json'
++            with labels.open('wb') as stream:stream.truncate(33*1024*1024)
++            with self.assertRaisesRegex(ValueError,'32 MiB'):load_annotations(labels)
++            labels.write_text('');video.write_bytes(b'fixture');report.write_text('preserve')
++            command=[sys.executable,'scripts/replay_camera_assessment.py','--video',str(video),
++                '--annotations',str(labels),'--mode','candidate','--output',str(report)]
++            result=subprocess.run(command,capture_output=True,text=True,timeout=10)
++            self.assertNotEqual(result.returncode,0)
++            self.assertIn('Output already exists',result.stderr)
++            self.assertEqual(report.read_text(),'preserve')
++
++
++if __name__ == "__main__":
++    unittest.main()
+--- /dev/null
++++ b/tests/test_uniform_pipeline_profile.py
+@@ -0,0 +1,33 @@
++"""Regression for same-frame handoff in the isolated timing harness."""
++import threading
++import unittest
++from types import SimpleNamespace
++from unittest.mock import Mock
++
++import numpy as np
++
++from core.live_pipeline import MonitorTask, TrackedFace
++from core.live_state import FrameContext
++from scripts.profile_uniform_pipeline import assessment_task
++
++
++class ProfileHandoffTests(unittest.TestCase):
++    def test_face_landmarks_and_torso_reach_assessment_without_redetection(self):
++        task = MonitorTask(FrameContext(1, ('fixture', 1), 100.),
++            np.zeros((80, 80, 3), dtype=np.uint8), 100., threading.Event(),
++            observation_only=True)
++        observations = (TrackedFace((10, 2, 30, 20), .99, ((15, 8),), 1,
++            'person:1', 0, (0, 0, 50, 80), (5, 22, 45, 65)),)
++        session = Mock()
++        session.observe.side_effect = lambda annotated, faces: annotated
++        result = assessment_task(session, SimpleNamespace(task=task, observations=observations))
++        self.assertEqual(result.observations, observations)
++        self.assertIs(result.frame, task.frame)
++        self.assertIsNone(task.observations)
++        self.assertIs(result.cancelled, task.cancelled)
++        self.assertEqual(result.context, task.context)
++        session.observe.assert_called_once_with(result, observations)
++
++
++if __name__ == '__main__':
++    unittest.main()
+--- /dev/null
++++ b/tests/test_uniform_observation_launcher.py
+@@ -0,0 +1,93 @@
++"""Isolation tests use fake camera definitions and disposable application files."""
++import json
++import os
++from pathlib import Path
++import tempfile
++import unittest
++from unittest.mock import patch
++
++from scripts.launch_uniform_observation import prepare_workspace, child_environment
++
++
++class ObservationLauncherTests(unittest.TestCase):
++    def setUp(self):
++        self.tmp = tempfile.TemporaryDirectory()
++        self.addCleanup(self.tmp.cleanup)
++        base = Path(self.tmp.name)
++        self.source = base/'source'; self.source.mkdir()
++        self.private = base/'private'; self.private.mkdir()
++        for name in ('core','models','data'):
++            (self.source/name).mkdir()
++        for name in ('main.py','web_portal.py'):
++            (self.source/name).write_text('# disposable fixture\n')
++        (self.source/'models/model.pt').write_bytes(b'fixture model')
++        (self.source/'data/cbvms.db').write_bytes(b'private roster sentinel')
++        (self.source/'data/cloud-sync.json').write_text('{"enabled":true}')
++        (self.source/'data/recovery-relay.json').write_text('{}')
++        (self.source/'data/ip_cameras.json').write_text(json.dumps({'cameras':[
++            {'id':'gate','label':'Front Gate','url':'rtsp://fixture.invalid/one'},
++            {'id':'else','label':'Elsewhere','url':'rtsp://fixture.invalid/two'}]}))
++        (self.source/'data/camera_preference.json').write_text('{"id":"usb_0"}')
++        self.config = base/'config.json'
++        self.config.write_text(json.dumps({'schema':1,'mode':'observation_only',
++            'candidate_bundle':'candidate','candidate_sha256':'a'*64,
++            'recognition_confidence':.8,'logo_verification':{'enabled':False}}))
++
++    def prepare(self, primary='front gate'):
++        return prepare_workspace(self.private,self.config,primary,source=self.source)
++
++    def test_private_database_and_exact_camera_selection_without_source_mutation(self):
++        before = {str(p):p.read_bytes() for p in (self.source/'data').iterdir()}
++        config, primary = self.prepare()
++        self.assertEqual(primary,{'id':'ip_gate','type':'rj45','label':'Front Gate'})
++        self.assertFalse((self.private/'data/cbvms.db').exists())
++        self.assertFalse((self.private/'data/cloud-sync.json').exists())
++        self.assertFalse((self.private/'data/recovery-relay.json').exists())
++        self.assertEqual(json.loads((self.private/'data/ip_cameras.json').read_text())['cameras'],
++            [{'id':'gate','label':'Front Gate','url':'rtsp://fixture.invalid/one'}])
++        self.assertEqual(json.loads((self.private/'data/camera_view_preference.json').read_text())['sources'],[])
++        self.assertEqual(json.loads(config.read_text())['candidate_bundle'],str((self.config.parent/'candidate').resolve()))
++        self.assertEqual(before,{str(p):p.read_bytes() for p in (self.source/'data').iterdir()})
++        self.assertEqual(self.private.stat().st_mode & 0o777,0o700)
++        self.assertEqual((self.private/'data/ip_cameras.json').stat().st_mode & 0o777,0o600)
++
++    def test_models_are_independent_copies_and_camera_configs_not_shared(self):
++        self.prepare('MacBook Camera')
++        self.assertFalse((self.private/'data/ip_cameras.json').exists())
++        copied=self.private/'models/model.pt'; copied.write_bytes(b'private mutation')
++        self.assertEqual((self.source/'models/model.pt').read_bytes(),b'fixture model')
++        self.assertFalse(copied.is_symlink())
++
++    def test_reject_workspace_inside_source_or_nonempty_destination(self):
++        with self.assertRaises(ValueError):
++            prepare_workspace(self.source/'child',self.config,'front gate',source=self.source)
++        (self.private/'sentinel').write_text('preserve')
++        with self.assertRaises(ValueError):self.prepare()
++        self.assertEqual((self.private/'sentinel').read_text(),'preserve')
++
++    def test_reject_ambiguous_camera_and_symlinked_assets(self):
++        with self.assertRaises(ValueError):self.prepare('missing camera')
++        # Use a fresh destination after the failed preparation.
++        self.private=self.private.parent/'other';self.private.mkdir()
++        (self.source/'models/link').symlink_to(self.source/'data/cbvms.db')
++        with self.assertRaisesRegex(ValueError,'Symlink'):self.prepare()
++
++    def test_reject_enabled_untrained_verifier(self):
++        config=json.loads(self.config.read_text());config['logo_verification']={'enabled':True}
++        self.config.write_text(json.dumps(config))
++        with self.assertRaises(ValueError):self.prepare()
++        self.assertEqual(list(self.private.iterdir()),[])
++
++    def test_environment_cannot_reenable_production_runtime_or_import_path(self):
++        with patch.dict(os.environ,{'CBVMS_ASSESSMENT_OBSERVATION_ONLY':'0',
++                'CBVMS_UNIFORM_OBSERVATION_CONFIG':'/production/config',
++                'CBVMS_OTHER_SECRET':'fixture','PYTHONPATH':'/production/import'},clear=True):
++            env=child_environment(self.private,self.config,'cpu')
++        self.assertEqual(env['CBVMS_ASSESSMENT_OBSERVATION_ONLY'],'1')
++        self.assertEqual(env['CBVMS_UNIFORM_OBSERVATION_CONFIG'],str(self.config))
++        self.assertNotIn('CBVMS_OTHER_SECRET',env)
++        self.assertNotIn('PYTHONPATH',env)
++        self.assertTrue(env['YOLO_CONFIG_DIR'].startswith(str(self.private)))
++
++
++if __name__ == '__main__':unittest.main()

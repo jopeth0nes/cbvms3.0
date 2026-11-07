@@ -1,0 +1,1290 @@
+{
+  "kind": "real_models_on_public_stills_not_walkthroughs",
+  "environment": {
+    "platform": "macOS-26.5-arm64-arm-64bit",
+    "machine": "arm64",
+    "processor": "arm",
+    "cpu_count": 10,
+    "macos_version": "26.5",
+    "hardware_model": "Mac16,12",
+    "cpu_model": "Apple M4",
+    "python_version": "3.12.13",
+    "numpy_version": "1.26.4",
+    "opencv_version": "4.10.0",
+    "torch_version": "2.2.2",
+    "mps_available": true,
+    "ultralytics_version": "8.3.27"
+  },
+  "inputs": [
+    {
+      "sha256": "c02019c4979c191eb739ddd944445ef408dad5679acab6fd520ef9d434bfbc63",
+      "width": 810,
+      "height": 1080
+    },
+    {
+      "sha256": "16d73869e3267a7d4ed00de8e860833bd1657c1b252e94c0c348277adc7b6edb",
+      "width": 1280,
+      "height": 720
+    }
+  ],
+  "model_hashes": {
+    "det_10g.onnx": "5838f7fe053675b1c7a08b633df49e7af5495cee0493c7dcf6697200b85b5b91",
+    "w600k_r50.onnx": "4c06341c33c2ca1f86781dab0e829f88ad5b64be9fba56e56bc9ebdefc619e43",
+    "body": "f59b3d833e2ff32e194b5bb8e08d211dc7c5bdf144b90d2c8412c47ccfc83b36",
+    "candidate": "4eda5fd372adbd80749553f849bc155a3fc4873fa2b660774d413a26bdaaf65a"
+  },
+  "candidate_synthetic": true,
+  "candidate_config": {
+    "candidate_bundle": "/Users/jopethones/Documents/GitHub/cbvms3.0/data/uniform_candidate_smoke/645a629ef7034ed8ae06d3a4743ba75d/candidates/ffe234076d3d428eb28c332838b9e5fd",
+    "candidate_sha256": "4eda5fd372adbd80749553f849bc155a3fc4873fa2b660774d413a26bdaaf65a",
+    "recognition_confidence": 0.8,
+    "backend": "cpu",
+    "assessment_zone": null,
+    "policy": null,
+    "minimum_torso_px": 160,
+    "minimum_sharpness": 25.0,
+    "evidence_ttl": 1.0,
+    "refresh_interval": 0.5,
+    "frame_ttl": 1.0,
+    "max_passages": 48,
+    "logo_verification": {
+      "enabled": false
+    }
+  },
+  "configuration": {
+    "warmup_frames_per_backend": 4,
+    "measured_frames_per_backend": 20,
+    "face_input": [
+      320,
+      320
+    ],
+    "body_input": "existing predictor default (640)",
+    "garment_input": 224,
+    "recognition_distance": 0.5,
+    "identity_margin": 0.05,
+    "recognition_confidence": 0.8,
+    "camera_workload": 0,
+    "earrings": false,
+    "pose": false,
+    "independent_still_frames": true,
+    "logo_enabled": false,
+    "torch_threads_requested": 2
+  },
+  "results": [
+    {
+      "body_requested": "cpu",
+      "status": "completed",
+      "body_backend": {
+        "requested": "cpu",
+        "active": "cpu",
+        "model_parameter_device": "cpu",
+        "warm": true,
+        "fallback_reason": null
+      },
+      "face_providers": {
+        "detection": [
+          "CPUExecutionProvider"
+        ],
+        "recognition": [
+          "CPUExecutionProvider"
+        ]
+      },
+      "candidate_backend": {
+        "requested": "cpu",
+        "active": "cpu",
+        "model_parameter_device": "cpu",
+        "fallback_reason": null
+      },
+      "threads": {
+        "requested": 2,
+        "torch": 2,
+        "opencv": 10
+      },
+      "samples": [
+        {
+          "image_index": 0,
+          "frame_copy_ms": 0.07866695523262024,
+          "tracking_ms": 63.729625078849494,
+          "usable_evidence_gate_ms": 0.07349997758865356,
+          "publication_to_consumer_ms": 0.0635830219835043,
+          "frame_to_result_ms": 203.05458398070186,
+          "frame_to_consumer_ms": 203.11816700268537,
+          "faces": 2,
+          "associated_torsos": 2,
+          "garment_results": 2,
+          "garment_inferences": 0,
+          "recognized": 0,
+          "unassessed_reasons": [
+            "Insufficient torso resolution \u00b7 Policy not configured; department/day/schedule permissions unassessed",
+            "Insufficient torso resolution \u00b7 Policy not configured; department/day/schedule permissions unassessed"
+          ]
+        },
+        {
+          "image_index": 1,
+          "frame_copy_ms": 0.07062498480081558,
+          "tracking_ms": 58.17229091189802,
+          "usable_evidence_gate_ms": 0.3319591050967574,
+          "publication_to_consumer_ms": 0.046749948523938656,
+          "frame_to_result_ms": 200.75245795305818,
+          "frame_to_consumer_ms": 200.79920790158212,
+          "faces": 2,
+          "associated_torsos": 1,
+          "garment_results": 2,
+          "garment_inferences": 1,
+          "recognized": 0,
+          "unassessed_reasons": [
+            "No valid face, body, and torso association \u00b7 Policy not configured; department/day/schedule permissions unassessed",
+            "Uncertain garment classification \u00b7 Policy not configured; department/day/schedule permissions unassessed"
+          ]
+        },
+        {
+          "image_index": 0,
+          "frame_copy_ms": 0.0738329254090786,
+          "tracking_ms": 63.44216701108962,
+          "usable_evidence_gate_ms": 0.06700004450976849,
+          "publication_to_consumer_ms": 0.0588330440223217,
+          "frame_to_result_ms": 203.5764999454841,
+          "frame_to_consumer_ms": 203.63533298950642,
+          "faces": 2,
+          "associated_torsos": 2,
+          "garment_results": 2,
+          "garment_inferences": 0,
+          "recognized": 0,
+          "unassessed_reasons": [
+            "Insufficient torso resolution \u00b7 Policy not configured; department/day/schedule permissions unassessed",
+            "Insufficient torso resolution \u00b7 Policy not configured; department/day/schedule permissions unassessed"
+          ]
+        },
+        {
+          "image_index": 1,
+          "frame_copy_ms": 0.06904208566993475,
+          "tracking_ms": 58.194875018671155,
+          "usable_evidence_gate_ms": 0.33904099836945534,
+          "publication_to_consumer_ms": 0.04804099444299936,
+          "frame_to_result_ms": 201.77541708108038,
+          "frame_to_consumer_ms": 201.82345807552338,
+          "faces": 2,
+          "associated_torsos": 1,
+          "garment_results": 2,
+          "garment_inferences": 1,
+          "recognized": 0,
+          "unassessed_reasons": [
+            "No valid face, body, and torso association \u00b7 Policy not configured; department/day/schedule permissions unassessed",
+            "Uncertain garment classification \u00b7 Policy not configured; department/day/schedule permissions unassessed"
+          ]
+        },
+        {
+          "image_index": 0,
+          "frame_copy_ms": 0.07641699630767107,
+          "tracking_ms": 63.87408298905939,
+          "usable_evidence_gate_ms": 0.0629170099273324,
+          "publication_to_consumer_ms": 0.05841604433953762,
+          "frame_to_result_ms": 203.60945898573846,
+          "frame_to_consumer_ms": 203.667875030078,
+          "faces": 2,
+          "associated_torsos": 2,
+          "garment_results": 2,
+          "garment_inferences": 0,
+          "recognized": 0,
+          "unassessed_reasons": [
+            "Insufficient torso resolution \u00b7 Policy not configured; department/day/schedule permissions unassessed",
+            "Insufficient torso resolution \u00b7 Policy not configured; department/day/schedule permissions unassessed"
+          ]
+        },
+        {
+          "image_index": 1,
+          "frame_copy_ms": 0.07320800796151161,
+          "tracking_ms": 58.369249920360744,
+          "usable_evidence_gate_ms": 0.3537921002134681,
+          "publication_to_consumer_ms": 0.05366699770092964,
+          "frame_to_result_ms": 201.213208027184,
+          "frame_to_consumer_ms": 201.26687502488494,
+          "faces": 2,
+          "associated_torsos": 1,
+          "garment_results": 2,
+          "garment_inferences": 1,
+          "recognized": 0,
+          "unassessed_reasons": [
+            "No valid face, body, and torso association \u00b7 Policy not configured; department/day/schedule permissions unassessed",
+            "Uncertain garment classification \u00b7 Policy not configured; department/day/schedule permissions unassessed"
+          ]
+        },
+        {
+          "image_index": 0,
+          "frame_copy_ms": 0.07220788393169641,
+          "tracking_ms": 64.06495801638812,
+          "usable_evidence_gate_ms": 0.06683403626084328,
+          "publication_to_consumer_ms": 0.04795799031853676,
+          "frame_to_result_ms": 203.62408296205103,
+          "frame_to_consumer_ms": 203.67204095236957,
+          "faces": 2,
+          "associated_torsos": 2,
+          "garment_results": 2,
+          "garment_inferences": 0,
+          "recognized": 0,
+          "unassessed_reasons": [
+            "Insufficient torso resolution \u00b7 Policy not configured; department/day/schedule permissions unassessed",
+            "Insufficient torso resolution \u00b7 Policy not configured; department/day/schedule permissions unassessed"
+          ]
+        },
+        {
+          "image_index": 1,
+          "frame_copy_ms": 0.0694170594215393,
+          "tracking_ms": 58.034916990436614,
+          "usable_evidence_gate_ms": 0.3292500041425228,
+          "publication_to_consumer_ms": 0.049541937187314034,
+          "frame_to_result_ms": 200.8917920757085,
+          "frame_to_consumer_ms": 200.94133401289582,
+          "faces": 2,
+          "associated_torsos": 1,
+          "garment_results": 2,
+          "garment_inferences": 1,
+          "recognized": 0,
+          "unassessed_reasons": [
+            "No valid face, body, and torso association \u00b7 Policy not configured; department/day/schedule permissions unassessed",
+            "Uncertain garment classification \u00b7 Policy not configured; department/day/schedule permissions unassessed"
+          ]
+        },
+        {
+          "image_index": 0,
+          "frame_copy_ms": 0.07395900320261717,
+          "tracking_ms": 63.84379102382809,
+          "usable_evidence_gate_ms": 0.06683403626084328,
+          "publication_to_consumer_ms": 0.06187497638165951,
+          "frame_to_result_ms": 203.84079206269234,
+          "frame_to_consumer_ms": 203.902667039074,
+          "faces": 2,
+          "associated_torsos": 2,
+          "garment_results": 2,
+          "garment_inferences": 0,
+          "recognized": 0,
+          "unassessed_reasons": [
+            "Insufficient torso resolution \u00b7 Policy not configured; department/day/schedule permissions unassessed",
+            "Insufficient torso resolution \u00b7 Policy not configured; department/day/schedule permissions unassessed"
+          ]
+        },
+        {
+          "image_index": 1,
+          "frame_copy_ms": 0.07316702976822853,
+          "tracking_ms": 58.33974992856383,
+          "usable_evidence_gate_ms": 0.33320800866931677,
+          "publication_to_consumer_ms": 0.04512490704655647,
+          "frame_to_result_ms": 201.06062502600253,
+          "frame_to_consumer_ms": 201.10574993304908,
+          "faces": 2,
+          "associated_torsos": 1,
+          "garment_results": 2,
+          "garment_inferences": 1,
+          "recognized": 0,
+          "unassessed_reasons": [
+            "No valid face, body, and torso association \u00b7 Policy not configured; department/day/schedule permissions unassessed",
+            "Uncertain garment classification \u00b7 Policy not configured; department/day/schedule permissions unassessed"
+          ]
+        },
+        {
+          "image_index": 0,
+          "frame_copy_ms": 0.07566693238914013,
+          "tracking_ms": 64.08966600429267,
+          "usable_evidence_gate_ms": 0.0653750030323863,
+          "publication_to_consumer_ms": 0.055208103731274605,
+          "frame_to_result_ms": 205.59341693297029,
+          "frame_to_consumer_ms": 205.64862503670156,
+          "faces": 2,
+          "associated_torsos": 2,
+          "garment_results": 2,
+          "garment_inferences": 0,
+          "recognized": 0,
+          "unassessed_reasons": [
+            "Insufficient torso resolution \u00b7 Policy not configured; department/day/schedule permissions unassessed",
+            "Insufficient torso resolution \u00b7 Policy not configured; department/day/schedule permissions unassessed"
+          ]
+        },
+        {
+          "image_index": 1,
+          "frame_copy_ms": 0.08895900100469589,
+          "tracking_ms": 59.43220807239413,
+          "usable_evidence_gate_ms": 0.330416951328516,
+          "publication_to_consumer_ms": 0.04641595296561718,
+          "frame_to_result_ms": 202.4980840506032,
+          "frame_to_consumer_ms": 202.54450000356883,
+          "faces": 2,
+          "associated_torsos": 1,
+          "garment_results": 2,
+          "garment_inferences": 1,
+          "recognized": 0,
+          "unassessed_reasons": [
+            "No valid face, body, and torso association \u00b7 Policy not configured; department/day/schedule permissions unassessed",
+            "Uncertain garment classification \u00b7 Policy not configured; department/day/schedule permissions unassessed"
+          ]
+        },
+        {
+          "image_index": 0,
+          "frame_copy_ms": 0.07533293683081865,
+          "tracking_ms": 63.991667004302144,
+          "usable_evidence_gate_ms": 0.06729201413691044,
+          "publication_to_consumer_ms": 0.05716690793633461,
+          "frame_to_result_ms": 206.14208304323256,
+          "frame_to_consumer_ms": 206.1992499511689,
+          "faces": 2,
+          "associated_torsos": 2,
+          "garment_results": 2,
+          "garment_inferences": 0,
+          "recognized": 0,
+          "unassessed_reasons": [
+            "Insufficient torso resolution \u00b7 Policy not configured; department/day/schedule permissions unassessed",
+            "Insufficient torso resolution \u00b7 Policy not configured; department/day/schedule permissions unassessed"
+          ]
+        },
+        {
+          "image_index": 1,
+          "frame_copy_ms": 0.0752090709283948,
+          "tracking_ms": 59.866457944735885,
+          "usable_evidence_gate_ms": 0.3328330349177122,
+          "publication_to_consumer_ms": 0.049666035920381546,
+          "frame_to_result_ms": 204.6217090683058,
+          "frame_to_consumer_ms": 204.67137510422617,
+          "faces": 2,
+          "associated_torsos": 1,
+          "garment_results": 2,
+          "garment_inferences": 1,
+          "recognized": 0,
+          "unassessed_reasons": [
+            "No valid face, body, and torso association \u00b7 Policy not configured; department/day/schedule permissions unassessed",
+            "Uncertain garment classification \u00b7 Policy not configured; department/day/schedule permissions unassessed"
+          ]
+        },
+        {
+          "image_index": 0,
+          "frame_copy_ms": 0.0790830235928297,
+          "tracking_ms": 64.8398749763146,
+          "usable_evidence_gate_ms": 0.06766710430383682,
+          "publication_to_consumer_ms": 0.05870894528925419,
+          "frame_to_result_ms": 207.24558306392282,
+          "frame_to_consumer_ms": 207.30429200921208,
+          "faces": 2,
+          "associated_torsos": 2,
+          "garment_results": 2,
+          "garment_inferences": 0,
+          "recognized": 0,
+          "unassessed_reasons": [
+            "Insufficient torso resolution \u00b7 Policy not configured; department/day/schedule permissions unassessed",
+            "Insufficient torso resolution \u00b7 Policy not configured; department/day/schedule permissions unassessed"
+          ]
+        },
+        {
+          "image_index": 1,
+          "frame_copy_ms": 0.08049991447478533,
+          "tracking_ms": 61.15395808592439,
+          "usable_evidence_gate_ms": 0.37341692950576544,
+          "publication_to_consumer_ms": 0.05449994932860136,
+          "frame_to_result_ms": 205.61562501825392,
+          "frame_to_consumer_ms": 205.67012496758252,
+          "faces": 2,
+          "associated_torsos": 1,
+          "garment_results": 2,
+          "garment_inferences": 1,
+          "recognized": 0,
+          "unassessed_reasons": [
+            "No valid face, body, and torso association \u00b7 Policy not configured; department/day/schedule permissions unassessed",
+            "Uncertain garment classification \u00b7 Policy not configured; department/day/schedule permissions unassessed"
+          ]
+        },
+        {
+          "image_index": 0,
+          "frame_copy_ms": 0.08304102811962366,
+          "tracking_ms": 65.40866696741432,
+          "usable_evidence_gate_ms": 0.07379194721579552,
+          "publication_to_consumer_ms": 0.05625002086162567,
+          "frame_to_result_ms": 208.9804159477353,
+          "frame_to_consumer_ms": 209.03666596859694,
+          "faces": 2,
+          "associated_torsos": 2,
+          "garment_results": 2,
+          "garment_inferences": 0,
+          "recognized": 0,
+          "unassessed_reasons": [
+            "Insufficient torso resolution \u00b7 Policy not configured; department/day/schedule permissions unassessed",
+            "Insufficient torso resolution \u00b7 Policy not configured; department/day/schedule permissions unassessed"
+          ]
+        },
+        {
+          "image_index": 1,
+          "frame_copy_ms": 0.07108307909220457,
+          "tracking_ms": 59.19449997600168,
+          "usable_evidence_gate_ms": 0.32712495885789394,
+          "publication_to_consumer_ms": 0.05183299072086811,
+          "frame_to_result_ms": 204.4061670312658,
+          "frame_to_consumer_ms": 204.45800002198666,
+          "faces": 2,
+          "associated_torsos": 1,
+          "garment_results": 2,
+          "garment_inferences": 1,
+          "recognized": 0,
+          "unassessed_reasons": [
+            "No valid face, body, and torso association \u00b7 Policy not configured; department/day/schedule permissions unassessed",
+            "Uncertain garment classification \u00b7 Policy not configured; department/day/schedule permissions unassessed"
+          ]
+        },
+        {
+          "image_index": 0,
+          "frame_copy_ms": 0.07625005673617125,
+          "tracking_ms": 66.18854193948209,
+          "usable_evidence_gate_ms": 0.06445799954235554,
+          "publication_to_consumer_ms": 0.0667079584673047,
+          "frame_to_result_ms": 209.487667074427,
+          "frame_to_consumer_ms": 209.5543750328943,
+          "faces": 2,
+          "associated_torsos": 2,
+          "garment_results": 2,
+          "garment_inferences": 0,
+          "recognized": 0,
+          "unassessed_reasons": [
+            "Insufficient torso resolution \u00b7 Policy not configured; department/day/schedule permissions unassessed",
+            "Insufficient torso resolution \u00b7 Policy not configured; department/day/schedule permissions unassessed"
+          ]
+        },
+        {
+          "image_index": 1,
+          "frame_copy_ms": 0.07870898116379976,
+          "tracking_ms": 60.136415995657444,
+          "usable_evidence_gate_ms": 0.33312500454485416,
+          "publication_to_consumer_ms": 0.04666706081479788,
+          "frame_to_result_ms": 204.62041697464883,
+          "frame_to_consumer_ms": 204.66708403546363,
+          "faces": 2,
+          "associated_torsos": 1,
+          "garment_results": 2,
+          "garment_inferences": 1,
+          "recognized": 0,
+          "unassessed_reasons": [
+            "No valid face, body, and torso association \u00b7 Policy not configured; department/day/schedule permissions unassessed",
+            "Uncertain garment classification \u00b7 Policy not configured; department/day/schedule permissions unassessed"
+          ]
+        }
+      ],
+      "logo_schedule_calls": 0,
+      "logo_inference_calls": 0,
+      "logo_backend_present": false,
+      "stage_metrics": {
+        "frame_copy": {
+          "count": 20,
+          "retained": 20,
+          "p50_ms": 0.063,
+          "p95_ms": 0.07,
+          "p99_ms": 0.077
+        },
+        "lock_detector": {
+          "count": 40,
+          "retained": 40,
+          "p50_ms": 0.0,
+          "p95_ms": 0.0,
+          "p99_ms": 0.0
+        },
+        "face_inference": {
+          "count": 20,
+          "retained": 20,
+          "p50_ms": 38.08,
+          "p95_ms": 39.133,
+          "p99_ms": 40.124
+        },
+        "lock_person": {
+          "count": 40,
+          "retained": 40,
+          "p50_ms": 0.0,
+          "p95_ms": 0.001,
+          "p99_ms": 0.001
+        },
+        "body_inference": {
+          "count": 20,
+          "retained": 20,
+          "p50_ms": 22.905,
+          "p95_ms": 26.183,
+          "p99_ms": 26.457
+        },
+        "tracking": {
+          "count": 20,
+          "retained": 20,
+          "p50_ms": 62.287,
+          "p95_ms": 65.436,
+          "p99_ms": 66.03
+        },
+        "queue_assessment": {
+          "count": 20,
+          "retained": 20,
+          "p50_ms": 0.034,
+          "p95_ms": 0.04,
+          "p99_ms": 0.042
+        },
+        "lock_recognition": {
+          "count": 20,
+          "retained": 20,
+          "p50_ms": 0.0,
+          "p95_ms": 0.0,
+          "p99_ms": 0.0
+        },
+        "face_alignment": {
+          "count": 40,
+          "retained": 40,
+          "p50_ms": 0.206,
+          "p95_ms": 0.235,
+          "p99_ms": 0.237
+        },
+        "face_embedding": {
+          "count": 40,
+          "retained": 40,
+          "p50_ms": 69.358,
+          "p95_ms": 70.843,
+          "p99_ms": 71.144
+        },
+        "recognition_inference": {
+          "count": 20,
+          "retained": 20,
+          "p50_ms": 139.136,
+          "p95_ms": 142.122,
+          "p99_ms": 142.342
+        },
+        "gallery_matching": {
+          "count": 20,
+          "retained": 20,
+          "p50_ms": 0.018,
+          "p95_ms": 0.023,
+          "p99_ms": 0.023
+        },
+        "recognition": {
+          "count": 20,
+          "retained": 20,
+          "p50_ms": 139.229,
+          "p95_ms": 142.222,
+          "p99_ms": 142.44
+        },
+        "database_read": {
+          "count": 20,
+          "retained": 20,
+          "p50_ms": 0.632,
+          "p95_ms": 0.651,
+          "p99_ms": 0.654
+        },
+        "body": {
+          "count": 20,
+          "retained": 20,
+          "p50_ms": 0.0,
+          "p95_ms": 0.0,
+          "p99_ms": 0.0
+        },
+        "confirmation": {
+          "count": 20,
+          "retained": 20,
+          "p50_ms": 0.103,
+          "p95_ms": 0.116,
+          "p99_ms": 0.119
+        },
+        "capture_to_assessment": {
+          "count": 20,
+          "retained": 20,
+          "p50_ms": 203.759,
+          "p95_ms": 209.036,
+          "p99_ms": 209.428
+        }
+      },
+      "components": {
+        "association_ms": {
+          "count": 40,
+          "median_ms": 0.017062528058886528,
+          "p95_ms": 0.027155876159667965
+        },
+        "torso_localization_ms": {
+          "count": 40,
+          "median_ms": 0.005583511665463448,
+          "p95_ms": 0.007574434857815502
+        },
+        "garment_preprocessing_ms": {
+          "count": 10,
+          "median_ms": 0.13289606431499124,
+          "p95_ms": 0.1458293758332729
+        },
+        "garment_inference_ms": {
+          "count": 10,
+          "median_ms": 2.7195209404453635,
+          "p95_ms": 2.9299248591996725
+        },
+        "garment_total_ms": {
+          "count": 10,
+          "median_ms": 2.852124976925552,
+          "p95_ms": 3.0716376903001215
+        },
+        "garment_queue_delay_ms": {
+          "count": 10,
+          "median_ms": 0.032791984267532825,
+          "p95_ms": 0.03907294594682753
+        },
+        "garment_capture_to_classifier_start_ms": {
+          "count": 10,
+          "median_ms": 199.195729510393,
+          "p95_ms": 202.00643138377927
+        },
+        "garment_assessment_ms": {
+          "count": 10,
+          "median_ms": 2.9045204864814878,
+          "p95_ms": 3.12997298897244
+        },
+        "garment_capture_to_decision_ms": {
+          "count": 10,
+          "median_ms": 202.09264603909105,
+          "p95_ms": 205.11712950537913
+        },
+        "garment_first_usable_to_decision_ms": {
+          "count": 10,
+          "median_ms": 202.09264603909105,
+          "p95_ms": 205.11712950537913
+        }
+      },
+      "frame_timings": {
+        "frame_copy_ms": {
+          "count": 20,
+          "median_ms": 0.07527100387960672,
+          "p95_ms": 0.08333692676387727
+        },
+        "tracking_ms": {
+          "count": 20,
+          "median_ms": 62.298062548507005,
+          "p95_ms": 65.44766071601771
+        },
+        "usable_evidence_gate_ms": {
+          "count": 20,
+          "median_ms": 0.20045845303684473,
+          "p95_ms": 0.35477334167808294
+        },
+        "publication_to_consumer_ms": {
+          "count": 20,
+          "median_ms": 0.0540834735147655,
+          "p95_ms": 0.06373926880769432
+        },
+        "frame_to_result_ms": {
+          "count": 20,
+          "median_ms": 203.7324375123717,
+          "p95_ms": 209.0057785040699
+        },
+        "frame_to_consumer_ms": {
+          "count": 20,
+          "median_ms": 203.7873539957218,
+          "p95_ms": 209.0625514218118
+        }
+      },
+      "gallery_size": 0,
+      "identity_accuracy": null,
+      "worker_stopped": true
+    },
+    {
+      "body_requested": "mps",
+      "status": "completed",
+      "body_backend": {
+        "requested": "mps",
+        "active": "mps",
+        "model_parameter_device": "mps:0",
+        "warm": true,
+        "fallback_reason": null
+      },
+      "face_providers": {
+        "detection": [
+          "CPUExecutionProvider"
+        ],
+        "recognition": [
+          "CPUExecutionProvider"
+        ]
+      },
+      "candidate_backend": {
+        "requested": "cpu",
+        "active": "cpu",
+        "model_parameter_device": "cpu",
+        "fallback_reason": null
+      },
+      "threads": {
+        "requested": 2,
+        "torch": 2,
+        "opencv": 10
+      },
+      "samples": [
+        {
+          "image_index": 0,
+          "frame_copy_ms": 0.07558404467999935,
+          "tracking_ms": 56.240999954752624,
+          "usable_evidence_gate_ms": 0.0660410150885582,
+          "publication_to_consumer_ms": 0.05874992348253727,
+          "frame_to_result_ms": 196.41029206104577,
+          "frame_to_consumer_ms": 196.4690419845283,
+          "faces": 2,
+          "associated_torsos": 2,
+          "garment_results": 2,
+          "garment_inferences": 0,
+          "recognized": 0,
+          "unassessed_reasons": [
+            "Insufficient torso resolution \u00b7 Policy not configured; department/day/schedule permissions unassessed",
+            "Insufficient torso resolution \u00b7 Policy not configured; department/day/schedule permissions unassessed"
+          ]
+        },
+        {
+          "image_index": 1,
+          "frame_copy_ms": 0.07154198829084635,
+          "tracking_ms": 60.331332962960005,
+          "usable_evidence_gate_ms": 0.34083309583365917,
+          "publication_to_consumer_ms": 0.04829210229218006,
+          "frame_to_result_ms": 201.62445795722306,
+          "frame_to_consumer_ms": 201.67275005951524,
+          "faces": 2,
+          "associated_torsos": 1,
+          "garment_results": 2,
+          "garment_inferences": 1,
+          "recognized": 0,
+          "unassessed_reasons": [
+            "No valid face, body, and torso association \u00b7 Policy not configured; department/day/schedule permissions unassessed",
+            "Uncertain garment classification \u00b7 Policy not configured; department/day/schedule permissions unassessed"
+          ]
+        },
+        {
+          "image_index": 0,
+          "frame_copy_ms": 0.07449998520314693,
+          "tracking_ms": 66.91245804540813,
+          "usable_evidence_gate_ms": 0.0631249276921153,
+          "publication_to_consumer_ms": 0.05362497176975012,
+          "frame_to_result_ms": 206.28620800562203,
+          "frame_to_consumer_ms": 206.33983297739178,
+          "faces": 2,
+          "associated_torsos": 2,
+          "garment_results": 2,
+          "garment_inferences": 0,
+          "recognized": 0,
+          "unassessed_reasons": [
+            "Insufficient torso resolution \u00b7 Policy not configured; department/day/schedule permissions unassessed",
+            "Insufficient torso resolution \u00b7 Policy not configured; department/day/schedule permissions unassessed"
+          ]
+        },
+        {
+          "image_index": 1,
+          "frame_copy_ms": 0.07029203698039055,
+          "tracking_ms": 64.21608303207904,
+          "usable_evidence_gate_ms": 0.31220901291817427,
+          "publication_to_consumer_ms": 0.04725006874650717,
+          "frame_to_result_ms": 205.8937919791788,
+          "frame_to_consumer_ms": 205.9410420479253,
+          "faces": 2,
+          "associated_torsos": 1,
+          "garment_results": 2,
+          "garment_inferences": 1,
+          "recognized": 0,
+          "unassessed_reasons": [
+            "No valid face, body, and torso association \u00b7 Policy not configured; department/day/schedule permissions unassessed",
+            "Uncertain garment classification \u00b7 Policy not configured; department/day/schedule permissions unassessed"
+          ]
+        },
+        {
+          "image_index": 0,
+          "frame_copy_ms": 0.07508299313485622,
+          "tracking_ms": 66.57633394934237,
+          "usable_evidence_gate_ms": 0.06312504410743713,
+          "publication_to_consumer_ms": 0.05450006574392319,
+          "frame_to_result_ms": 206.34208293631673,
+          "frame_to_consumer_ms": 206.39658300206065,
+          "faces": 2,
+          "associated_torsos": 2,
+          "garment_results": 2,
+          "garment_inferences": 0,
+          "recognized": 0,
+          "unassessed_reasons": [
+            "Insufficient torso resolution \u00b7 Policy not configured; department/day/schedule permissions unassessed",
+            "Insufficient torso resolution \u00b7 Policy not configured; department/day/schedule permissions unassessed"
+          ]
+        },
+        {
+          "image_index": 1,
+          "frame_copy_ms": 0.071333022788167,
+          "tracking_ms": 65.32762502320111,
+          "usable_evidence_gate_ms": 0.3349999897181988,
+          "publication_to_consumer_ms": 0.05874992348253727,
+          "frame_to_result_ms": 206.53341605793685,
+          "frame_to_consumer_ms": 206.59216598141938,
+          "faces": 2,
+          "associated_torsos": 1,
+          "garment_results": 2,
+          "garment_inferences": 1,
+          "recognized": 0,
+          "unassessed_reasons": [
+            "No valid face, body, and torso association \u00b7 Policy not configured; department/day/schedule permissions unassessed",
+            "Uncertain garment classification \u00b7 Policy not configured; department/day/schedule permissions unassessed"
+          ]
+        },
+        {
+          "image_index": 0,
+          "frame_copy_ms": 0.0868749339133501,
+          "tracking_ms": 65.56833302602172,
+          "usable_evidence_gate_ms": 0.06391701754182577,
+          "publication_to_consumer_ms": 0.05387491546571255,
+          "frame_to_result_ms": 204.79049999266863,
+          "frame_to_consumer_ms": 204.84437490813434,
+          "faces": 2,
+          "associated_torsos": 2,
+          "garment_results": 2,
+          "garment_inferences": 0,
+          "recognized": 0,
+          "unassessed_reasons": [
+            "Insufficient torso resolution \u00b7 Policy not configured; department/day/schedule permissions unassessed",
+            "Insufficient torso resolution \u00b7 Policy not configured; department/day/schedule permissions unassessed"
+          ]
+        },
+        {
+          "image_index": 1,
+          "frame_copy_ms": 0.07129099685698748,
+          "tracking_ms": 56.49604194331914,
+          "usable_evidence_gate_ms": 0.31404197216033936,
+          "publication_to_consumer_ms": 0.049749971367418766,
+          "frame_to_result_ms": 197.57095794193447,
+          "frame_to_consumer_ms": 197.62070791330189,
+          "faces": 2,
+          "associated_torsos": 1,
+          "garment_results": 2,
+          "garment_inferences": 1,
+          "recognized": 0,
+          "unassessed_reasons": [
+            "No valid face, body, and torso association \u00b7 Policy not configured; department/day/schedule permissions unassessed",
+            "Uncertain garment classification \u00b7 Policy not configured; department/day/schedule permissions unassessed"
+          ]
+        },
+        {
+          "image_index": 0,
+          "frame_copy_ms": 0.07412501145154238,
+          "tracking_ms": 63.967916066758335,
+          "usable_evidence_gate_ms": 0.07162499241530895,
+          "publication_to_consumer_ms": 0.05362497176975012,
+          "frame_to_result_ms": 203.2075000461191,
+          "frame_to_consumer_ms": 203.26112501788884,
+          "faces": 2,
+          "associated_torsos": 2,
+          "garment_results": 2,
+          "garment_inferences": 0,
+          "recognized": 0,
+          "unassessed_reasons": [
+            "Insufficient torso resolution \u00b7 Policy not configured; department/day/schedule permissions unassessed",
+            "Insufficient torso resolution \u00b7 Policy not configured; department/day/schedule permissions unassessed"
+          ]
+        },
+        {
+          "image_index": 1,
+          "frame_copy_ms": 0.06874999962747097,
+          "tracking_ms": 56.91833305172622,
+          "usable_evidence_gate_ms": 0.31795899849385023,
+          "publication_to_consumer_ms": 0.04412501584738493,
+          "frame_to_result_ms": 198.63158301450312,
+          "frame_to_consumer_ms": 198.6757080303505,
+          "faces": 2,
+          "associated_torsos": 1,
+          "garment_results": 2,
+          "garment_inferences": 1,
+          "recognized": 0,
+          "unassessed_reasons": [
+            "No valid face, body, and torso association \u00b7 Policy not configured; department/day/schedule permissions unassessed",
+            "Uncertain garment classification \u00b7 Policy not configured; department/day/schedule permissions unassessed"
+          ]
+        },
+        {
+          "image_index": 0,
+          "frame_copy_ms": 0.07441593334078789,
+          "tracking_ms": 66.87108404003084,
+          "usable_evidence_gate_ms": 0.06070802919566631,
+          "publication_to_consumer_ms": 0.05300005432218313,
+          "frame_to_result_ms": 206.32412494160235,
+          "frame_to_consumer_ms": 206.37712499592453,
+          "faces": 2,
+          "associated_torsos": 2,
+          "garment_results": 2,
+          "garment_inferences": 0,
+          "recognized": 0,
+          "unassessed_reasons": [
+            "Insufficient torso resolution \u00b7 Policy not configured; department/day/schedule permissions unassessed",
+            "Insufficient torso resolution \u00b7 Policy not configured; department/day/schedule permissions unassessed"
+          ]
+        },
+        {
+          "image_index": 1,
+          "frame_copy_ms": 0.07587496656924486,
+          "tracking_ms": 63.77504195552319,
+          "usable_evidence_gate_ms": 0.3445419715717435,
+          "publication_to_consumer_ms": 0.05200004670768976,
+          "frame_to_result_ms": 205.96629194915295,
+          "frame_to_consumer_ms": 206.01829199586064,
+          "faces": 2,
+          "associated_torsos": 1,
+          "garment_results": 2,
+          "garment_inferences": 1,
+          "recognized": 0,
+          "unassessed_reasons": [
+            "No valid face, body, and torso association \u00b7 Policy not configured; department/day/schedule permissions unassessed",
+            "Uncertain garment classification \u00b7 Policy not configured; department/day/schedule permissions unassessed"
+          ]
+        },
+        {
+          "image_index": 0,
+          "frame_copy_ms": 0.07845798972994089,
+          "tracking_ms": 66.70833309181035,
+          "usable_evidence_gate_ms": 0.06870890501886606,
+          "publication_to_consumer_ms": 0.05616701673716307,
+          "frame_to_result_ms": 207.0635830750689,
+          "frame_to_consumer_ms": 207.11975009180605,
+          "faces": 2,
+          "associated_torsos": 2,
+          "garment_results": 2,
+          "garment_inferences": 0,
+          "recognized": 0,
+          "unassessed_reasons": [
+            "Insufficient torso resolution \u00b7 Policy not configured; department/day/schedule permissions unassessed",
+            "Insufficient torso resolution \u00b7 Policy not configured; department/day/schedule permissions unassessed"
+          ]
+        },
+        {
+          "image_index": 1,
+          "frame_copy_ms": 0.07208297029137611,
+          "tracking_ms": 65.64554199576378,
+          "usable_evidence_gate_ms": 0.3221250372007489,
+          "publication_to_consumer_ms": 0.056750024668872356,
+          "frame_to_result_ms": 207.0198329165578,
+          "frame_to_consumer_ms": 207.07658294122666,
+          "faces": 2,
+          "associated_torsos": 1,
+          "garment_results": 2,
+          "garment_inferences": 1,
+          "recognized": 0,
+          "unassessed_reasons": [
+            "No valid face, body, and torso association \u00b7 Policy not configured; department/day/schedule permissions unassessed",
+            "Uncertain garment classification \u00b7 Policy not configured; department/day/schedule permissions unassessed"
+          ]
+        },
+        {
+          "image_index": 0,
+          "frame_copy_ms": 0.0729170860722661,
+          "tracking_ms": 83.46308290492743,
+          "usable_evidence_gate_ms": 0.06737501826137304,
+          "publication_to_consumer_ms": 0.057541998103260994,
+          "frame_to_result_ms": 223.98629202507436,
+          "frame_to_consumer_ms": 224.04383402317762,
+          "faces": 2,
+          "associated_torsos": 2,
+          "garment_results": 2,
+          "garment_inferences": 0,
+          "recognized": 0,
+          "unassessed_reasons": [
+            "Insufficient torso resolution \u00b7 Policy not configured; department/day/schedule permissions unassessed",
+            "Insufficient torso resolution \u00b7 Policy not configured; department/day/schedule permissions unassessed"
+          ]
+        },
+        {
+          "image_index": 1,
+          "frame_copy_ms": 0.0736661022529006,
+          "tracking_ms": 64.66270890086889,
+          "usable_evidence_gate_ms": 0.33016607630997896,
+          "publication_to_consumer_ms": 0.04541606176644564,
+          "frame_to_result_ms": 206.52437501121312,
+          "frame_to_consumer_ms": 206.56979107297957,
+          "faces": 2,
+          "associated_torsos": 1,
+          "garment_results": 2,
+          "garment_inferences": 1,
+          "recognized": 0,
+          "unassessed_reasons": [
+            "No valid face, body, and torso association \u00b7 Policy not configured; department/day/schedule permissions unassessed",
+            "Uncertain garment classification \u00b7 Policy not configured; department/day/schedule permissions unassessed"
+          ]
+        },
+        {
+          "image_index": 0,
+          "frame_copy_ms": 0.07579103112220764,
+          "tracking_ms": 66.05995900463313,
+          "usable_evidence_gate_ms": 0.06608304101973772,
+          "publication_to_consumer_ms": 0.0516669824719429,
+          "frame_to_result_ms": 205.68204100709409,
+          "frame_to_consumer_ms": 205.73370798956603,
+          "faces": 2,
+          "associated_torsos": 2,
+          "garment_results": 2,
+          "garment_inferences": 0,
+          "recognized": 0,
+          "unassessed_reasons": [
+            "Insufficient torso resolution \u00b7 Policy not configured; department/day/schedule permissions unassessed",
+            "Insufficient torso resolution \u00b7 Policy not configured; department/day/schedule permissions unassessed"
+          ]
+        },
+        {
+          "image_index": 1,
+          "frame_copy_ms": 0.07087492849677801,
+          "tracking_ms": 63.76766704488546,
+          "usable_evidence_gate_ms": 0.3205409739166498,
+          "publication_to_consumer_ms": 0.04937499761581421,
+          "frame_to_result_ms": 204.95104196015745,
+          "frame_to_consumer_ms": 205.00041695777327,
+          "faces": 2,
+          "associated_torsos": 1,
+          "garment_results": 2,
+          "garment_inferences": 1,
+          "recognized": 0,
+          "unassessed_reasons": [
+            "No valid face, body, and torso association \u00b7 Policy not configured; department/day/schedule permissions unassessed",
+            "Uncertain garment classification \u00b7 Policy not configured; department/day/schedule permissions unassessed"
+          ]
+        },
+        {
+          "image_index": 0,
+          "frame_copy_ms": 0.07362500764429569,
+          "tracking_ms": 67.40524992346764,
+          "usable_evidence_gate_ms": 0.06745802238583565,
+          "publication_to_consumer_ms": 0.058916048146784306,
+          "frame_to_result_ms": 207.7214999590069,
+          "frame_to_consumer_ms": 207.7804160071537,
+          "faces": 2,
+          "associated_torsos": 2,
+          "garment_results": 2,
+          "garment_inferences": 0,
+          "recognized": 0,
+          "unassessed_reasons": [
+            "Insufficient torso resolution \u00b7 Policy not configured; department/day/schedule permissions unassessed",
+            "Insufficient torso resolution \u00b7 Policy not configured; department/day/schedule permissions unassessed"
+          ]
+        },
+        {
+          "image_index": 1,
+          "frame_copy_ms": 0.0725829740986228,
+          "tracking_ms": 65.64950000029057,
+          "usable_evidence_gate_ms": 0.3299169475212693,
+          "publication_to_consumer_ms": 0.05570810753852129,
+          "frame_to_result_ms": 207.49604189768434,
+          "frame_to_consumer_ms": 207.55175000522286,
+          "faces": 2,
+          "associated_torsos": 1,
+          "garment_results": 2,
+          "garment_inferences": 1,
+          "recognized": 0,
+          "unassessed_reasons": [
+            "No valid face, body, and torso association \u00b7 Policy not configured; department/day/schedule permissions unassessed",
+            "Uncertain garment classification \u00b7 Policy not configured; department/day/schedule permissions unassessed"
+          ]
+        }
+      ],
+      "logo_schedule_calls": 0,
+      "logo_inference_calls": 0,
+      "logo_backend_present": false,
+      "stage_metrics": {
+        "frame_copy": {
+          "count": 20,
+          "retained": 20,
+          "p50_ms": 0.062,
+          "p95_ms": 0.065,
+          "p99_ms": 0.07
+        },
+        "lock_detector": {
+          "count": 40,
+          "retained": 40,
+          "p50_ms": 0.0,
+          "p95_ms": 0.0,
+          "p99_ms": 0.0
+        },
+        "face_inference": {
+          "count": 20,
+          "retained": 20,
+          "p50_ms": 37.84,
+          "p95_ms": 38.222,
+          "p99_ms": 38.337
+        },
+        "lock_person": {
+          "count": 40,
+          "retained": 40,
+          "p50_ms": 0.0,
+          "p95_ms": 0.001,
+          "p99_ms": 0.001
+        },
+        "body_inference": {
+          "count": 20,
+          "retained": 20,
+          "p50_ms": 26.22,
+          "p95_ms": 28.122,
+          "p99_ms": 40.074
+        },
+        "tracking": {
+          "count": 20,
+          "retained": 20,
+          "p50_ms": 65.438,
+          "p95_ms": 68.197,
+          "p99_ms": 80.4
+        },
+        "queue_assessment": {
+          "count": 20,
+          "retained": 20,
+          "p50_ms": 0.033,
+          "p95_ms": 0.035,
+          "p99_ms": 0.035
+        },
+        "lock_recognition": {
+          "count": 20,
+          "retained": 20,
+          "p50_ms": 0.0,
+          "p95_ms": 0.0,
+          "p99_ms": 0.0
+        },
+        "face_alignment": {
+          "count": 40,
+          "retained": 40,
+          "p50_ms": 0.206,
+          "p95_ms": 0.23,
+          "p99_ms": 0.264
+        },
+        "face_embedding": {
+          "count": 40,
+          "retained": 40,
+          "p50_ms": 68.743,
+          "p95_ms": 69.562,
+          "p99_ms": 69.709
+        },
+        "recognition_inference": {
+          "count": 20,
+          "retained": 20,
+          "p50_ms": 137.946,
+          "p95_ms": 139.227,
+          "p99_ms": 139.347
+        },
+        "gallery_matching": {
+          "count": 20,
+          "retained": 20,
+          "p50_ms": 0.017,
+          "p95_ms": 0.02,
+          "p99_ms": 0.02
+        },
+        "recognition": {
+          "count": 20,
+          "retained": 20,
+          "p50_ms": 138.04,
+          "p95_ms": 139.322,
+          "p99_ms": 139.441
+        },
+        "database_read": {
+          "count": 20,
+          "retained": 20,
+          "p50_ms": 0.628,
+          "p95_ms": 0.646,
+          "p99_ms": 0.706
+        },
+        "body": {
+          "count": 20,
+          "retained": 20,
+          "p50_ms": 0.0,
+          "p95_ms": 0.0,
+          "p99_ms": 0.0
+        },
+        "confirmation": {
+          "count": 20,
+          "retained": 20,
+          "p50_ms": 0.103,
+          "p95_ms": 0.112,
+          "p99_ms": 0.113
+        },
+        "capture_to_assessment": {
+          "count": 20,
+          "retained": 20,
+          "p50_ms": 206.152,
+          "p95_ms": 208.565,
+          "p99_ms": 220.925
+        }
+      },
+      "components": {
+        "association_ms": {
+          "count": 40,
+          "median_ms": 0.0160004710778594,
+          "p95_ms": 0.028297206154093146
+        },
+        "torso_localization_ms": {
+          "count": 40,
+          "median_ms": 0.005687004886567593,
+          "p95_ms": 0.007010449189692735
+        },
+        "garment_preprocessing_ms": {
+          "count": 10,
+          "median_ms": 0.16287504695355892,
+          "p95_ms": 0.20245013292878863
+        },
+        "garment_inference_ms": {
+          "count": 10,
+          "median_ms": 2.7109579532407224,
+          "p95_ms": 2.8165373718366027
+        },
+        "garment_total_ms": {
+          "count": 10,
+          "median_ms": 2.875854494050145,
+          "p95_ms": 3.0082248791586608
+        },
+        "garment_queue_delay_ms": {
+          "count": 10,
+          "median_ms": 0.03072945401072502,
+          "p95_ms": 0.03193333395756781
+        },
+        "garment_capture_to_classifier_start_ms": {
+          "count": 10,
+          "median_ms": 202.914374996908,
+          "p95_ms": 204.29771259077825
+        },
+        "garment_assessment_ms": {
+          "count": 10,
+          "median_ms": 2.923041523899883,
+          "p95_ms": 3.059229633072391
+        },
+        "garment_capture_to_decision_ms": {
+          "count": 10,
+          "median_ms": 205.87825047550723,
+          "p95_ms": 207.23736228537746
+        },
+        "garment_first_usable_to_decision_ms": {
+          "count": 10,
+          "median_ms": 205.87825047550723,
+          "p95_ms": 207.23736228537746
+        }
+      },
+      "frame_timings": {
+        "frame_copy_ms": {
+          "count": 20,
+          "median_ms": 0.07364555494859815,
+          "p95_ms": 0.07887883693911135
+        },
+        "tracking_ms": {
+          "count": 20,
+          "median_ms": 65.44797902461141,
+          "p95_ms": 68.20814157254064
+        },
+        "usable_evidence_gate_ms": {
+          "count": 20,
+          "median_ms": 0.1919170026667416,
+          "p95_ms": 0.3410185396205634
+        },
+        "publication_to_consumer_ms": {
+          "count": 20,
+          "median_ms": 0.05362497176975012,
+          "p95_ms": 0.05875822971574962
+        },
+        "frame_to_result_ms": {
+          "count": 20,
+          "median_ms": 206.1262499773875,
+          "p95_ms": 208.53473956231028
+        },
+        "frame_to_consumer_ms": {
+          "count": 20,
+          "median_ms": 206.1790624866262,
+          "p95_ms": 208.5935869079549
+        }
+      },
+      "gallery_size": 0,
+      "identity_accuracy": null,
+      "worker_stopped": true
+    }
+  ],
+  "real_labeled_passages": 0,
+  "physical_camera_measurement": false,
+  "limitations": [
+    "No entry/exit, human associations, independent garment/policy labels or authorized identity gallery.",
+    "Still-image completion timings are not walking-speed, capture-FPS, rendering or before-exit results.",
+    "Serial fresh still frames intentionally do not test evidence reuse, concurrent preview or camera queues.",
+    "Recognition uses actual ArcFace with an empty gallery; no identity correctness is measured.",
+    "No smaller input, threshold change, model activation or training."
+  ]
+}

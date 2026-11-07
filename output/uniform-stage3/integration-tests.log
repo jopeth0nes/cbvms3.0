@@ -1,0 +1,20 @@
+test_model_switch_rejects_old_results_and_preserves_identity_and_cooldowns (tests.test_uniform_models_integration.RuntimeTests.test_model_switch_rejects_old_results_and_preserves_identity_and_cooldowns) ... ERROR
+test_trainer_legacy_policy_and_versioned_loader_fail_closed (tests.test_uniform_models_integration.RuntimeTests.test_trainer_legacy_policy_and_versioned_loader_fail_closed) ... ok
+test_cancellation_and_changed_baseline_stop_paired_work (tests.test_uniform_models_integration.ServiceTests.test_cancellation_and_changed_baseline_stop_paired_work) ... ok
+test_existing_training_and_missing_provenance_block_before_model_load (tests.test_uniform_models_integration.ServiceTests.test_existing_training_and_missing_provenance_block_before_model_load) ... ok
+test_inventory_is_bound_complete_authorized_and_immutable (tests.test_uniform_models_integration.ServiceTests.test_inventory_is_bound_complete_authorized_and_immutable) ... ok
+test_paired_service_report_and_training_exclusion (tests.test_uniform_models_integration.ServiceTests.test_paired_service_report_and_training_exclusion) ... ok
+
+======================================================================
+ERROR: test_model_switch_rejects_old_results_and_preserves_identity_and_cooldowns (tests.test_uniform_models_integration.RuntimeTests.test_model_switch_rejects_old_results_and_preserves_identity_and_cooldowns)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/jopethones/Documents/GitHub/cbvms3.0/tests/test_uniform_models_integration.py", line 110, in test_model_switch_rejects_old_results_and_preserves_identity_and_cooldowns
+    fx.processor.violation_cooldowns['fixture']=123 if hasattr(fx.processor,'violation_cooldowns') else 123
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'LiveProcessor' object has no attribute 'violation_cooldowns'. Did you mean: 'suspension_cooldowns'?
+
+----------------------------------------------------------------------
+Ran 6 tests in 0.048s
+
+FAILED (errors=1)

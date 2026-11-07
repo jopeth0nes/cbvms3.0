@@ -1,0 +1,85 @@
+{
+  "bundle": "/Users/jopethones/Documents/GitHub/cbvms3.0/data/uniform_candidate_smoke/a33b70d6ab2a45d59067f18b746474b1/candidates/0cc6890d6f224472b34ed2458d43d658",
+  "created_at": 1793463236.525768,
+  "failure": "RuntimeError: Unexpected cancellation status: {'run_id': '0cc6890d6f224472b34ed2458d43d658', 'status': 'completed', 'epoch': 3, 'epochs': 3, 'message': 'Candidate training completed; no validation/evaluation or activation was performed.', 'resumable': False, 'train_loss': 0.30888577302296955, 'started_at': '2026-10-31T16:13:56.552116Z', 'worker_started_at': '2026-10-31T16:13:56.629253Z', 'process_id': 10916, 'run_uuid': '0cc6890d6f224472b34ed2458d43d658', 'manifest_sha256': '3c6682199d8a393e978c374705f359d072fdf9a98bc8350c15dc57991e76d90c', 'nondeployable': True}",
+  "finished_at": 1793463247.0272908,
+  "last_status": {
+    "epoch": 3,
+    "epochs": 3,
+    "manifest_sha256": "3c6682199d8a393e978c374705f359d072fdf9a98bc8350c15dc57991e76d90c",
+    "message": "Candidate training completed; no validation/evaluation or activation was performed.",
+    "nondeployable": true,
+    "process_id": 10916,
+    "resumable": false,
+    "run_id": "0cc6890d6f224472b34ed2458d43d658",
+    "run_uuid": "0cc6890d6f224472b34ed2458d43d658",
+    "started_at": "2026-10-31T16:13:56.552116Z",
+    "status": "completed",
+    "train_loss": 0.30888577302296955,
+    "worker_started_at": "2026-10-31T16:13:56.629253Z"
+  },
+  "process_metadata": {
+    "process_id": 10916,
+    "run_uuid": "0cc6890d6f224472b34ed2458d43d658",
+    "started_at": "2026-10-31T16:13:56.552116Z",
+    "worker_started_at": "2026-10-31T16:13:56.629253Z"
+  },
+  "protected_artifact_sha256_after": null,
+  "protected_artifact_sha256_before": {
+    "models/uniform_cls.pt": "8fba6e1da0c11c97873b16049b940ce21d5699838cc2040f069d5d5249a15680",
+    "models/uniform_color_ref.json": "ad031db790ce11bc3e8e85a726a2b65fcf238d919388bd1844980a0e6ca497e4",
+    "models/uniform_embed_ref.npz": "b6b9c197fa7b0a81d334e08557658cb84424a4ca25e4c314ca12bc5cf2037fbc",
+    "models/yolov8n.pt": "31e20dde3def09e2cf938c7be6fe23d9150bbbe503982af13345706515f2ef95",
+    "yolov8n-cls.pt": "11fa19f2aea79bc960d680a13f82f22105982b325eb9e17a4a5e1a9f8245980a",
+    "yolov8n-pose.pt": "c6fa93dd1ee4a2c18c900a45c1d864a1c6f7aba75d84f91648a30b7fb641d212",
+    "yolov8n.pt": "f59b3d833e2ff32e194b5bb8e08d211dc7c5bdf144b90d2c8412c47ccfc83b36"
+  },
+  "run_id": "0cc6890d6f224472b34ed2458d43d658",
+  "smoke_root": "/Users/jopethones/Documents/GitHub/cbvms3.0/data/uniform_candidate_smoke/a33b70d6ab2a45d59067f18b746474b1",
+  "stages": [
+    {
+      "at": 1793463236.5506592,
+      "name": "synthetic_dataset_ready",
+      "records": 6
+    },
+    {
+      "at": 1793463246.770057,
+      "name": "first_epoch_complete",
+      "status": {
+        "epoch": 2,
+        "epochs": 3,
+        "manifest_sha256": "3c6682199d8a393e978c374705f359d072fdf9a98bc8350c15dc57991e76d90c",
+        "message": "Completed epoch 2/3; no validation metrics are produced.",
+        "nondeployable": true,
+        "process_id": 10916,
+        "resumable": true,
+        "run_id": "0cc6890d6f224472b34ed2458d43d658",
+        "run_uuid": "0cc6890d6f224472b34ed2458d43d658",
+        "started_at": "2026-10-31T16:13:56.552116Z",
+        "status": "running",
+        "train_loss": 0.5504782398541769,
+        "worker_started_at": "2026-10-31T16:13:56.629253Z"
+      }
+    },
+    {
+      "at": 1793463246.77104,
+      "name": "cancel_requested",
+      "status": {
+        "epoch": 2,
+        "epochs": 3,
+        "manifest_sha256": "3c6682199d8a393e978c374705f359d072fdf9a98bc8350c15dc57991e76d90c",
+        "message": "Cancellation requested; waiting for the worker to preserve the last complete epoch.",
+        "nondeployable": true,
+        "process_id": 10916,
+        "resumable": true,
+        "run_id": "0cc6890d6f224472b34ed2458d43d658",
+        "run_uuid": "0cc6890d6f224472b34ed2458d43d658",
+        "started_at": "2026-10-31T16:13:56.552116Z",
+        "status": "cancel_requested",
+        "train_loss": 0.5504782398541769,
+        "worker_started_at": "2026-10-31T16:13:56.629253Z"
+      }
+    }
+  ],
+  "status": "failed"
+}

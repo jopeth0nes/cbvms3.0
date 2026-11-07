@@ -1,0 +1,9 @@
+{
+  "wrapper_pid": 49637,
+  "wrapper_command": "output/uniform-stage5/run_owned_check.py final-observation-tests .venv/bin/python -m unittest tests.test_uniform_logo tests.test_uniform_observation tests.test_uniform_latency -v",
+  "started_at_utc": "2026-11-05T06:28:53.456049+00:00",
+  "command": ".venv/bin/python -m unittest tests.test_uniform_logo tests.test_uniform_observation tests.test_uniform_latency -v",
+  "pid": 49638,
+  "returncode": 0,
+  "finished_at_utc": "2026-11-05T06:28:53.748071+00:00"
+}

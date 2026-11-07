@@ -1,0 +1,23 @@
+test_all_scopes_expiry_and_disappearance_invalidate (tests.test_uniform_observation.ObservationTests.test_all_scopes_expiry_and_disappearance_invalidate) ... ok
+test_blur_resolution_obstruction_and_invalid_association_abstain (tests.test_uniform_observation.ObservationTests.test_blur_resolution_obstruction_and_invalid_association_abstain) ... ok
+test_cached_result_one_logical_passage_and_refresh (tests.test_uniform_observation.ObservationTests.test_cached_result_one_logical_passage_and_refresh) ... ok
+test_capacity_bounds (tests.test_uniform_observation.ObservationTests.test_capacity_bounds) ... ok
+test_config_relative_bundle_and_invalid_unknown_options (tests.test_uniform_observation.ObservationTests.test_config_relative_bundle_and_invalid_unknown_options) ... ok
+test_duplicate_out_of_order_and_stale_frames_do_not_supply_evidence (tests.test_uniform_observation.ObservationTests.test_duplicate_out_of_order_and_stale_frames_do_not_supply_evidence) ... ok
+test_identity_reassignment_invalidates_without_new_passage_card (tests.test_uniform_observation.ObservationTests.test_identity_reassignment_invalidates_without_new_passage_card) ... ok
+test_load_validation_no_fallback_and_environment_requires_observation (tests.test_uniform_observation.ObservationTests.test_load_validation_no_fallback_and_environment_requires_observation) ... ok
+test_new_bad_association_revokes_cached_and_inflight_result (tests.test_uniform_observation.ObservationTests.test_new_bad_association_revokes_cached_and_inflight_result) ... ok
+test_pipeline_unknown_identity_recognizes_without_side_effects_or_legacy_classifier (tests.test_uniform_observation.ObservationTests.test_pipeline_unknown_identity_recognizes_without_side_effects_or_legacy_classifier) ... ok
+test_recognition_policy_separation_and_explicit_existing_policy (tests.test_uniform_observation.ObservationTests.test_recognition_policy_separation_and_explicit_existing_policy) ... ok
+test_toggle_off_and_failed_identity_analysis_revoke_evidence (tests.test_uniform_observation.ObservationTests.test_toggle_off_and_failed_identity_analysis_revoke_evidence) ... ok
+test_uncertainty_never_cached_and_new_frame_resolves (tests.test_uniform_observation.ObservationTests.test_uncertainty_never_cached_and_new_frame_resolves) ... ok
+test_zone_and_first_usable_timing_exclude_bad_frame_wait (tests.test_uniform_observation.ObservationTests.test_zone_and_first_usable_timing_exclude_bad_frame_wait) ... ok
+test_both_endpoints_and_later_resolution_one_passage (tests.test_uniform_latency.UniformLatencyTests.test_both_endpoints_and_later_resolution_one_passage) ... ok
+test_conflicting_labels_and_negative_timestamps_rejected (tests.test_uniform_latency.UniformLatencyTests.test_conflicting_labels_and_negative_timestamps_rejected) ... ok
+test_missing_and_unassessed_not_hidden_and_metrics_require_ground_truth (tests.test_uniform_latency.UniformLatencyTests.test_missing_and_unassessed_not_hidden_and_metrics_require_ground_truth) ... ok
+test_summary_percentiles_are_actual_samples (tests.test_uniform_latency.UniformLatencyTests.test_summary_percentiles_are_actual_samples) ... ok
+
+----------------------------------------------------------------------
+Ran 18 tests in 0.056s
+
+OK

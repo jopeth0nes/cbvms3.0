@@ -1,0 +1,9 @@
+{
+  "wrapper_pid": 53348,
+  "wrapper_command": "output/uniform-walkthrough-evaluation/run_owned_check.py isolated-registry-evaluation .venv/bin/python -m unittest tests.test_uniform_evaluation tests.test_uniform_model_registry tests.test_uniform_models_integration -v",
+  "started_at_utc": "2026-11-05T11:37:15.407221+00:00",
+  "command": ".venv/bin/python -m unittest tests.test_uniform_evaluation tests.test_uniform_model_registry tests.test_uniform_models_integration -v",
+  "pid": 53349,
+  "returncode": 0,
+  "finished_at_utc": "2026-11-05T11:37:16.025045+00:00"
+}

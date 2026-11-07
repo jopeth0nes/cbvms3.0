@@ -1,0 +1,9 @@
+{
+  "wrapper_pid": 53343,
+  "wrapper_command": "output/uniform-walkthrough-evaluation/run_owned_check.py preservation .venv/bin/python output/uniform-walkthrough-evaluation/audit_preservation.py",
+  "started_at_utc": "2026-11-05T11:37:14.857188+00:00",
+  "command": ".venv/bin/python output/uniform-walkthrough-evaluation/audit_preservation.py",
+  "pid": 53344,
+  "returncode": 0,
+  "finished_at_utc": "2026-11-05T11:37:15.363832+00:00"
+}

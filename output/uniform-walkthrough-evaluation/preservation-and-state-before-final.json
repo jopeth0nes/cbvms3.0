@@ -1,0 +1,251 @@
+{
+  "repository": "/Users/jopethones/Documents/GitHub/cbvms3.0",
+  "branch": "main",
+  "head": "ea997f42d5b75b12e58787f1b2691461256a5589",
+  "protected_files_verified": 1772,
+  "active_artifacts_verified": {
+    "models/uniform_color_ref.json": "ad031db790ce11bc3e8e85a726a2b65fcf238d919388bd1844980a0e6ca497e4",
+    "models/uniform_embed_ref.npz": "b6b9c197fa7b0a81d334e08557658cb84424a4ca25e4c314ca12bc5cf2037fbc",
+    "models/yolov8n.pt": "31e20dde3def09e2cf938c7be6fe23d9150bbbe503982af13345706515f2ef95",
+    "models/uniform_cls.pt": "8fba6e1da0c11c97873b16049b940ce21d5699838cc2040f069d5d5249a15680",
+    "yolov8n-cls.pt": "11fa19f2aea79bc960d680a13f82f22105982b325eb9e17a4a5e1a9f8245980a",
+    "yolov8n-pose.pt": "c6fa93dd1ee4a2c18c900a45c1d864a1c6f7aba75d84f91648a30b7fb641d212",
+    "yolov8n.pt": "f59b3d833e2ff32e194b5bb8e08d211dc7c5bdf144b90d2c8412c47ccfc83b36"
+  },
+  "source_changes_since_recovery": [
+    "scripts/replay_camera_assessment.py"
+  ],
+  "unrelated_tracked_diffs_unchanged": true,
+  "prior_stage_source_pins": {
+    "1": {
+      "pin_file": "output/uniform-stage1/code-manifest.json",
+      "matching": [],
+      "superseded_or_changed": [
+        "baseline",
+        "sha256"
+      ]
+    },
+    "2": {
+      "pin_file": "output/uniform-stage2/code-manifest.json",
+      "matching": [
+        "core/uniform_candidate.py",
+        "core/uniform_candidate_worker.py",
+        "tests/test_uniform_candidate.py",
+        "tests/test_uniform_candidate_ui.py",
+        "scripts/smoke_uniform_candidate.py"
+      ],
+      "superseded_or_changed": [
+        "ui/uniform_workspace.py",
+        "ui/training_panel.py",
+        "tests/test_uniform_workspace.py",
+        "ui/uniform_candidate_panel.py"
+      ]
+    },
+    "3": {
+      "pin_file": "output/uniform-stage3/source-sha256.json",
+      "matching": [
+        "core/monitor_models.py",
+        "core/trainer.py",
+        "core/uniform_evaluation.py",
+        "core/uniform_models_service.py",
+        "docs/UNIFORM_EVALUATION_MANIFEST.md",
+        "docs/UNIFORM_MODELS_WORKFLOW.md",
+        "tests/test_uniform_evaluation.py",
+        "tests/test_uniform_model_registry.py",
+        "tests/test_uniform_models_integration.py",
+        "tests/test_uniform_models_ui.py",
+        "tests/test_uniform_workspace.py",
+        "ui/uniform_candidate_panel.py"
+      ],
+      "superseded_or_changed": [
+        "core/live_pipeline.py",
+        "core/live_state.py",
+        "core/uniform_model_registry.py",
+        "ui/dashboard.py",
+        "ui/training_panel.py",
+        "ui/uniform_models_panel.py",
+        "ui/uniform_workspace.py"
+      ]
+    },
+    "4": {
+      "pin_file": "output/uniform-stage4/source-sha256.json",
+      "matching": [
+        "core/live_pipeline.py",
+        "core/live_state.py",
+        "core/uniform_model_registry.py",
+        "ui/dashboard.py",
+        "ui/live_alerts.py",
+        "core/uniform_latency.py",
+        "scripts/benchmark_uniform_backends.py",
+        "scripts/smoke_uniform_observation.py",
+        "tests/test_uniform_backend_benchmark.py",
+        "tests/test_uniform_observation.py",
+        "tests/test_uniform_latency.py",
+        "tests/test_uniform_observation_ui.py",
+        "tests/test_uniform_predictor_backends.py",
+        "docs/UNIFORM_OBSERVATION_WORKFLOW.md"
+      ],
+      "superseded_or_changed": [
+        "scripts/replay_camera_assessment.py",
+        "core/uniform_observation.py"
+      ]
+    },
+    "5": {
+      "pin_file": "output/uniform-stage5/source-sha256.json",
+      "matching": [
+        "core/uniform_dataset.py",
+        "core/uniform_logo_annotations.py",
+        "core/uniform_logo.py",
+        "core/uniform_logo_evaluation.py",
+        "core/uniform_observation.py",
+        "ui/uniform_workspace.py",
+        "ui/uniform_models_panel.py",
+        "ui/training_panel.py",
+        "scripts/compare_uniform_logo.py",
+        "tests/test_uniform_logo.py",
+        "tests/test_uniform_logo_annotations.py",
+        "tests/test_uniform_logo_evaluation.py",
+        "tests/test_uniform_logo_ui.py",
+        "docs/UNIFORM_LOGO_WORKFLOW.md"
+      ],
+      "superseded_or_changed": []
+    }
+  },
+  "dataset": {
+    "catalog_sha256": "1e96842d40ab26b65d84650672ae1cb93c6512a2864d745d0e27f0055d205d8d",
+    "total": 963,
+    "status": {
+      "pending_review": 963
+    },
+    "categories": {
+      "organizational_shirt": 36,
+      "unassigned": 927
+    },
+    "logo_audit_reused_at_identical_catalog_sha256": {
+      "catalog_path": "/Users/jopethones/Documents/GitHub/cbvms3.0/data/uniform_stage1/catalog.json",
+      "catalog_sha256": "1e96842d40ab26b65d84650672ae1cb93c6512a2864d745d0e27f0055d205d8d",
+      "by_category": {
+        "organizational_shirt": 36,
+        "unassigned": 927
+      },
+      "by_status": {
+        "pending_review": 963
+      },
+      "legacy_logo_fields": {
+        "unknown": 963
+      },
+      "existing_logo_boxes": 0,
+      "logo_readiness": {
+        "status": "Not trained",
+        "enabled": false,
+        "counts": {
+          "total": 963,
+          "reviewed": 0,
+          "reviewed_visible": 0,
+          "known_capture_groups": 0,
+          "eligible_visible_unknown_provenance": 0,
+          "per_visibility": {
+            "visible": 0,
+            "obscured": 0,
+            "too_small": 0,
+            "back_view": 0,
+            "uncertain": 0
+          }
+        },
+        "by_category": {},
+        "known_capture_groups": 0,
+        "eligible_visible_unknown_provenance": 0,
+        "limitations": [
+          "Logo annotations are an independent human review record; no logo model has been trained.",
+          "Only explicitly reviewed, current photographed-print annotations with confirmed association count as visible examples.",
+          "Obscured, too-small, back-view, uncertain, and reference-artwork examples are not treated as logo absence.",
+          "Counts do not establish accuracy, coverage sufficiency, or deployment readiness."
+        ]
+      },
+      "reference_files": [],
+      "physical_camera_tested": false,
+      "real_logo_model_evaluated": false
+    },
+    "readiness_reused_at_identical_catalog_sha256": {
+      "review_complete": false,
+      "experimental_training_eligible": false,
+      "experimental_training_reasons": [
+        "No records have explicit approval.",
+        "Pending-review records are excluded from experimental eligibility.",
+        "Missing approved, unambiguous examples for: Campus Uniform, Organizational Shirt, Other Clothing.",
+        "Category coverage is a minimum experimental input check, not evidence of accuracy."
+      ],
+      "group_safe_splits_available": false,
+      "independent_evaluation_ready": false,
+      "model_activation_allowed": false
+    },
+    "preprocessing_version": "uniform-stage1-raster-v1"
+  },
+  "original_archive_unchanged": {
+    "zip": "/Users/jopethones/Documents/GitHub/Org Shirt-20261031T093503Z-1-001.zip",
+    "sha256": "c49843a60e5193d519acf8f3a3cf4acd57fc037bf8cb3bbe408cdbeb0a18e7ea",
+    "image_files": 116,
+    "byte_distinct_images": 36,
+    "duplicate_occurrences": 80,
+    "expanded_bytes": 150478162,
+    "extensions": {
+      ".jpg": 116
+    }
+  },
+  "synthetic_candidate": {
+    "path": "/Users/jopethones/Documents/GitHub/cbvms3.0/data/uniform_candidate_smoke/645a629ef7034ed8ae06d3a4743ba75d/candidates/ffe234076d3d428eb28c332838b9e5fd",
+    "weights_sha256": "4eda5fd372adbd80749553f849bc155a3fc4873fa2b660774d413a26bdaaf65a",
+    "synthetic": true,
+    "mapping": {
+      "classes": [
+        {
+          "category": "campus_uniform",
+          "index": 0
+        },
+        {
+          "category": "organizational_shirt",
+          "index": 1
+        },
+        {
+          "category": "other_clothing",
+          "index": 2
+        }
+      ],
+      "mapping_version": "uniform-garments-v1"
+    },
+    "preprocessing": {
+      "augmentation": "none",
+      "color": "RGB",
+      "range": [
+        0.0,
+        1.0
+      ],
+      "size": 224,
+      "version": "trainer-letterbox-rgb-0-1-v1"
+    },
+    "manifest_sha256": "a5e0c745116acf2bb714053f52ab7efa92263c000b90c6908e7adf077ef7b228"
+  },
+  "real_candidate_count": 0,
+  "production_active_pointer_absent": true,
+  "camera_saved_primary": {
+    "id": "usb_0",
+    "label": "MacBook Camera",
+    "type": "usb",
+    "index": 0
+  },
+  "camera_saved_previews": [
+    [
+      "usb",
+      0
+    ],
+    [
+      "ip",
+      "ip_24f594f6bd85"
+    ]
+  ],
+  "camera_saved_preview_destination": "Separate window",
+  "physical_camera_measurements": false,
+  "consented_labeled_walkthroughs": 0,
+  "owned_model_training_runs_this_task": 0,
+  "production_activation_performed": false
+}

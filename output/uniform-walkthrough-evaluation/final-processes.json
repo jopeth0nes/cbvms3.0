@@ -1,0 +1,12 @@
+{
+  "checked_at_utc": "2026-11-06T04:04:44.978051+00:00",
+  "processes": [
+    {
+      "pid": 79265,
+      "start_time_local": "Tue Oct 27 11:51:08 2026",
+      "command": "/opt/homebrew/Cellar/python@3.12/3.12.13_2/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/Contents/MacOS/Python /Users/jopethones/Documents/GitHub/cbvms3.0/scripts/recovery_mail_relay.py --config /Users/jopethones/Documents/GitHub/cbvms3.0/data/recovery-relay.json"
+    }
+  ],
+  "owned_running_jobs": [],
+  "note": "All evaluation receipts completed; unrelated relay untouched. No camera/app/training process found."
+}

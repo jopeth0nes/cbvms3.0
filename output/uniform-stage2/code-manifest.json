@@ -1,0 +1,11 @@
+{
+  "ui/uniform_workspace.py": "9a3de6196f7cf0cede3a29413555d749c28c955abd6437d312ffc465fb96c7e8",
+  "ui/training_panel.py": "46a77f61e6e01319373e7dc6d4118b6ebed25386a9d9bff306130ee6165b44e7",
+  "tests/test_uniform_workspace.py": "7ac30937e932ffc45eb78e1eba7a6d1fff3ee75ad47e6539a3bf5f7c8fae68c5",
+  "core/uniform_candidate.py": "d9c33ba7ef70ad22b3c9bfb591ccaf7cde7d891340ff5d7987d275012cd5cca9",
+  "core/uniform_candidate_worker.py": "6e43d03a20b72cd617452d61e89a4e9cef1df3623a524c194369fbf55d56c883",
+  "ui/uniform_candidate_panel.py": "a72afd0096953024107fd40ba9db0a42013dbd5646b357f8173e65bf3375ec89",
+  "tests/test_uniform_candidate.py": "006a42eee3767df058c364c5bd706797f6e5f5c627fddf1bc5d81c03b5e167cc",
+  "tests/test_uniform_candidate_ui.py": "4dd7bea8605ff723e9ef8a7ff29f1d3af9e3e9bbe86e57424db54f02f3421239",
+  "scripts/smoke_uniform_candidate.py": "bd1b2c1693e172aee208e4d64c4094f6a19bc8d9482afdd4e2e3aa87a7b0260a"
+}

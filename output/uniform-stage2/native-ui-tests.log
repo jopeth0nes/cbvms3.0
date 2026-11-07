@@ -1,0 +1,20 @@
+test_cancel_progress_and_recover_resume (tests.test_uniform_candidate_ui.CandidateUITests.test_cancel_progress_and_recover_resume) ... ok
+test_failure_report_and_close_during_operation (tests.test_uniform_candidate_ui.CandidateUITests.test_failure_report_and_close_during_operation) ... ok
+test_missing_approvals_block_and_show_counts (tests.test_uniform_candidate_ui.CandidateUITests.test_missing_approvals_block_and_show_counts) ... ok
+test_other_training_blocks_start_and_resume (tests.test_uniform_candidate_ui.CandidateUITests.test_other_training_blocks_start_and_resume) ... ok
+test_recover_selected_older_candidate (tests.test_uniform_candidate_ui.CandidateUITests.test_recover_selected_older_candidate) ... ok
+test_start_off_tk_with_resource_ack_and_bounded_config (tests.test_uniform_candidate_ui.CandidateUITests.test_start_off_tk_with_resource_ack_and_bounded_config) ... ok
+test_terminal_status_waits_for_worker_lock_release (tests.test_uniform_candidate_ui.CandidateUITests.test_terminal_status_waits_for_worker_lock_release) ... ok
+test_capture_uses_supplied_frame_and_shared_group_without_flip (tests.test_uniform_workspace.UniformWorkspaceTests.test_capture_uses_supplied_frame_and_shared_group_without_flip) ... ok
+test_crop_proposal_does_not_approve_and_remains_editable (tests.test_uniform_workspace.UniformWorkspaceTests.test_crop_proposal_does_not_approve_and_remains_editable) ... ok
+test_destroy_during_background_work_has_no_tk_callback (tests.test_uniform_workspace.UniformWorkspaceTests.test_destroy_during_background_work_has_no_tk_callback) ... ok
+test_import_and_decode_stay_off_tk_thread (tests.test_uniform_workspace.UniformWorkspaceTests.test_import_and_decode_stay_off_tk_thread) ... ok
+test_named_categories_and_disabled_model_actions (tests.test_uniform_workspace.UniformWorkspaceTests.test_named_categories_and_disabled_model_actions) ... ok
+test_shared_action_opens_real_readiness_from_organizational_shirt (tests.test_uniform_workspace.UniformWorkspaceTests.test_shared_action_opens_real_readiness_from_organizational_shirt) ... ok
+test_training_panel_keeps_sections_and_routes_camera_saves (tests.test_uniform_workspace.UniformWorkspaceTests.test_training_panel_keeps_sections_and_routes_camera_saves) ... ok
+test_upload_gallery_review_approval_and_label_correction (tests.test_uniform_workspace.UniformWorkspaceTests.test_upload_gallery_review_approval_and_label_correction) ... ok
+
+----------------------------------------------------------------------
+Ran 15 tests in 9.178s
+
+OK

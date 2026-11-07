@@ -1,0 +1,24 @@
+test_environment_cannot_reenable_production_runtime_or_import_path (tests.test_uniform_observation_launcher.ObservationLauncherTests.test_environment_cannot_reenable_production_runtime_or_import_path) ... ok
+test_models_are_independent_copies_and_camera_configs_not_shared (tests.test_uniform_observation_launcher.ObservationLauncherTests.test_models_are_independent_copies_and_camera_configs_not_shared) ... ok
+test_private_database_and_exact_camera_selection_without_source_mutation (tests.test_uniform_observation_launcher.ObservationLauncherTests.test_private_database_and_exact_camera_selection_without_source_mutation) ... FAIL
+test_reject_ambiguous_camera_and_symlinked_assets (tests.test_uniform_observation_launcher.ObservationLauncherTests.test_reject_ambiguous_camera_and_symlinked_assets) ... ok
+test_reject_enabled_untrained_verifier (tests.test_uniform_observation_launcher.ObservationLauncherTests.test_reject_enabled_untrained_verifier) ... ok
+test_reject_workspace_inside_source_or_nonempty_destination (tests.test_uniform_observation_launcher.ObservationLauncherTests.test_reject_workspace_inside_source_or_nonempty_destination) ... ok
+test_face_landmarks_and_torso_reach_assessment_without_redetection (tests.test_uniform_pipeline_profile.ProfileHandoffTests.test_face_landmarks_and_torso_reach_assessment_without_redetection) ... ok
+
+======================================================================
+FAIL: test_private_database_and_exact_camera_selection_without_source_mutation (tests.test_uniform_observation_launcher.ObservationLauncherTests.test_private_database_and_exact_camera_selection_without_source_mutation)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/jopethones/Documents/GitHub/cbvms3.0/tests/test_uniform_observation_launcher.py", line 49, in test_private_database_and_exact_camera_selection_without_source_mutation
+    self.assertEqual(json.loads(config.read_text())['candidate_bundle'],str(self.config.parent/'candidate'))
+AssertionError: '/private/var/folders/q9/8tgzldpx1dl7qg075j18g03w0000gn/T/tmpupihy45u/candidate' != '/var/folders/q9/8tgzldpx1dl7qg075j18g03w0000gn/T/tmpupihy45u/candidate'
+- /private/var/folders/q9/8tgzldpx1dl7qg075j18g03w0000gn/T/tmpupihy45u/candidate
+? --------
++ /var/folders/q9/8tgzldpx1dl7qg075j18g03w0000gn/T/tmpupihy45u/candidate
+
+
+----------------------------------------------------------------------
+Ran 7 tests in 0.048s
+
+FAILED (failures=1)

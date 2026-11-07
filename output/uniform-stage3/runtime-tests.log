@@ -1,0 +1,129 @@
+test_model_switch_rejects_old_results_and_preserves_identity_and_cooldowns (tests.test_uniform_models_integration.RuntimeTests.test_model_switch_rejects_old_results_and_preserves_identity_and_cooldowns) ... FAIL
+test_trainer_legacy_policy_and_versioned_loader_fail_closed (tests.test_uniform_models_integration.RuntimeTests.test_trainer_legacy_policy_and_versioned_loader_fail_closed) ... ok
+test_cancellation_and_changed_baseline_stop_paired_work (tests.test_uniform_models_integration.ServiceTests.test_cancellation_and_changed_baseline_stop_paired_work) ... ok
+test_existing_training_and_missing_provenance_block_before_model_load (tests.test_uniform_models_integration.ServiceTests.test_existing_training_and_missing_provenance_block_before_model_load) ... ok
+test_inventory_is_bound_complete_authorized_and_immutable (tests.test_uniform_models_integration.ServiceTests.test_inventory_is_bound_complete_authorized_and_immutable) ... ok
+test_paired_service_report_and_training_exclusion (tests.test_uniform_models_integration.ServiceTests.test_paired_service_report_and_training_exclusion) ... ok
+test_analysis_does_not_publish_mutable_recognizer_dictionaries (tests.test_live_pipeline.LivePipelineTests.test_analysis_does_not_publish_mutable_recognizer_dictionaries) ... ok
+test_archived_identity_suppresses_queued_persistence_effects (tests.test_live_pipeline.LivePipelineTests.test_archived_identity_suppresses_queued_persistence_effects) ... ok
+test_assessment_from_before_restore_cannot_write_after_lifecycle_version_advances (tests.test_live_pipeline.LivePipelineTests.test_assessment_from_before_restore_cannot_write_after_lifecycle_version_advances) ... ok
+test_attendance_independent_of_uniform_and_only_after_reliable_identity (tests.test_live_pipeline.LivePipelineTests.test_attendance_independent_of_uniform_and_only_after_reliable_identity) ... ok
+test_audio_guard_rechecks_archive_and_leaves_unknown_identity_unfiltered (tests.test_live_pipeline.LivePipelineTests.test_audio_guard_rechecks_archive_and_leaves_unknown_identity_unfiltered) ... ok
+test_cancelled_old_session_disconnected_and_expired_results_have_no_side_effect (tests.test_live_pipeline.LivePipelineTests.test_cancelled_old_session_disconnected_and_expired_results_have_no_side_effect) ... ok
+test_correct_face_body_uniform_pipeline_produces_confirmed_assessment (tests.test_live_pipeline.LivePipelineTests.test_correct_face_body_uniform_pipeline_produces_confirmed_assessment) ... ok
+test_disconnect_during_database_work_is_rechecked_by_transaction_guard (tests.test_live_pipeline.LivePipelineTests.test_disconnect_during_database_work_is_rechecked_by_transaction_guard) ... ok
+test_duplicate_frame_does_not_supply_evidence_or_identity_twice (tests.test_live_pipeline.LivePipelineTests.test_duplicate_frame_does_not_supply_evidence_or_identity_twice) ... ok
+test_duplicate_frames_skip_expensive_inference (tests.test_live_pipeline.LivePipelineTests.test_duplicate_frames_skip_expensive_inference) ... ok
+test_earring_category_independent_of_torso_and_gender (tests.test_live_pipeline.LivePipelineTests.test_earring_category_independent_of_torso_and_gender) ... ok
+test_every_person_gets_its_own_crop_and_uniform_result (tests.test_live_pipeline.LivePipelineTests.test_every_person_gets_its_own_crop_and_uniform_result) ... ok
+test_failed_recognition_frame_breaks_evidence_without_recycling_track (tests.test_live_pipeline.LivePipelineTests.test_failed_recognition_frame_breaks_evidence_without_recycling_track) ... ok
+test_failed_writes_retry_but_success_consumes_per_student_category_cooldown (tests.test_live_pipeline.LivePipelineTests.test_failed_writes_retry_but_success_consumes_per_student_category_cooldown) ... ok
+test_failure_missing_models_and_no_associated_body_never_become_ok (tests.test_live_pipeline.LivePipelineTests.test_failure_missing_models_and_no_associated_body_never_become_ok) ... ok
+test_graduate_presence_pending_registration_and_suspension_eligibility (tests.test_live_pipeline.LivePipelineTests.test_graduate_presence_pending_registration_and_suspension_eligibility) ... ok
+test_monitor_task_owns_a_frozen_copy_of_captured_pixels (tests.test_live_pipeline.LivePipelineTests.test_monitor_task_owns_a_frozen_copy_of_captured_pixels) ... ok
+test_movement_during_analysis_requires_a_safe_projection_before_side_effects (tests.test_live_pipeline.LivePipelineTests.test_movement_during_analysis_requires_a_safe_projection_before_side_effects) ... ok
+test_observation_only_direct_writer_calls_and_writer_construction_are_blocked (tests.test_live_pipeline.LivePipelineTests.test_observation_only_direct_writer_calls_and_writer_construction_are_blocked) ... ok
+test_observation_only_session_blocks_writes_even_for_unmarked_task (tests.test_live_pipeline.LivePipelineTests.test_observation_only_session_blocks_writes_even_for_unmarked_task) ... ok
+test_observation_only_worker_never_calls_processor_persistence (tests.test_live_pipeline.LivePipelineTests.test_observation_only_worker_never_calls_processor_persistence) ... ok
+test_recognition_finishing_after_invalidation_does_not_update_state (tests.test_live_pipeline.LivePipelineTests.test_recognition_finishing_after_invalidation_does_not_update_state) ... ok
+test_session_invalidated_inside_database_write_prevents_notifications_and_next_write (tests.test_live_pipeline.LivePipelineTests.test_session_invalidated_inside_database_write_prevents_notifications_and_next_write) ... ok
+test_snapshot_student_category_and_time_all_come_from_accepted_frame (tests.test_live_pipeline.LivePipelineTests.test_snapshot_student_category_and_time_all_come_from_accepted_frame) ... ok
+test_torso_inference_finishing_after_frame_expires_does_not_update_evidence (tests.test_live_pipeline.LivePipelineTests.test_torso_inference_finishing_after_frame_expires_does_not_update_evidence) ... ok
+test_unknown_people_have_distinct_security_events_without_student_violation (tests.test_live_pipeline.LivePipelineTests.test_unknown_people_have_distinct_security_events_without_student_violation) ... ok
+test_failed_analysis_invalidates_evidence_and_publishes_unavailable (tests.test_live_pipeline.LiveWorkerTests.test_failed_analysis_invalidates_evidence_and_publishes_unavailable) ... ok
+test_session_cancelled_during_analysis_drops_all_work (tests.test_live_pipeline.LiveWorkerTests.test_session_cancelled_during_analysis_drops_all_work) ... ok
+test_stop_during_analysis_prevents_persistence_of_inflight_work (tests.test_live_pipeline.LiveWorkerTests.test_stop_during_analysis_prevents_persistence_of_inflight_work) ... ok
+test_worker_processes_latest_pending_frame_and_bounded_output (tests.test_live_pipeline.LiveWorkerTests.test_worker_processes_latest_pending_frame_and_bounded_output) ... ok
+test_low_texture_or_changed_resolution_abstains (tests.test_live_pipeline.MotionProjectionTests.test_low_texture_or_changed_resolution_abstains) ... ok
+test_textured_face_translation_follows_same_pixels (tests.test_live_pipeline.MotionProjectionTests.test_textured_face_translation_follows_same_pixels) ... ok
+test_foreground_and_background_use_head_geometry (tests.test_live_state.BodyOwnershipTests.test_foreground_and_background_use_head_geometry) ... ok
+test_no_largest_body_or_face_only_fallback (tests.test_live_state.BodyOwnershipTests.test_no_largest_body_or_face_only_fallback) ... ok
+test_overlapping_body_ambiguity_rejected (tests.test_live_state.BodyOwnershipTests.test_overlapping_body_ambiguity_rejected) ... ok
+test_rejected_ambiguous_face_still_blocks_its_competing_body_claim (tests.test_live_state.BodyOwnershipTests.test_rejected_ambiguous_face_still_blocks_its_competing_body_claim) ... ok
+test_separated_people_associate_one_to_one_in_any_body_order (tests.test_live_state.BodyOwnershipTests.test_separated_people_associate_one_to_one_in_any_body_order) ... ok
+test_torso_quality_visibility_and_other_person_contamination (tests.test_live_state.BodyOwnershipTests.test_torso_quality_visibility_and_other_person_contamination) ... ok
+test_two_faces_cannot_independently_claim_one_body (tests.test_live_state.BodyOwnershipTests.test_two_faces_cannot_independently_claim_one_body) ... ok
+test_ambiguous_body_and_changed_ownership_clear_violation_history (tests.test_live_state.LiveStateTests.test_ambiguous_body_and_changed_ownership_clear_violation_history) ... ok
+test_ambiguous_crossing_discards_identity_and_uniform_evidence (tests.test_live_state.LiveStateTests.test_ambiguous_crossing_discards_identity_and_uniform_evidence) ... ok
+test_appearance_preserves_tracks_through_crossing (tests.test_live_state.LiveStateTests.test_appearance_preserves_tracks_through_crossing) ... ok
+test_competing_identity_claims_never_get_next_available_student (tests.test_live_state.LiveStateTests.test_competing_identity_claims_never_get_next_available_student) ... ok
+test_delayed_old_session_out_of_order_and_future_results_rejected (tests.test_live_state.LiveStateTests.test_delayed_old_session_out_of_order_and_future_results_rejected) ... ok
+test_distinct_unknowns_and_known_people_have_distinct_presence (tests.test_live_state.LiveStateTests.test_distinct_unknowns_and_known_people_have_distinct_presence) ... ok
+test_earrings_independent_of_torso_and_male_eligibility (tests.test_live_state.LiveStateTests.test_earrings_independent_of_torso_and_male_eligibility) ... ok
+test_empty_frames_do_not_render_coasted_old_assessments (tests.test_live_state.LiveStateTests.test_empty_frames_do_not_render_coasted_old_assessments) ... ok
+test_evidence_expires_even_with_continuous_identity (tests.test_live_state.LiveStateTests.test_evidence_expires_even_with_continuous_identity) ... ok
+test_explicit_ownership_token_change_resets_evidence (tests.test_live_state.LiveStateTests.test_explicit_ownership_token_change_resets_evidence) ... ok
+test_identity_change_and_transient_unknown_clear_history (tests.test_live_state.LiveStateTests.test_identity_change_and_transient_unknown_clear_history) ... ok
+test_identity_needs_repeated_distinct_frames (tests.test_live_state.LiveStateTests.test_identity_needs_repeated_distinct_frames) ... ok
+test_missing_or_bad_torso_and_disabled_model_never_mean_compliant (tests.test_live_state.LiveStateTests.test_missing_or_bad_torso_and_disabled_model_never_mean_compliant) ... ok
+test_occluded_track_recovers_id_but_requires_new_identity_and_uniform_evidence (tests.test_live_state.LiveStateTests.test_occluded_track_recovers_id_but_requires_new_identity_and_uniform_evidence) ... ok
+test_presence_card_is_stable_while_identifying_but_new_after_return (tests.test_live_state.LiveStateTests.test_presence_card_is_stable_while_identifying_but_new_after_return) ... ok
+test_separate_accepted_categories_are_auditable (tests.test_live_state.LiveStateTests.test_separate_accepted_categories_are_auditable) ... ok
+test_snapshot_is_immutable_and_does_not_share_input_dictionaries (tests.test_live_state.LiveStateTests.test_snapshot_is_immutable_and_does_not_share_input_dictionaries) ... ok
+test_suspension_metadata_only_exposed_after_reliable_identity (tests.test_live_state.LiveStateTests.test_suspension_metadata_only_exposed_after_reliable_identity) ... ok
+test_two_students_different_uniforms_keep_authoritative_owner (tests.test_live_state.LiveStateTests.test_two_students_different_uniforms_keep_authoritative_owner) ... ok
+test_uniform_hysteresis_needs_three_agreements_to_change (tests.test_live_state.LiveStateTests.test_uniform_hysteresis_needs_three_agreements_to_change) ... ok
+test_uniform_needs_repeated_fresh_frames_and_supporting_snapshot (tests.test_live_state.LiveStateTests.test_uniform_needs_repeated_fresh_frames_and_supporting_snapshot) ... ok
+test_classifier_warms_without_optional_colour_reference (tests.test_monitor_startup.MonitorStartupTests.test_classifier_warms_without_optional_colour_reference) ... ok
+test_concurrent_bundle_construction_publishes_one_complete_registry (tests.test_monitor_startup.MonitorStartupTests.test_concurrent_bundle_construction_publishes_one_complete_registry) ... ok
+test_dashboard_entrypoint_accepts_shared_bundle_and_standalone_defaults (tests.test_monitor_startup.MonitorStartupTests.test_dashboard_entrypoint_accepts_shared_bundle_and_standalone_defaults) ... ok
+test_face_priority_and_optional_concurrency_are_bounded (tests.test_monitor_startup.MonitorStartupTests.test_face_priority_and_optional_concurrency_are_bounded) ... ok
+test_missing_optional_weights_are_explicit_failures (tests.test_monitor_startup.MonitorStartupTests.test_missing_optional_weights_are_explicit_failures) ... ok
+test_optional_preparation_is_available_at_login_start_and_resources_are_reused (tests.test_monitor_startup.MonitorStartupTests.test_optional_preparation_is_available_at_login_start_and_resources_are_reused) ... ok
+test_retry_queues_every_failure_and_prioritizes_face_when_slot_opens (tests.test_monitor_startup.MonitorStartupTests.test_retry_queues_every_failure_and_prioritizes_face_when_slot_opens) ... ok
+test_second_default_bundle_construction_reuses_original_resources (tests.test_monitor_startup.MonitorStartupTests.test_second_default_bundle_construction_reuses_original_resources) ... ok
+test_shutdown_cancels_active_loader_successors (tests.test_monitor_startup.MonitorStartupTests.test_shutdown_cancels_active_loader_successors) ... ok
+test_shutdown_wait_does_not_start_preparation_after_login_abort (tests.test_monitor_startup.MonitorStartupTests.test_shutdown_wait_does_not_start_preparation_after_login_abort) ... ok
+test_stalled_optional_owner_cannot_be_retried_concurrently (tests.test_monitor_startup.MonitorStartupTests.test_stalled_optional_owner_cannot_be_retried_concurrently) ... ok
+test_thread_start_failure_is_a_failed_component_not_permanent_loading (tests.test_monitor_startup.MonitorStartupTests.test_thread_start_failure_is_a_failed_component_not_permanent_loading) ... ok
+test_cancellation_before_commit_rolls_back_every_insert (tests.test_live_persistence.LivePersistenceTests.test_cancellation_before_commit_rolls_back_every_insert) ... ok
+test_cancellation_while_waiting_for_sqlite_lock_is_rejected (tests.test_live_persistence.LivePersistenceTests.test_cancellation_while_waiting_for_sqlite_lock_is_rejected) ... ok
+test_cancelled_updates_preserve_existing_sighting_times (tests.test_live_persistence.LivePersistenceTests.test_cancelled_updates_preserve_existing_sighting_times) ... ok
+test_cancelled_work_is_rejected_for_every_write (tests.test_live_persistence.LivePersistenceTests.test_cancelled_work_is_rejected_for_every_write) ... ok
+test_guard_exception_rolls_back_the_insert (tests.test_live_persistence.LivePersistenceTests.test_guard_exception_rolls_back_the_insert) ... ok
+test_guard_is_checked_inside_the_write_transaction (tests.test_live_persistence.LivePersistenceTests.test_guard_is_checked_inside_the_write_transaction) ... ok
+test_security_event_has_evidence_without_disciplinary_effects (tests.test_live_persistence.LivePersistenceTests.test_security_event_has_evidence_without_disciplinary_effects) ... ok
+test_security_event_rejects_missing_presence_or_invalid_time (tests.test_live_persistence.LivePersistenceTests.test_security_event_rejects_missing_presence_or_invalid_time) ... ok
+test_security_migration_is_additive_and_preserves_legacy_unknown_rows (tests.test_live_persistence.LivePersistenceTests.test_security_migration_is_additive_and_preserves_legacy_unknown_rows) ... ok
+test_detection_audio (unittest.loader._FailedTest.test_detection_audio) ... ERROR
+
+======================================================================
+ERROR: test_detection_audio (unittest.loader._FailedTest.test_detection_audio)
+----------------------------------------------------------------------
+ImportError: Failed to import test module: test_detection_audio
+Traceback (most recent call last):
+  File "/opt/homebrew/Cellar/python@3.12/3.12.13_2/Frameworks/Python.framework/Versions/3.12/lib/python3.12/unittest/loader.py", line 137, in loadTestsFromName
+    module = __import__(module_name)
+             ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/jopethones/Documents/GitHub/cbvms3.0/tests/test_detection_audio.py", line 17, in <module>
+    from test_live_pipeline import PipelineFixture
+ModuleNotFoundError: No module named 'test_live_pipeline'
+
+
+======================================================================
+FAIL: test_model_switch_rejects_old_results_and_preserves_identity_and_cooldowns (tests.test_uniform_models_integration.RuntimeTests.test_model_switch_rejects_old_results_and_preserves_identity_and_cooldowns)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/jopethones/Documents/GitHub/cbvms3.0/tests/test_uniform_models_integration.py", line 120, in test_model_switch_rejects_old_results_and_preserves_identity_and_cooldowns
+    self.assertEqual(tuple(track.earrings),earrings)
+AssertionError: Tuples differ: ((100[58 chars] (100.9, ('camera', 4), False), (101.15, ('camera', 5), False)) != ((100[58 chars] (100.9, ('camera', 4), False))
+
+First tuple contains 1 additional elements.
+First extra element 3:
+(101.15, ('camera', 5), False)
+
+  ((100.4, ('camera', 2), False),
+   (100.65, ('camera', 3), False),
+-  (100.9, ('camera', 4), False),
+?                               ^
+
++  (100.9, ('camera', 4), False))
+?                               ^
+
+-  (101.15, ('camera', 5), False))
+
+----------------------------------------------------------------------
+Ran 88 tests in 2.865s
+
+FAILED (failures=1, errors=1)
+[LiveMonitor] assessment unavailable: synthetic inference failure

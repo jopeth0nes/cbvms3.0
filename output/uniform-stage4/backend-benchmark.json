@@ -1,0 +1,571 @@
+{
+  "accuracy_evaluation": false,
+  "benchmark_kind": "raw_model_stage_timings",
+  "candidate": {
+    "dataset_version": "5027a6487c75990147b895c094f619f0e820c54acb82b79c3f2f501c4e23439f",
+    "id": "4eda5fd372adbd80749553f849bc155a3fc4873fa2b660774d413a26bdaaf65a",
+    "preprocessing_version": "trainer-letterbox-rgb-0-1-v1",
+    "synthetic_candidate": true
+  },
+  "configuration": {
+    "backends": [
+      "cpu",
+      "mps"
+    ],
+    "image_size": "original raster for body; predictor's fixed validated preprocessing for classifier",
+    "repeats": 30,
+    "requested_backend": "both",
+    "warmup": 4
+  },
+  "created_at_utc": "2026-11-04T17:19:13Z",
+  "environment": {
+    "cpu_count": 10,
+    "cpu_model": "Apple M4",
+    "hardware_model": "Mac16,12",
+    "machine": "arm64",
+    "macos_version": "26.5",
+    "mps_available": true,
+    "numpy_version": "1.26.4",
+    "opencv_version": "4.10.0",
+    "platform": "macOS-26.5-arm64-arm-64bit",
+    "processor": "arm",
+    "python_version": "3.12.13",
+    "torch_version": "2.2.2",
+    "ultralytics_version": "8.3.27"
+  },
+  "input_count": 2,
+  "inputs": [
+    {
+      "height": 1080,
+      "sha256": "c02019c4979c191eb739ddd944445ef408dad5679acab6fd520ef9d434bfbc63",
+      "width": 810
+    },
+    {
+      "height": 720,
+      "sha256": "16d73869e3267a7d4ed00de8e860833bd1657c1b252e94c0c348277adc7b6edb",
+      "width": 1280
+    }
+  ],
+  "limitations": [
+    "Timing results are not accuracy, policy, passage, or deployment evidence.",
+    "No smaller input size or alternate preprocessing was evaluated.",
+    "Body inference reports requested and actual placement; a CPU fallback remains explicit.",
+    "Candidate preprocessing/inference use synchronized timings; body stage wrappers synchronize and add instrumentation overhead.",
+    "No queue-delay value is reported because this benchmark does not measure queueing.",
+    "Images were processed in memory; filenames and pixels are not included in this report."
+  ],
+  "passage_metrics": {
+    "available": false,
+    "reason": "Raw detector/classifier stage timing only; no passage or attendance stream was run."
+  },
+  "results": [
+    {
+      "body_detector": {
+        "backend_status": {
+          "active": "cpu",
+          "fallback_reason": null,
+          "model_parameter_device": "cpu",
+          "requested": "cpu",
+          "warm": true
+        },
+        "cold_load_ms": 14.111916068941355,
+        "detections": {
+          "counts": [
+            4,
+            2,
+            4,
+            2,
+            4,
+            2,
+            4,
+            2,
+            4,
+            2,
+            4,
+            2,
+            4,
+            2,
+            4,
+            2,
+            4,
+            2,
+            4,
+            2,
+            4,
+            2,
+            4,
+            2,
+            4,
+            2,
+            4,
+            2,
+            4,
+            2
+          ],
+          "median_per_frame": 3.0,
+          "sample_count": 30
+        },
+        "measurement_scope": "end_to_end_detect_persons_call plus synchronized predictor stage wrappers",
+        "predictor_stages": {
+          "reason": null,
+          "status": "available",
+          "timings_ms": {
+            "inference": {
+              "count": 30,
+              "median_ms": 23.51439604535699,
+              "p95_ms": 27.04175013350322,
+              "samples_ms": [
+                28.196375002153218,
+                23.532708059065044,
+                30.460124951787293,
+                23.945207940414548,
+                25.630541960708797,
+                19.181290990673006,
+                24.638209026306868,
+                18.865875084884465,
+                24.14745802525431,
+                18.79550004377961,
+                24.717041989788413,
+                18.59324995893985,
+                23.761332966387272,
+                19.010458956472576,
+                24.813125026412308,
+                18.756916979327798,
+                24.298875010572374,
+                19.044749904423952,
+                24.51695897616446,
+                18.321041949093342,
+                24.359208066016436,
+                18.890750012360513,
+                23.372916039079428,
+                18.326374934986234,
+                23.496084031648934,
+                18.11170799192041,
+                23.666499997489154,
+                18.2845420204103,
+                23.582875030115247,
+                18.24883301742375
+              ]
+            },
+            "postprocess": {
+              "count": 30,
+              "median_ms": 0.22077106405049562,
+              "p95_ms": 0.2809750149026513,
+              "samples_ms": [
+                0.28187502175569534,
+                0.21791597828269005,
+                0.2768330741673708,
+                0.2553750528022647,
+                0.2565840259194374,
+                0.2440831158310175,
+                0.26179198175668716,
+                0.20275008864700794,
+                0.27054199017584324,
+                0.1974579645320773,
+                0.2599590225145221,
+                0.19112497102469206,
+                0.2585420152172446,
+                0.1931249862536788,
+                0.2582500455901027,
+                0.1989590236917138,
+                0.28325000312179327,
+                0.2066250890493393,
+                0.2798750065267086,
+                0.19620906095951796,
+                0.23329094983637333,
+                0.18987501971423626,
+                0.222250004298985,
+                0.18350000027567148,
+                0.20341691561043262,
+                0.17512496560811996,
+                0.22133404854685068,
+                0.18325005657970905,
+                0.22020807955414057,
+                0.18387497402727604
+              ]
+            },
+            "preprocess": {
+              "count": 30,
+              "median_ms": 0.5794170428998768,
+              "p95_ms": 0.7645543431863184,
+              "samples_ms": [
+                0.8914170321077108,
+                0.47400000039488077,
+                0.6625830428674817,
+                0.522000016644597,
+                0.8374169701710343,
+                0.46683300752192736,
+                0.6368340691551566,
+                0.4845409421250224,
+                0.6747080478817225,
+                0.4736660048365593,
+                0.6639580242335796,
+                0.46095799189060926,
+                0.6755000213161111,
+                0.47033303417265415,
+                0.6580830086022615,
+                0.46954199206084013,
+                0.66641706507653,
+                0.46941591426730156,
+                0.6535829743370414,
+                0.4707078915089369,
+                0.6691250018775463,
+                0.4622089909389615,
+                0.6712080212309957,
+                0.4544999683275819,
+                0.6687080021947622,
+                0.4595409845933318,
+                0.6678339559584856,
+                0.4592500627040863,
+                0.658332952298224,
+                0.4580829991027713
+              ]
+            }
+          }
+        },
+        "status": "completed",
+        "thread_settings": {
+          "measured_observations": [
+            {
+              "opencv": 10,
+              "requested": 2,
+              "torch": 2
+            }
+          ],
+          "measured_sample_count": 30,
+          "requested": 2,
+          "warmup_observations": [
+            {
+              "opencv": 10,
+              "requested": 2,
+              "torch": 8
+            },
+            {
+              "opencv": 10,
+              "requested": 2,
+              "torch": 2
+            }
+          ]
+        },
+        "timings": {
+          "total_ms": {
+            "count": 30,
+            "median_ms": 24.720666464418173,
+            "p95_ms": 28.66972485207952
+          }
+        },
+        "warmup_count": 4
+      },
+      "candidate": {
+        "backend_status": {
+          "active": "cpu",
+          "fallback_reason": null,
+          "model_parameter_device": "cpu",
+          "requested": "cpu"
+        },
+        "cold_load_ms": 1432.1087079588324,
+        "placement_observations": [
+          {
+            "active": "cpu",
+            "fallback_reason": null,
+            "model_parameter_device": "cpu",
+            "requested": "cpu"
+          }
+        ],
+        "status": "completed",
+        "thread_settings": {
+          "measured_observations": [
+            {
+              "opencv": 10,
+              "requested": 2,
+              "torch": 2
+            }
+          ],
+          "measured_sample_count": 30,
+          "requested": 2,
+          "warmup_observations": [
+            {
+              "opencv": 10,
+              "requested": 2,
+              "torch": 2
+            }
+          ]
+        },
+        "timings": {
+          "inference_ms": {
+            "count": 30,
+            "median_ms": 2.4576045689173043,
+            "p95_ms": 2.6207352697383612
+          },
+          "preprocessing_ms": {
+            "count": 30,
+            "median_ms": 4.0483540506102145,
+            "p95_ms": 4.159720480674878
+          },
+          "total_ms": {
+            "count": 30,
+            "median_ms": 6.482937023974955,
+            "p95_ms": 6.703937443671748
+          }
+        },
+        "warmup_count": 4
+      },
+      "requested_backend": "cpu"
+    },
+    {
+      "body_detector": {
+        "backend_status": {
+          "active": "mps",
+          "fallback_reason": null,
+          "model_parameter_device": "mps:0",
+          "requested": "mps",
+          "warm": true
+        },
+        "cold_load_ms": 75.5395001033321,
+        "detections": {
+          "counts": [
+            4,
+            2,
+            4,
+            2,
+            4,
+            2,
+            4,
+            2,
+            4,
+            2,
+            4,
+            2,
+            4,
+            2,
+            4,
+            2,
+            4,
+            2,
+            4,
+            2,
+            4,
+            2,
+            4,
+            2,
+            4,
+            2,
+            4,
+            2,
+            4,
+            2
+          ],
+          "median_per_frame": 3.0,
+          "sample_count": 30
+        },
+        "measurement_scope": "end_to_end_detect_persons_call plus synchronized predictor stage wrappers",
+        "predictor_stages": {
+          "reason": null,
+          "status": "available",
+          "timings_ms": {
+            "inference": {
+              "count": 30,
+              "median_ms": 10.880250541958958,
+              "p95_ms": 20.89297928614542,
+              "samples_ms": [
+                20.15075006056577,
+                17.007082933560014,
+                21.19074994698167,
+                17.71758298855275,
+                18.239667057059705,
+                15.218749991618097,
+                21.113666938617826,
+                11.424500029534101,
+                17.703959019854665,
+                18.18124996498227,
+                20.62324993312359,
+                8.300665998831391,
+                9.47062496561557,
+                8.376667043194175,
+                9.36487503349781,
+                8.673875010572374,
+                10.89545909781009,
+                9.039499913342297,
+                10.185833903960884,
+                8.659250102937222,
+                10.865041986107826,
+                9.404000011272728,
+                10.989541071467102,
+                9.40791703760624,
+                10.482166893780231,
+                8.708292036317289,
+                11.231832904741168,
+                9.75049997214228,
+                12.0826669735834,
+                10.718417004682124
+              ]
+            },
+            "postprocess": {
+              "count": 30,
+              "median_ms": 3.651500039268285,
+              "p95_ms": 4.7892812348436555,
+              "samples_ms": [
+                4.238624940626323,
+                4.149334039539099,
+                4.42174996715039,
+                4.354334087111056,
+                3.6605000495910645,
+                4.013791913166642,
+                4.469415987841785,
+                3.7272919435054064,
+                4.664500011131167,
+                4.8972079530358315,
+                3.8437499897554517,
+                3.442666959017515,
+                3.8145839935168624,
+                3.694874932989478,
+                3.5487079294398427,
+                3.642291994765401,
+                3.57708299998194,
+                3.3829589374363422,
+                3.473791992291808,
+                3.486083005554974,
+                3.564500017091632,
+                3.4289159812033176,
+                4.891374963335693,
+                3.5606659948825836,
+                3.5870829597115517,
+                3.5429999697953463,
+                3.515459015034139,
+                3.6425000289455056,
+                3.563791047781706,
+                3.793874988332391
+              ]
+            },
+            "preprocess": {
+              "count": 30,
+              "median_ms": 1.2799164978787303,
+              "p95_ms": 1.643035572487861,
+              "samples_ms": [
+                1.616458990611136,
+                1.2484999606385827,
+                1.636000000871718,
+                1.2891660444438457,
+                1.621540985070169,
+                1.1170420330017805,
+                1.6487919492647052,
+                1.3389169471338391,
+                1.417415915057063,
+                1.367625081911683,
+                1.8474999815225601,
+                1.1905829887837172,
+                1.4910419704392552,
+                1.1274999706074595,
+                1.568333012983203,
+                1.1828331043943763,
+                1.3678750256076455,
+                1.0305829346179962,
+                1.2684999965131283,
+                0.9927499340847135,
+                1.3525830581784248,
+                1.0330830700695515,
+                1.2754580238834023,
+                0.9645839454606175,
+                1.2670410796999931,
+                0.9687079582363367,
+                1.2953330297023058,
+                1.0603329865261912,
+                1.2843749718740582,
+                1.03554199449718
+              ]
+            }
+          }
+        },
+        "status": "completed",
+        "thread_settings": {
+          "measured_observations": [
+            {
+              "opencv": 10,
+              "requested": 2,
+              "torch": 2
+            }
+          ],
+          "measured_sample_count": 30,
+          "requested": 2,
+          "warmup_observations": [
+            {
+              "opencv": 10,
+              "requested": 2,
+              "torch": 8
+            },
+            {
+              "opencv": 10,
+              "requested": 2,
+              "torch": 2
+            }
+          ]
+        },
+        "timings": {
+          "total_ms": {
+            "count": 30,
+            "median_ms": 17.03312451718375,
+            "p95_ms": 28.166193730430674
+          }
+        },
+        "warmup_count": 4
+      },
+      "candidate": {
+        "backend_status": {
+          "active": "mps",
+          "fallback_reason": null,
+          "model_parameter_device": "mps:0",
+          "requested": "mps"
+        },
+        "cold_load_ms": 75.75625006575137,
+        "placement_observations": [
+          {
+            "active": "mps",
+            "fallback_reason": null,
+            "model_parameter_device": "mps:0",
+            "requested": "mps"
+          }
+        ],
+        "status": "completed",
+        "thread_settings": {
+          "measured_observations": [
+            {
+              "opencv": 10,
+              "requested": 2,
+              "torch": 2
+            }
+          ],
+          "measured_sample_count": 30,
+          "requested": 2,
+          "warmup_observations": [
+            {
+              "opencv": 10,
+              "requested": 2,
+              "torch": 2
+            }
+          ]
+        },
+        "timings": {
+          "inference_ms": {
+            "count": 30,
+            "median_ms": 3.681896021589637,
+            "p95_ms": 6.079670583130786
+          },
+          "preprocessing_ms": {
+            "count": 30,
+            "median_ms": 4.30018751649186,
+            "p95_ms": 4.557731450768188
+          },
+          "total_ms": {
+            "count": 30,
+            "median_ms": 8.030062483157963,
+            "p95_ms": 10.990628512809042
+          }
+        },
+        "warmup_count": 4
+      },
+      "requested_backend": "mps"
+    }
+  ],
+  "schema_version": 1,
+  "synthetic_inputs": false
+}

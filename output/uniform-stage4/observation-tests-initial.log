@@ -1,0 +1,31 @@
+test_all_scopes_expiry_and_disappearance_invalidate (tests.test_uniform_observation.ObservationTests.test_all_scopes_expiry_and_disappearance_invalidate) ... ok
+test_blur_resolution_obstruction_and_invalid_association_abstain (tests.test_uniform_observation.ObservationTests.test_blur_resolution_obstruction_and_invalid_association_abstain) ... ok
+test_cached_result_one_logical_passage_and_refresh (tests.test_uniform_observation.ObservationTests.test_cached_result_one_logical_passage_and_refresh) ... ok
+test_capacity_bounds (tests.test_uniform_observation.ObservationTests.test_capacity_bounds) ... ok
+test_config_relative_bundle_and_invalid_unknown_options (tests.test_uniform_observation.ObservationTests.test_config_relative_bundle_and_invalid_unknown_options) ... FAIL
+test_duplicate_out_of_order_and_stale_frames_do_not_supply_evidence (tests.test_uniform_observation.ObservationTests.test_duplicate_out_of_order_and_stale_frames_do_not_supply_evidence) ... ok
+test_identity_reassignment_invalidates_without_new_passage_card (tests.test_uniform_observation.ObservationTests.test_identity_reassignment_invalidates_without_new_passage_card) ... ok
+test_load_validation_no_fallback_and_environment_requires_observation (tests.test_uniform_observation.ObservationTests.test_load_validation_no_fallback_and_environment_requires_observation) ... ok
+test_new_bad_association_revokes_cached_and_inflight_result (tests.test_uniform_observation.ObservationTests.test_new_bad_association_revokes_cached_and_inflight_result) ... ok
+test_pipeline_unknown_identity_recognizes_without_side_effects_or_legacy_classifier (tests.test_uniform_observation.ObservationTests.test_pipeline_unknown_identity_recognizes_without_side_effects_or_legacy_classifier) ... ok
+test_recognition_policy_separation_and_explicit_existing_policy (tests.test_uniform_observation.ObservationTests.test_recognition_policy_separation_and_explicit_existing_policy) ... ok
+test_uncertainty_never_cached_and_new_frame_resolves (tests.test_uniform_observation.ObservationTests.test_uncertainty_never_cached_and_new_frame_resolves) ... ok
+test_zone_and_first_usable_timing_exclude_bad_frame_wait (tests.test_uniform_observation.ObservationTests.test_zone_and_first_usable_timing_exclude_bad_frame_wait) ... ok
+
+======================================================================
+FAIL: test_config_relative_bundle_and_invalid_unknown_options (tests.test_uniform_observation.ObservationTests.test_config_relative_bundle_and_invalid_unknown_options)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/jopethones/Documents/GitHub/cbvms3.0/tests/test_uniform_observation.py", line 177, in test_config_relative_bundle_and_invalid_unknown_options
+    p.write_text(json.dumps(value));self.assertEqual(ObservationConfig.load(p).candidate_bundle,str(Path(temp)/'bundle'))
+                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: '/private/var/folders/q9/8tgzldpx1dl7qg075j18g03w0000gn/T/tmp4_i3t7mh/bundle' != '/var/folders/q9/8tgzldpx1dl7qg075j18g03w0000gn/T/tmp4_i3t7mh/bundle'
+- /private/var/folders/q9/8tgzldpx1dl7qg075j18g03w0000gn/T/tmp4_i3t7mh/bundle
+? --------
++ /var/folders/q9/8tgzldpx1dl7qg075j18g03w0000gn/T/tmp4_i3t7mh/bundle
+
+
+----------------------------------------------------------------------
+Ran 13 tests in 0.048s
+
+FAILED (failures=1)

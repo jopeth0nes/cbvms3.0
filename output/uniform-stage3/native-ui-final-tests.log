@@ -1,0 +1,35 @@
+test_close_during_worker_cancels_and_has_no_late_tk_callbacks (tests.test_uniform_models_ui.ModelsWindowTests.test_close_during_worker_cancels_and_has_no_late_tk_callbacks) ... ok
+test_evaluation_progress_cancellation_and_recovered_report (tests.test_uniform_models_ui.ModelsWindowTests.test_evaluation_progress_cancellation_and_recovered_report) ... ok
+test_no_candidate_metrics_or_deployment_enabled_without_prerequisites (tests.test_uniform_models_ui.ModelsWindowTests.test_no_candidate_metrics_or_deployment_enabled_without_prerequisites) ... ok
+test_report_nulls_and_legacy_limitations_are_explicit (tests.test_uniform_models_ui.ModelsWindowTests.test_report_nulls_and_legacy_limitations_are_explicit) ... ok
+test_review_requires_confirmation_and_correct_session_and_candidate (tests.test_uniform_models_ui.ModelsWindowTests.test_review_requires_confirmation_and_correct_session_and_candidate) ... ok
+test_capture_uses_supplied_frame_and_shared_group_without_flip (tests.test_uniform_workspace.UniformWorkspaceTests.test_capture_uses_supplied_frame_and_shared_group_without_flip) ... ok
+test_crop_proposal_does_not_approve_and_remains_editable (tests.test_uniform_workspace.UniformWorkspaceTests.test_crop_proposal_does_not_approve_and_remains_editable) ... ok
+test_destroy_during_background_work_has_no_tk_callback (tests.test_uniform_workspace.UniformWorkspaceTests.test_destroy_during_background_work_has_no_tk_callback) ... ok
+test_import_and_decode_stay_off_tk_thread (tests.test_uniform_workspace.UniformWorkspaceTests.test_import_and_decode_stay_off_tk_thread) ... ok
+test_named_categories_and_models_entry (tests.test_uniform_workspace.UniformWorkspaceTests.test_named_categories_and_models_entry) ... ok
+test_shared_action_opens_real_readiness_from_organizational_shirt (tests.test_uniform_workspace.UniformWorkspaceTests.test_shared_action_opens_real_readiness_from_organizational_shirt) ... FAIL
+test_training_panel_keeps_sections_and_routes_camera_saves (tests.test_uniform_workspace.UniformWorkspaceTests.test_training_panel_keeps_sections_and_routes_camera_saves) ... ok
+test_upload_gallery_review_approval_and_label_correction (tests.test_uniform_workspace.UniformWorkspaceTests.test_upload_gallery_review_approval_and_label_correction) ... ok
+test_cancel_progress_and_recover_resume (tests.test_uniform_candidate_ui.CandidateUITests.test_cancel_progress_and_recover_resume) ... ok
+test_failure_report_and_close_during_operation (tests.test_uniform_candidate_ui.CandidateUITests.test_failure_report_and_close_during_operation) ... ok
+test_missing_approvals_block_and_show_counts (tests.test_uniform_candidate_ui.CandidateUITests.test_missing_approvals_block_and_show_counts) ... ok
+test_other_training_blocks_start_and_resume (tests.test_uniform_candidate_ui.CandidateUITests.test_other_training_blocks_start_and_resume) ... ok
+test_recover_selected_older_candidate (tests.test_uniform_candidate_ui.CandidateUITests.test_recover_selected_older_candidate) ... ok
+test_start_off_tk_with_resource_ack_and_bounded_config (tests.test_uniform_candidate_ui.CandidateUITests.test_start_off_tk_with_resource_ack_and_bounded_config) ... ok
+test_terminal_status_waits_for_worker_lock_release (tests.test_uniform_candidate_ui.CandidateUITests.test_terminal_status_waits_for_worker_lock_release) ... ok
+
+======================================================================
+FAIL: test_shared_action_opens_real_readiness_from_organizational_shirt (tests.test_uniform_workspace.UniformWorkspaceTests.test_shared_action_opens_real_readiness_from_organizational_shirt)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/jopethones/Documents/GitHub/cbvms3.0/tests/test_uniform_workspace.py", line 36, in setUp
+    self.wait()
+  File "/Users/jopethones/Documents/GitHub/cbvms3.0/tests/test_uniform_workspace.py", line 52, in wait
+    self.assertFalse(task.busy)
+AssertionError: True is not false
+
+----------------------------------------------------------------------
+Ran 20 tests in 22.004s
+
+FAILED (failures=1)

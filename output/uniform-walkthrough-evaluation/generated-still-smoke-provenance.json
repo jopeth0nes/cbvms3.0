@@ -1,0 +1,14 @@
+{
+  "kind": "generated public still repeated; no walking people or human truth",
+  "source": ".venv/lib/python3.12/site-packages/ultralytics/assets/zidane.jpg",
+  "source_sha256": "16d73869e3267a7d4ed00de8e860833bd1657c1b252e94c0c348277adc7b6edb",
+  "frames": 12,
+  "fps": 10,
+  "resolution": [
+    1280,
+    720
+  ],
+  "video_sha256": "19b35af61d73bf58308e6463ece1019d2546a33fc5793d011fd4fe65efd0e715",
+  "labeled_passages": 0,
+  "use": "CLI plumbing smoke only, never accuracy or performance comparison"
+}

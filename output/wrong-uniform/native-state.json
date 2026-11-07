@@ -1,0 +1,28 @@
+{
+  "temp": "/var/folders/q9/8tgzldpx1dl7qg075j18g03w0000gn/T/cbvms-wrong-uniform-kezn1kp1",
+  "pid": 64208,
+  "window": [
+    1280,
+    800
+  ],
+  "readiness": {
+    "face": {
+      "state": "ready",
+      "error": ""
+    },
+    "recognition": {
+      "state": "ready",
+      "error": ""
+    },
+    "body": {
+      "state": "ready",
+      "error": ""
+    },
+    "uniform": {
+      "state": "ready",
+      "error": ""
+    }
+  },
+  "camera": "STREAMING",
+  "observation_only": true
+}

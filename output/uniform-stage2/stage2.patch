@@ -1,0 +1,2217 @@
+--- a/ui/uniform_workspace.py
++++ b/ui/uniform_workspace.py
+@@ -1,4 +1,4 @@
+-"""Stage 1 uniform dataset review. All disk/decode/detector work uses BackgroundTask."""
++"""Uniform review and isolated candidates. Slow work uses BackgroundTask."""
+ from pathlib import Path
+ import hashlib
+ import tkinter as tk
+@@ -8,6 +8,8 @@
+ from PIL import Image, ImageTk
+ 
+ from core.uniform_dataset import UniformDataset, CATEGORIES
++from core.uniform_candidate import CandidateService
++from ui.uniform_candidate_panel import CandidateTrainingWindow, TRAIN_ACTION
+ from core.trainer import ROOT, TRAIN_DIR
+ from ui.background_task import BackgroundTask
+ from ui.scrolling import ScrollableFrame
+@@ -18,21 +20,27 @@
+ 
+ 
+ class UniformWorkspace(ctk.CTkFrame):
+-    def __init__(self, master, *, capture, dataset=None):
++    def __init__(self, master, *, capture, dataset=None, candidate_service=None, training_busy=lambda: False):
+         super().__init__(master, fg_color=COLOR_BG)
+         self.dataset = dataset or UniformDataset()
+         self.capture = capture
++        self.training_busy = training_busy
++        self.candidate_service = candidate_service
++        self._candidate_window = None
++        self.candidate_launch_pending = False
+         self.task = BackgroundTask(self)
+         self.page = 0
+         self._images = []
+         self._review = None
+         self._refresh_again = False
+         self.grid_columnconfigure(0, weight=1)
+-        self.grid_rowconfigure(1, weight=1)
++        self.grid_rowconfigure(2, weight=1)
+         self.status = ctk.CTkLabel(self, text='Loading review dataset…', anchor='w', wraplength=950)
+         self.status.grid(row=0, column=0, sticky='ew', padx=12, pady=6)
++        ctk.CTkButton(self, text=TRAIN_ACTION, command=self.open_candidates).grid(
++            row=1, column=0, sticky='w', padx=12, pady=4)
+         self.tabs = ctk.CTkTabview(self, command=self._tab_changed)
+-        self.tabs.grid(row=1, column=0, sticky='nsew')
++        self.tabs.grid(row=2, column=0, sticky='nsew')
+         self.views = {}
+         for category in (*GARMENTS, 'unassigned'):
+             title = CATEGORIES[category] if category in GARMENTS else 'Evaluation & Models'
+@@ -45,7 +53,7 @@
+                 actions = ctk.CTkFrame(tab, fg_color='transparent')
+                 actions.grid(row=1, column=0, sticky='ew')
+                 ctk.CTkButton(actions, text='Audit legacy labels', command=self.audit_legacy).pack(side='left', padx=4)
+-                for title in ('Train candidate', 'Evaluate candidate', 'Activate model'):
++                for title in ('Evaluate candidate', 'Activate model'):
+                     ctk.CTkButton(actions, text=title, state='disabled', width=140).pack(side='left', padx=4)
+                 text = 'Legacy review required • Correct/Wrong labels are not garment categories'
+             else:
+@@ -110,8 +118,9 @@
+             self._refresh_again = True
+             return
+         category, page = self.category(), self.page
+-        dataset = self.dataset
++        dataset, service = self.dataset, self.candidate_service
+         def load():
++            candidate = service or CandidateService(dataset, candidates_root=ROOT / 'data' / 'uniform_candidates')
+             snapshot = dataset.snapshot()
+             records = [r for r in snapshot['records'] if r['category'] == category]
+             max_page = max(0, (len(records) - 1) // PAGE_SIZE)
+@@ -125,9 +134,10 @@
+             for name in ('uniform_cls.pt', 'uniform_embed_ref.npz', 'uniform_color_ref.json'):
+                 path = ROOT / 'models' / name
+                 models.append(f'{name}: SHA256 {hashlib.sha256(path.read_bytes()).hexdigest()[:12]}' if path.is_file() else f'{name}: not present')
+-            return snapshot, records, rows, actual, models
++            return snapshot, records, rows, actual, models, candidate
+         def loaded(value):
+-            snapshot, records, rows, actual, models = value
++            snapshot, records, rows, actual, models, candidate = value
++            self.candidate_service = candidate
+             if category != self.category() or page != self.page:
+                 self._refresh_again = False
+                 self.refresh()
+@@ -153,18 +163,45 @@
+                 ctk.CTkLabel(gallery, text='No examples yet. Import photos to begin review.', text_color=COLOR_TEXT_MUTED).grid(row=0, column=0, columnspan=3, pady=25)
+             ready = snapshot.get('readiness', {})
+             self.readiness.configure(text='Current model artifacts (unchanged): ' + ' • '.join(models) + '\n'
+-                + 'Experimental training: ' + str(ready.get('experimental_training_eligible', False)) +
++                + 'Stage 1 category coverage: ' + str(ready.get('experimental_training_eligible', False)) +
+                 ' (minimum category coverage only) • Independent evaluation: ' + str(ready.get('independent_evaluation_ready', False)) + '\n'
+-                + 'Training and evaluation are future stages. Activation is disabled in Stage 1.\n'
++                + 'Use the shared candidate action to check Stage 2 eligibility. Evaluation and activation are disabled until later stages.\n'
+                 + 'Readiness: ' + '; '.join(ready.get('experimental_training_reasons', [])) + '\n'
+                 + 'Photo count alone does not establish accuracy. Unknown provenance stays grouped; no independent evaluation claims.\n'
+                 + f"Dataset: {snapshot.get('counts', {}).get('total', len(snapshot['records']))} unique originals. "
+                 + 'Review legacy examples below; confirm each garment category.')
+-            self.status.configure(text='Stage 1 • originals and review metadata only • active model unchanged')
++            self.status.configure(text='Review dataset and isolated candidates • active model unchanged')
+             if self._refresh_again:
+                 self._refresh_again = False
+                 self.refresh()
+         self.task.run(load, loaded, self._error)
++
++    def candidate_busy(self):
++        # The pending flag closes the same-UI race before the background job takes its lock.
++        return self.candidate_service is None or self.candidate_launch_pending or bool(self._candidate_window and
++            self._candidate_window.winfo_exists() and self._candidate_window.task.busy) or (
++            self.candidate_service is not None and self.candidate_service.is_busy())
++
++    def open_candidates(self):
++        if self._candidate_window is not None and self._candidate_window.winfo_exists():
++            self._candidate_window.lift()
++            return
++        if self.candidate_launch_pending:
++            return
++        self.candidate_launch_pending = True
++        dataset, service = self.dataset, self.candidate_service
++        def prepare():
++            return service or CandidateService(dataset, candidates_root=ROOT / 'data' / 'uniform_candidates')
++        def opened(value):
++            self.candidate_launch_pending = False
++            self.candidate_service = value
++            self._candidate_window = CandidateTrainingWindow(self, value, value.candidates_root,
++                                                            training_busy=self.training_busy)
++        def failed(message):
++            self.candidate_launch_pending = False
++            self._error(message)
++        if not self.run(prepare, 'Opening candidate training…', opened, failed):
++            self.candidate_launch_pending = False
+ 
+     def move_page(self, delta):
+         self.page = max(0, self.page + delta)
+--- a/ui/training_panel.py
++++ b/ui/training_panel.py
+@@ -71,7 +71,7 @@
+ ]
+ 
+ _HELP_TEXT = (
+-    "Uniform Check uses a separate review dataset in Stage 1. Uploads do not rebuild "
++    "Uniform Check uses a separate review dataset and isolated candidate training. Uploads do not rebuild "
+     "or replace the active model. Review labels, crops, provenance and quality first.\n\n"
+     "Earring Check retains its existing training workflow. A minimum photo count is "
+     "only a software requirement, not evidence of accuracy. Independent people, "
+@@ -170,7 +170,8 @@
+                 tab.grid_columnconfigure(0, weight=1)
+                 tab.grid_rowconfigure(0, weight=1)
+                 self._uniform_workspace = UniformWorkspace(tab,
+-                    capture=lambda category: self._open_capture_screen("uniform_stage1", category))
++                    capture=lambda category: self._open_capture_screen("uniform_stage1", category),
++                    training_busy=lambda: any(self._training.values()) or any(self._evaluating.values()))
+                 self._uniform_workspace.grid(row=0, column=0, sticky="nsew")
+             else:
+                 self._build_module_tab(tab, module)
+@@ -1177,7 +1178,15 @@
+         eval_state = "normal" if (enabled and self.trainer.is_trained(module)) else "disabled"
+         controls["evaluate_btn"].configure(state=eval_state)
+ 
++    def _candidate_job_blocks(self) -> bool:
++        if self._uniform_workspace.candidate_busy():
++            show_toast(self, 'Finish or cancel the uniform candidate operation first.', type='warning')
++            return True
++        return False
++
+     def _start_training(self, module: str) -> None:
++        if self._candidate_job_blocks():
++            return
+         if self._training.get(module):
+             return
+         self._training[module] = True
+@@ -1225,6 +1234,8 @@
+     # ------------------------------------------------------------------
+ 
+     def _start_evaluation(self, module: str) -> None:
++        if self._candidate_job_blocks():
++            return
+         if self._training.get(module) or self._evaluating.get(module):
+             return
+         if not self.trainer.is_trained(module):
+--- a/tests/test_uniform_workspace.py
++++ b/tests/test_uniform_workspace.py
+@@ -11,6 +11,7 @@
+ from PIL import Image
+ 
+ from core.uniform_dataset import UniformDataset, CATEGORIES
++from core.uniform_candidate import CandidateService
+ from ui.uniform_workspace import UniformWorkspace, ReviewWindow
+ from ui.window_lifecycle import WorkspaceWindow
+ 
+@@ -28,7 +29,8 @@
+         self.errors = []
+         self.root.report_callback_exception = lambda *a: self.errors.append(a)
+         self.capture = Mock()
+-        self.view = UniformWorkspace(self.root, capture=self.capture, dataset=self.dataset)
++        self.view = UniformWorkspace(self.root, capture=self.capture, dataset=self.dataset,
++            candidate_service=CandidateService(self.dataset, candidates_root=Path(self.tmp.name)/'candidates'))
+         self.view.pack(fill='both', expand=True)
+         self.wait()
+ 
+@@ -61,9 +63,22 @@
+         self.wait()
+         self.assertEqual(self.view.category(), 'organizational_shirt')
+         buttons = {w.cget('text'):w for w in self.descendants(self.view) if isinstance(w, ctk.CTkButton)}
+-        for title in ('Train candidate', 'Evaluate candidate', 'Activate model'):
++        self.assertIn('Train candidate with approved datasets', buttons)
++        for title in ('Evaluate candidate', 'Activate model'):
+             self.assertEqual(buttons[title].cget('state'), 'disabled')
+         self.assertIn('active model unchanged', self.view.status.cget('text'))
++
++    def test_shared_action_opens_real_readiness_from_organizational_shirt(self):
++        self.view.show_category('organizational_shirt'); self.wait()
++        self.view.open_candidates(); self.wait()
++        window = self.view._candidate_window
++        self.wait(window.task)
++        self.assertEqual(window.title(), 'Train candidate with approved datasets')
++        self.assertIn('Campus Uniform: 0 included', window.coverage.cget('text'))
++        self.assertEqual(window.start_button.cget('state'), 'disabled')
++        self.assertTrue(window.start_button.winfo_ismapped())
++        self.assertEqual(list((Path(self.tmp.name)/'candidates').glob('*/candidate.pt')), [])
++        window.destroy()
+ 
+     def test_upload_gallery_review_approval_and_label_correction(self):
+         with patch('ui.uniform_workspace.filedialog.askopenfilenames', return_value=(str(self.source),)):
+@@ -160,5 +175,10 @@
+         trainer.add_sample.assert_not_called()
+         trainer.train.assert_not_called()
+         self.assertEqual(len(self.dataset.snapshot()['records']), 1)
++        with patch.object(panel._uniform_workspace.candidate_service, 'is_busy', return_value=True), patch('ui.training_panel.show_toast'):
++            panel._start_training('earring')
++            panel._start_evaluation('earring')
++        trainer.train.assert_not_called()
++        trainer.evaluate.assert_not_called()
+         panel.on_hide()
+         panel.destroy()
+--- /dev/null
++++ b/core/uniform_candidate.py
+@@ -0,0 +1,704 @@
++"""Isolated, resumable experimental uniform candidate training.
++
++This module writes only beneath ``data/uniform_candidates`` (or an explicitly
++provided disposable candidate root). It never calls the active trainer or
++publishes weights into ``models/``.
++"""
++from __future__ import annotations
++
++import fcntl
++import hashlib
++import io
++import json
++import os
++import re
++import subprocess
++import sys
++import tempfile
++import threading
++import uuid
++from datetime import datetime, timezone
++from pathlib import Path
++from typing import Any
++
++from core.uniform_dataset import PREPROCESS_VERSION as DATASET_PREPROCESS_VERSION
++
++MAPPING_VERSION = "uniform-garments-v1"
++CLASS_MAP = {0: "campus_uniform", 1: "organizational_shirt", 2: "other_clothing"}
++CATEGORY_TO_INDEX = {value: key for key, value in CLASS_MAP.items()}
++DEFAULT_CONFIG = {"epochs": 5, "batch": 4, "threads": 2, "min_per_class": 10, "synthetic_smoke": False}
++BLOCKING_FLAGS = {
++    "obstruction", "obstructed", "low_resolution", "possible_blur", "image_quality_check_failed",
++    "incorrect_association", "unable_to_assess", "multiple_people", "person_association_uncertain",
++    "provenance_association_uncertain", "label_conflict", "near_duplicate_review",
++}
++RUN_STATES = {"preparing", "running", "cancel_requested", "completed", "cancelled", "failed", "interrupted"}
++_ROOT_LOCKS: dict[str, threading.Lock] = {}
++_ROOT_LOCKS_GUARD = threading.Lock()
++
++
++def _utc() -> str:
++    return datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
++
++
++def _sha256(path: Path) -> str:
++    digest = hashlib.sha256()
++    with path.open("rb") as stream:
++        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
++            digest.update(chunk)
++    return digest.hexdigest()
++
++
++def _atomic_json(path: Path, value: dict) -> None:
++    path.parent.mkdir(parents=True, exist_ok=True)
++    fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}-", suffix=".tmp", dir=path.parent)
++    try:
++        with os.fdopen(fd, "w", encoding="utf-8") as out:
++            json.dump(value, out, sort_keys=True, ensure_ascii=False, indent=2)
++            out.flush()
++            os.fsync(out.fileno())
++        os.replace(temp_name, path)
++    finally:
++        try:
++            os.unlink(temp_name)
++        except FileNotFoundError:
++            pass
++
++
++def _read_json(path: Path) -> dict:
++    if path.is_symlink():
++        raise RuntimeError(f"Candidate metadata cannot be a symlink: {path.name}")
++    try:
++        value = json.loads(path.read_text("utf-8"))
++    except (OSError, json.JSONDecodeError) as exc:
++        raise RuntimeError(f"Invalid candidate metadata: {path.name}") from exc
++    if not isinstance(value, dict):
++        raise RuntimeError(f"Invalid candidate metadata: {path.name}")
++    return value
++
++
++def _snapshot(dataset: Any) -> dict:
++    value = dataset.snapshot() if callable(getattr(dataset, "snapshot", None)) else dataset
++    if not isinstance(value, dict) or not isinstance(value.get("records"), list):
++        raise ValueError("Dataset must provide a Stage 1 snapshot with records")
++    return value
++
++
++def _flags(record: dict) -> set[str]:
++    value = record.get("flags", [])
++    if isinstance(value, str):
++        return {value}
++    return {str(flag) for flag in value or []}
++
++
++def _record_groups(record: dict) -> tuple[set[str], bool]:
++    groups = {str(value) for value in record.get("capture_groups", []) if value}
++    if record.get("capture_group"):
++        groups.add(str(record["capture_group"]))
++    unknown = bool(record.get("has_unknown_provenance", not groups))
++    return groups, unknown
++
++
++def _valid_crop(record: dict) -> bool:
++    crop = record.get("crop")
++    if not isinstance(crop, (list, tuple)) or len(crop) != 4 or any(type(v) is not int for v in crop):
++        return False
++    x1, y1, x2, y2 = crop
++    width, height = record.get("width"), record.get("height")
++    return (type(width) is int and type(height) is int and x1 >= 0 and y1 >= 0
++            and x2 <= width and y2 <= height and x2 - x1 >= 16 and y2 - y1 >= 16)
++
++
++def candidate_summary(dataset: Any, *, min_per_class: int = 10) -> dict:
++    """Summarize records usable for experiments, without changing the catalog."""
++    snap = _snapshot(dataset)
++    included = {category: 0 for category in CATEGORY_TO_INDEX}
++    approved = {category: 0 for category in CATEGORY_TO_INDEX}
++    groups = {category: {"known": 0, "unknown": 0} for category in CATEGORY_TO_INDEX}
++    known_sets = {category: set() for category in CATEGORY_TO_INDEX}
++    unknown_seen = {category: False for category in CATEGORY_TO_INDEX}
++    pending = sum(r.get("status") == "pending_review" for r in snap["records"])
++    excluded = sum(r.get("status") == "excluded" for r in snap["records"])
++    quality_blocked = 0
++    reasons = []
++    for record in snap["records"]:
++        category = record.get("category")
++        if record.get("status") == "approved" and record.get("category") in CATEGORY_TO_INDEX and (
++                _flags(record) & BLOCKING_FLAGS or not _valid_crop(record)):
++            quality_blocked += 1
++        if record.get("status") != "approved" or category not in CATEGORY_TO_INDEX:
++            continue
++        approved[category] += 1
++        if _flags(record) & BLOCKING_FLAGS or not _valid_crop(record):
++            continue
++        included[category] += 1
++        known, unknown = _record_groups(record)
++        known_sets[category].update(known)
++        unknown_seen[category] |= unknown
++    for category in included:
++        groups[category] = {"known": len(known_sets[category]), "unknown": int(unknown_seen[category])}
++    missing = {category: count for category, count in included.items() if count < min_per_class}
++    eligible = not missing
++    if missing:
++        reasons.extend(f"{category} has {count} eligible approved examples; requires {min_per_class}."
++                       for category, count in missing.items())
++    if quality_blocked:
++        reasons.append(f"{quality_blocked} approved record(s) have unresolved flags or invalid crops and are excluded.")
++    if pending:
++        reasons.append(f"{pending} pending-review record(s) are excluded.")
++    if excluded:
++        reasons.append(f"{excluded} excluded record(s) are not used.")
++    return {"mapping_version": MAPPING_VERSION, "approved_by_category": approved,
++            "included_by_category": included,
++            "groups_by_category": groups, "pending": pending, "excluded": excluded,
++            "quality_blocked": quality_blocked, "eligible": eligible,
++            "experimental_training_eligible": eligible, "reasons": reasons,
++            "readiness_reasons": list(reasons), "evaluation_ready": False,
++            "activation_allowed": False}
++
++
++class _TrainingLock:
++    def __init__(self, root: Path, *, blocking: bool = False):
++        self.root = root
++        self.path = root / ".candidate-training.lock"
++        self.file = None
++        with _ROOT_LOCKS_GUARD:
++            self.thread_lock = _ROOT_LOCKS.setdefault(str(root.resolve()), threading.Lock())
++        self.blocking = blocking
++
++    def acquire(self) -> bool:
++        if not self.thread_lock.acquire(blocking=False):
++            return False
++        try:
++            self.root.mkdir(parents=True, exist_ok=True)
++            self.file = self.path.open("a+")
++            flags = fcntl.LOCK_EX | (0 if self.blocking else fcntl.LOCK_NB)
++            try:
++                fcntl.flock(self.file.fileno(), flags)
++            except BlockingIOError:
++                self.file.close()
++                self.file = None
++                self.thread_lock.release()
++                return False
++            return True
++        except Exception:
++            if self.file:
++                self.file.close()
++                self.file = None
++            self.thread_lock.release()
++            raise
++
++    def release(self) -> None:
++        if self.file:
++            # Closing relinquishes this descriptor but does not explicitly
++            # unlock the inherited flock; a launched worker may still own it.
++            self.file.close()
++            self.file = None
++            self.thread_lock.release()
++
++    def handoff(self) -> None:
++        """Close the parent handle after Popen inherited it; child keeps flock."""
++        self.release()
++
++
++class CandidateService:
++    """Prepare immutable candidate bundles and supervise isolated CPU workers."""
++
++    def __init__(self, dataset_root: Any | str | Path | None = None, candidates_root: str | Path | None = None,
++                 base_weights: str | Path | None = None):
++        repo = Path(__file__).resolve().parents[1]
++        self.dataset = dataset_root if callable(getattr(dataset_root, "snapshot", None)) else None
++        if self.dataset is not None:
++            dataset_root = self.dataset.root
++        elif dataset_root is None:
++            from core.uniform_dataset import UniformDataset
++            dataset_root = UniformDataset().root
++        self.dataset_root = Path(dataset_root).resolve()
++        if candidates_root is None:
++            candidates_root = repo / "data" / "uniform_candidates"
++        self.candidates_root = Path(candidates_root).resolve()
++        self.candidates_root.mkdir(parents=True, exist_ok=True)
++        self.base_weights = Path(base_weights).absolute() if base_weights else repo / "yolov8n-cls.pt"
++        self._handles: dict[str, subprocess.Popen] = {}
++        self._preparing: set[str] = set()
++        self._handles_guard = threading.Lock()
++
++    @staticmethod
++    def validate_config(config: dict | None = None) -> dict:
++        value = dict(DEFAULT_CONFIG)
++        if config:
++            unknown = set(config) - set(value)
++            if unknown:
++                raise ValueError(f"Unknown candidate config keys: {', '.join(sorted(unknown))}")
++            value.update(config)
++        for key, low, high in (("epochs", 1, 40), ("batch", 2, 16), ("threads", 1, 4)):
++            if type(value[key]) is not int or not low <= value[key] <= high:
++                raise ValueError(f"{key} must be an integer from {low} to {high}")
++        if type(value["synthetic_smoke"]) is not bool:
++            raise ValueError("synthetic_smoke must be boolean")
++        min_value = 2 if value["synthetic_smoke"] else 10
++        if type(value["min_per_class"]) is not int or value["min_per_class"] < min_value or value["min_per_class"] > 5000:
++            raise ValueError(f"min_per_class must be from {min_value} to 5000")
++        return value
++
++    def _dataset_obj(self):
++        if self.dataset is None:
++            from core.uniform_dataset import UniformDataset
++            self.dataset = UniformDataset(self.dataset_root)
++        return self.dataset
++
++    def summary(self, min_per_class: int = 10) -> dict:
++        return candidate_summary(self._dataset_obj(), min_per_class=min_per_class)
++
++    def is_busy(self) -> bool:
++        """Nonblocking candidate lock probe; does not read the catalog or weights."""
++        probe = _TrainingLock(self.candidates_root)
++        if not probe.acquire():
++            return True
++        probe.release()
++        return False
++
++    def _run_dir(self, run_id: str) -> Path:
++        if not isinstance(run_id, str) or len(run_id) != 32 or any(c not in "0123456789abcdef" for c in run_id):
++            raise ValueError("Invalid candidate run id")
++        raw_path = self.candidates_root / run_id
++        if raw_path.is_symlink():
++            raise ValueError("Candidate run directory cannot be a symlink")
++        path = raw_path.resolve()
++        if self.candidates_root not in path.parents:
++            raise ValueError("Candidate path escapes the candidates root")
++        return path
++
++    def _status_write(self, run_dir: Path, status: dict) -> None:
++        path = run_dir / "status.json"
++        if path.is_file():
++            try:
++                merged = _read_json(path)
++            except RuntimeError:
++                merged = {}
++            merged.update(status)
++            status = merged
++        status.setdefault("run_id", run_dir.name)
++        status["updated_at"] = _utc()
++        _atomic_json(path, status)
++
++    def _interrupt_stale_runs(self) -> None:
++        for path in self.candidates_root.iterdir():
++            status_path = path / "status.json"
++            if path.is_symlink() or not path.is_dir() or len(path.name) != 32 or not status_path.is_file():
++                continue
++            try:
++                value = _read_json(status_path)
++            except RuntimeError:
++                continue
++            if value.get("status") in {"preparing", "running", "cancel_requested"}:
++                value.update(status="interrupted", epoch=int(value.get("epoch", 0)),
++                             message="No worker owns the candidate lock; last complete epoch checkpoint is preserved.",
++                             resumable=self._has_checkpoint(path))
++                self._status_write(path, value)
++
++    def _snapshot_digest(self, snap: dict) -> str:
++        payload = {"preprocess_version": snap.get("preprocess_version"),
++                   "records": snap.get("records", [])}
++        return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":"),
++                                          ensure_ascii=False).encode("utf-8")).hexdigest()
++
++    def _freeze(self, run_dir: Path, config: dict) -> dict:
++        dataset = self._dataset_obj()
++        snap = _snapshot(dataset)
++        summary = candidate_summary(snap, min_per_class=config["min_per_class"])
++        if not summary["eligible"]:
++            raise ValueError("Candidate dataset is not eligible: " + " ".join(summary["reasons"]))
++        if config["synthetic_smoke"]:
++            included = [r for r in snap["records"] if r.get("status") == "approved" and
++                        r.get("category") in CATEGORY_TO_INDEX and not (_flags(r) & BLOCKING_FLAGS) and _valid_crop(r)]
++            if not included or any(not any(s.get("kind") == "synthetic_smoke" for s in r.get("sources", []))
++                                   for r in included):
++                raise ValueError("synthetic_smoke is allowed only for records marked synthetic_smoke")
++        if (run_dir / "cancel.flag").exists():
++            return {"cancelled_during_freeze": True}
++        if not self.base_weights.is_file() or self.base_weights.is_symlink():
++            raise FileNotFoundError(f"Trusted local classifier weights are unavailable: {self.base_weights}")
++        if self.base_weights.stat().st_size <= 0 or self.base_weights.stat().st_size > 256 * 1024 * 1024:
++            raise ValueError("Trusted local classifier weights are outside the supported file-size bound")
++        base_hash = _sha256(self.base_weights)
++        base_copy = run_dir / "base_weights.pt"
++        with self.base_weights.open("rb") as source, base_copy.open("wb") as target:
++            copied = 0
++            while chunk := source.read(1024 * 1024):
++                copied += len(chunk)
++                if copied > 256 * 1024 * 1024:
++                    raise ValueError("Trusted local classifier weights exceed the copy bound")
++                target.write(chunk)
++            target.flush()
++            os.fsync(target.fileno())
++        if _sha256(base_copy) != base_hash:
++            raise RuntimeError("Base weights changed while the candidate bundle was frozen")
++        if (run_dir / "cancel.flag").exists():
++            return {"cancelled_during_freeze": True}
++        (run_dir / "prepared").mkdir(parents=True, exist_ok=True)
++        root = dataset.root.resolve()
++        eligible = [r for r in snap["records"] if r.get("status") == "approved"
++                    and r.get("category") in CATEGORY_TO_INDEX and not (_flags(r) & BLOCKING_FLAGS) and _valid_crop(r)]
++        entries = []
++        from PIL import Image
++        import cv2
++        import numpy as np
++        from core.trainer import _letterbox
++        for record in sorted(eligible, key=lambda row: row["image_id"]):
++            if (run_dir / "cancel.flag").exists():
++                return {"cancelled_during_freeze": True}
++            relative = Path(record.get("original_path", ""))
++            if relative.is_absolute() or not relative.parts:
++                raise ValueError("Original image path is not a safe dataset-relative path")
++            untrusted_path = root / relative
++            cursor = root
++            for component in relative.parts:
++                cursor = cursor / component
++                if cursor.is_symlink():
++                    raise ValueError("Candidate original path contains a symlink")
++            original_path = untrusted_path.resolve()
++            if root not in original_path.parents:
++                raise ValueError("Original image path escapes the dataset root")
++            if not original_path.is_file():
++                raise ValueError("Candidate original is missing or is not a regular file")
++            original_bytes = original_path.read_bytes()
++            original_hash = hashlib.sha256(original_bytes).hexdigest()
++            if original_hash != record.get("sha256") or original_hash != record.get("image_id"):
++                raise ValueError(f"Original SHA256 mismatch for image {record.get('image_id')}")
++            crop = record.get("crop")
++            if not _valid_crop(record):
++                raise ValueError(f"Approved image {record.get('image_id')} has no valid crop")
++            with Image.open(io.BytesIO(original_bytes)) as im:
++                im.load()
++                raster = im.convert("RGB")
++            if raster.size != (record.get("width"), record.get("height")):
++                raise ValueError(f"Original dimensions changed for image {record.get('image_id')}")
++            crop_rgb = np.asarray(raster.crop(tuple(crop)), dtype=np.uint8)
++            if crop_rgb.size == 0:
++                raise ValueError(f"Approved image {record.get('image_id')} has an empty crop")
++            crop_bgr = cv2.cvtColor(crop_rgb, cv2.COLOR_RGB2BGR)
++            boxed_bgr = _letterbox(crop_bgr, 224)
++            tensor = (cv2.cvtColor(boxed_bgr, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0)
++            tensor_path = run_dir / "prepared" / f"{record['image_id']}.npy"
++            with tensor_path.open("wb") as out:
++                np.save(out, tensor, allow_pickle=False)
++                out.flush()
++                os.fsync(out.fileno())
++            known, unknown = _record_groups(record)
++            entries.append({"image_id": record["image_id"], "original_sha256": original_hash,
++                            "prepared_path": str(tensor_path.relative_to(run_dir)),
++                            "prepared_sha256": _sha256(tensor_path), "category": record["category"],
++                            "class_index": CATEGORY_TO_INDEX[record["category"]], "crop": crop,
++                            "crop_source": record.get("crop_source"),
++                            "preprocess_version": record.get("preprocess_version", snap.get("preprocess_version")),
++                            "group_ids": sorted(known), "unknown_provenance": unknown,
++                            "near_duplicate_ids": sorted(record.get("duplicate_of", [])), "split": "train"})
++        after = _snapshot(dataset)
++        if (run_dir / "cancel.flag").exists():
++            return {"cancelled_during_freeze": True}
++        dataset_hash = self._snapshot_digest(snap)
++        if self._snapshot_digest(after) != dataset_hash:
++            raise RuntimeError("Stage 1 catalog changed while freezing candidate inputs; retry from a fresh review")
++        class_map = {"mapping_version": MAPPING_VERSION,
++                     "classes": [{"index": index, "category": category} for index, category in CLASS_MAP.items()]}
++        _atomic_json(run_dir / "class_map.json", class_map)
++        manifest = {"schema_version": 1, "mapping_version": MAPPING_VERSION,
++                    "dataset_preprocess_version": snap.get("preprocess_version"),
++                    "model_preprocess": {"version": "trainer-letterbox-rgb-0-1-v1", "size": 224,
++                                         "color": "RGB", "range": [0.0, 1.0], "augmentation": "none"},
++                    "dataset_snapshot_sha256": dataset_hash,
++                    "eligibility_snapshot": {"approved_by_category": summary["approved_by_category"],
++                                             "included_by_category": summary["included_by_category"],
++                                             "groups_by_category": summary["groups_by_category"],
++                                             "pending": summary["pending"], "excluded": summary["excluded"],
++                                             "quality_blocked": summary["quality_blocked"],
++                                             "readiness_reasons": summary["reasons"]},
++                    "split_policy": "experimental_train_only_no_validation_or_evaluation",
++                    "limitations": ["Experimental train-only bundle; no validation or evaluation metrics.",
++                                    "Train loss does not establish accuracy or deployment readiness."],
++                    "entries": entries}
++        _atomic_json(run_dir / "dataset_manifest.json", manifest)
++        manifest_hash = _sha256(run_dir / "dataset_manifest.json")
++        import importlib.metadata
++        config_data = {**config, "mapping_version": MAPPING_VERSION, "base_weights_sha256": base_hash,
++                       "base_weights_file": "base_weights.pt", "dataset_manifest_sha256": manifest_hash,
++                       "synthetic_smoke": config["synthetic_smoke"], "nondeployable": True,
++                       "architecture": "yolov8n-cls", "optimizer": "AdamW", "learning_rate": 1e-3,
++                       "weight_decay": 1e-2, "seed": int(run_dir.name[:8], 16),
++                       "eligibility_snapshot": manifest["eligibility_snapshot"],
++                       "model_preprocess": manifest["model_preprocess"],
++                       "ultralytics_version": importlib.metadata.version("ultralytics"),
++                       "torch_version": importlib.metadata.version("torch"),
++                       "limitations": ["Experimental train-only; no independent validation/evaluation.",
++                                       "Training loss is not an accuracy measure.",
++                                       "Candidate is nondeployable and is never activated by this service."]}
++        _atomic_json(run_dir / "config.json", config_data)
++        immutable = {}
++        for path in [run_dir / "base_weights.pt", run_dir / "class_map.json", run_dir / "dataset_manifest.json",
++                     run_dir / "config.json", *(run_dir / e["prepared_path"] for e in entries)]:
++            immutable[str(path.relative_to(run_dir))] = _sha256(path)
++        _atomic_json(run_dir / "immutable_checksums.json", immutable)
++        return {"manifest_sha256": manifest_hash, "base_weights_sha256": base_hash,
++                "dataset_snapshot_sha256": dataset_hash, "included": len(entries), "config": config_data}
++
++    def _spawn(self, run_id: str, lock: _TrainingLock, *, resume: bool) -> None:
++        run_dir = self._run_dir(run_id)
++        command = [sys.executable, "-m", "core.uniform_candidate_worker", str(run_dir),
++                   str(lock.file.fileno()), "resume" if resume else "start"]
++        log = (run_dir / "train.log").open("a", encoding="utf-8")
++        log.write(f"[{_utc()}] command={command!r} pid_pending run_uuid={run_id}\n")
++        log.flush()
++        try:
++            process = subprocess.Popen(command, cwd=Path(__file__).resolve().parents[1], stdin=subprocess.DEVNULL,
++                                       stdout=log, stderr=subprocess.STDOUT, close_fds=True,
++                                       pass_fds=(lock.file.fileno(),),
++                                       env={**os.environ, "YOLO_CONFIG_DIR": str(self.candidates_root / ".ultralytics"),
++                                            "MPLCONFIGDIR": str(self.candidates_root / ".mplconfig")})
++        except Exception:
++            log.close()
++            raise
++        log.write(f"[{_utc()}] pid={process.pid} started_at={_utc()} run_uuid={run_id}\n")
++        log.flush()
++        log.close()
++        lock.handoff()
++        with self._handles_guard:
++            self._handles[run_id] = process
++        waiter = threading.Thread(target=self._wait_worker, args=(run_id, process),
++                                  name=f"uniform-candidate-{run_id[:8]}", daemon=True)
++        waiter.start()
++
++    def _wait_worker(self, run_id: str, process: subprocess.Popen) -> None:
++        process.wait()
++        with self._handles_guard:
++            self._handles.pop(run_id, None)
++
++    def _prepare_and_spawn(self, run_id: str, lock: _TrainingLock, config: dict) -> None:
++        run_dir = self._run_dir(run_id)
++        try:
++            frozen = self._freeze(run_dir, config)
++            if frozen.get("cancelled_during_freeze") or (run_dir / "cancel.flag").exists():
++                self._status_write(run_dir, {"status": "cancelled", "epoch": 0, "epochs": config["epochs"],
++                                             "message": "Cancelled while preparing immutable candidate inputs.",
++                                             "resumable": False})
++                return
++            self._status_write(run_dir, {"status": "running", "epoch": 0, "epochs": config["epochs"],
++                                         "message": "Candidate worker starting.", "resumable": True,
++                                         "run_uuid": run_id, **frozen})
++            self._spawn(run_id, lock, resume=False)
++        except Exception as exc:
++            try:
++                self._status_write(run_dir, {"status": "failed", "message": str(exc),
++                                             "resumable": self._has_checkpoint(run_dir)})
++                limitations = run_dir / "limitations.txt"
++                if not limitations.exists():
++                    limitations.write_text("NONDEPLOYABLE candidate bundle. No evaluation or activation.\n",
++                                           encoding="utf-8")
++            except Exception:
++                pass
++        finally:
++            with self._handles_guard:
++                self._preparing.discard(run_id)
++            if lock.file:
++                lock.release()
++
++    def start(self, config: dict | None = None) -> str:
++        chosen = self.validate_config(config)
++        lock = _TrainingLock(self.candidates_root)
++        if not lock.acquire():
++            raise RuntimeError("A uniform candidate job is already active")
++        run_id = uuid.uuid4().hex
++        try:
++            self._interrupt_stale_runs()
++            run_dir = self._run_dir(run_id)
++            run_dir.mkdir(mode=0o700, parents=True)
++            os.chmod(run_dir, 0o700)
++            self._status_write(run_dir, {"run_id": run_id, "status": "preparing", "epoch": 0,
++                                         "epochs": chosen["epochs"], "message": "Freezing reviewed candidate inputs.",
++                                         "resumable": False, "started_at": _utc(), "process_id": os.getpid(),
++                                         "run_uuid": run_id})
++            (run_dir / "limitations.txt").write_text(
++                "NONDEPLOYABLE experimental train-only bundle. No validation/evaluation or activation.\n",
++                encoding="utf-8")
++            with self._handles_guard:
++                self._preparing.add(run_id)
++            thread = threading.Thread(target=self._prepare_and_spawn, args=(run_id, lock, chosen),
++                                      name=f"uniform-candidate-prepare-{run_id[:8]}", daemon=True)
++            thread.start()
++        except Exception as exc:
++            with self._handles_guard:
++                self._preparing.discard(run_id)
++            if "run_dir" in locals() and run_dir.exists():
++                self._status_write(run_dir, {"run_id": run_id, "status": "failed", "epoch": 0,
++                                             "epochs": chosen["epochs"], "message": str(exc),
++                                             "resumable": False, "run_uuid": run_id})
++            if lock.file:
++                lock.release()
++            raise
++        return run_id
++
++    def resume(self, run_id: str) -> str:
++        lock = _TrainingLock(self.candidates_root)
++        if not lock.acquire():
++            raise RuntimeError("A uniform candidate job is already active")
++        try:
++            run_dir = self._run_dir(run_id)
++            current = _read_json(run_dir / "status.json")
++            if current.get("status") in {"running", "preparing", "cancel_requested"}:
++                current.update(status="interrupted", message="Previous process ended; the last complete epoch checkpoint is preserved.")
++                self._status_write(run_dir, current)
++            if current.get("status") == "completed":
++                raise ValueError("Completed candidate jobs cannot be resumed")
++            self._verify_bundle(run_dir)
++            config = _read_json(run_dir / "config.json")
++            completed_epoch = self._checkpoint_epoch(run_dir)
++            if completed_epoch > config["epochs"]:
++                raise ValueError("Checkpoint epoch exceeds the configured epoch count")
++            cancel = run_dir / "cancel.flag"
++            try:
++                cancel.unlink()
++            except FileNotFoundError:
++                pass
++            self._status_write(run_dir, {**current, "status": "running", "epoch": completed_epoch,
++                                         "epochs": config["epochs"], "message": "Resuming from last complete epoch.",
++                                         "resumable": True, "run_uuid": run_id})
++            self._spawn(run_id, lock, resume=True)
++        except Exception:
++            if lock.file:
++                lock.release()
++            raise
++        return run_id
++
++    def _checkpoint_epoch(self, run_dir: Path) -> int:
++        pointer_path = run_dir / "last_checkpoint.json"
++        if not pointer_path.is_file():
++            raise ValueError("No recoverable completed-epoch checkpoint exists")
++        config = _read_json(run_dir / "config.json")
++        pointer = _read_json(pointer_path)
++        relative = Path(pointer.get("file", ""))
++        if (relative.is_absolute() or ".." in relative.parts
++                or not re.fullmatch(r"checkpoint_epoch_[0-9]{6}\.pt", relative.name)):
++            raise ValueError("Checkpoint path escapes candidate bundle")
++        checkpoint = run_dir / relative
++        sidecar_path = run_dir / f"{relative.name}.sha256.json"
++        for candidate_path in (checkpoint, sidecar_path):
++            cursor = run_dir
++            for component in candidate_path.relative_to(run_dir).parts:
++                cursor = cursor / component
++                if cursor.is_symlink():
++                    raise ValueError("Checkpoint files cannot be symlinks")
++        sidecar = _read_json(sidecar_path)
++        expected = {"run_uuid": run_dir.name, "mapping_version": MAPPING_VERSION,
++                    "dataset_manifest_sha256": config.get("dataset_manifest_sha256"),
++                    "base_weights_sha256": config.get("base_weights_sha256"),
++                    "config_sha256": _sha256(run_dir / "config.json")}
++        if any(sidecar.get(key) != value for key, value in expected.items()):
++            raise ValueError("Checkpoint sidecar does not match run, mapping, data, weights, or config")
++        if not checkpoint.is_file() or _sha256(checkpoint) != pointer.get("sha256") or pointer.get("sha256") != sidecar.get("sha256"):
++            raise ValueError("Checkpoint SHA256 verification failed")
++        if int(pointer.get("epoch", -1)) != int(sidecar.get("epoch", -2)):
++            raise ValueError("Checkpoint pointer and sidecar epoch differ")
++        if relative.name != f"checkpoint_epoch_{int(sidecar['epoch']):06d}.pt":
++            raise ValueError("Checkpoint filename and epoch metadata differ")
++        return int(sidecar["epoch"])
++
++    def _verify_bundle(self, run_dir: Path) -> None:
++        config = _read_json(run_dir / "config.json")
++        manifest_path = run_dir / "dataset_manifest.json"
++        if _sha256(manifest_path) != config.get("dataset_manifest_sha256"):
++            raise ValueError("Frozen dataset manifest hash mismatch")
++        if config.get("mapping_version") != MAPPING_VERSION:
++            raise ValueError("Class mapping version changed; this bundle cannot resume")
++        base_relative = Path(config.get("base_weights_file", ""))
++        if base_relative.is_absolute() or ".." in base_relative.parts:
++            raise ValueError("Frozen base weights path escapes candidate bundle")
++        base_path = run_dir / base_relative
++        if base_path.is_symlink() or not base_path.is_file() or _sha256(base_path) != config.get("base_weights_sha256"):
++            raise ValueError("Frozen base weights hash mismatch")
++        class_map = _read_json(run_dir / "class_map.json")
++        expected_class_map = {"mapping_version": MAPPING_VERSION,
++                              "classes": [{"index": index, "category": category} for index, category in CLASS_MAP.items()]}
++        if class_map != expected_class_map:
++            raise ValueError("Class mapping or class index order changed")
++        manifest = _read_json(manifest_path)
++        immutable = _read_json(run_dir / "immutable_checksums.json")
++        expected_paths = {"base_weights.pt", "class_map.json", "dataset_manifest.json", "config.json"}
++        expected_paths.update(entry.get("prepared_path") for entry in manifest.get("entries", []))
++        if not manifest.get("entries") or set(immutable) != expected_paths:
++            raise ValueError("Frozen candidate checksum inventory is empty or incomplete")
++        for relative, expected in immutable.items():
++            relative_path = Path(relative)
++            if relative_path.is_absolute() or ".." in relative_path.parts:
++                raise ValueError(f"Unsafe frozen candidate path: {relative}")
++            path = run_dir / relative_path
++            cursor = run_dir
++            for component in relative_path.parts:
++                cursor = cursor / component
++                if cursor.is_symlink():
++                    raise ValueError(f"Frozen candidate path contains a symlink: {relative}")
++            resolved = path.resolve()
++            if path.is_symlink() or run_dir not in resolved.parents or not resolved.is_file() or _sha256(resolved) != expected:
++                raise ValueError(f"Frozen candidate input hash mismatch: {relative}")
++
++    def cancel(self, run_id: str) -> None:
++        run_dir = self._run_dir(run_id)
++        current = _read_json(run_dir / "status.json")
++        if current.get("status") not in {"preparing", "running", "cancel_requested"}:
++            raise ValueError(f"Cannot cancel a {current.get('status')} candidate")
++        if not self.is_busy():
++            raise ValueError("Candidate worker is no longer active")
++        flag = run_dir / "cancel.flag"
++        flag.write_text(_utc(), encoding="ascii")
++
++    def status(self, run_id: str | None = None) -> dict:
++        if run_id is None:
++            runs = []
++            for path in self.candidates_root.iterdir():
++                if not path.is_symlink() and path.is_dir() and len(path.name) == 32 and (path / "status.json").is_file():
++                    try:
++                        runs.append(_read_json(path / "status.json"))
++                    except RuntimeError:
++                        continue
++            if not runs:
++                return {"run_id": None, "status": "idle", "epoch": 0, "epochs": 0,
++                        "message": "No candidate job exists.", "resumable": False}
++            current = max(runs, key=lambda row: (row.get("started_at", ""), row.get("run_id", "")))
++            run_id = current["run_id"]
++        else:
++            current = _read_json(self._run_dir(run_id) / "status.json")
++        if current.get("status") in {"running", "preparing", "cancel_requested"}:
++            probe = _TrainingLock(self.candidates_root)
++            if probe.acquire():
++                try:
++                    current = _read_json(self._run_dir(run_id) / "status.json")
++                    if current.get("status") in {"running", "preparing", "cancel_requested"}:
++                        current.update(status="interrupted", message="No worker holds the candidate lock; last complete checkpoint is preserved.")
++                        current["resumable"] = self._has_checkpoint(self._run_dir(run_id))
++                        self._status_write(self._run_dir(run_id), current)
++                finally:
++                    probe.release()
++        if ((self._run_dir(run_id) / "cancel.flag").exists()
++                and current.get("status") in {"running", "preparing", "cancel_requested"}):
++            current = {**current, "status": "cancel_requested",
++                       "message": "Cancellation requested; waiting for the worker to preserve the last complete epoch."}
++        return {key: current.get(key) for key in
++                ("run_id", "status", "epoch", "epochs", "message", "resumable", "train_loss",
++                 "started_at", "worker_started_at", "process_id", "run_uuid", "manifest_sha256", "nondeployable") if key in current}
++
++    def list_runs(self) -> list[dict]:
++        result = []
++        for path in self.candidates_root.iterdir():
++            if not path.is_symlink() and path.is_dir() and len(path.name) == 32 and (path / "status.json").is_file():
++                result.append(self.status(path.name))
++        return sorted(result, key=lambda row: row.get("started_at", ""), reverse=True)
++
++    @staticmethod
++    def _has_checkpoint(run_dir: Path) -> bool:
++        return (run_dir / "last_checkpoint.json").is_file()
++
++    def _reap_handle(self, run_id: str) -> None:
++        with self._handles_guard:
++            process = self._handles.get(run_id)
++        if process is not None and process.poll() is not None:
++            with self._handles_guard:
++                self._handles.pop(run_id, None)
+--- /dev/null
++++ b/core/uniform_candidate_worker.py
+@@ -0,0 +1,344 @@
++"""Child process for CPU-only experimental uniform candidate training."""
++from __future__ import annotations
++
++import hashlib
++import importlib.metadata
++import json
++import os
++import random
++import re
++import sys
++import tempfile
++import traceback
++from pathlib import Path
++from datetime import datetime, timezone
++
++
++def _utc() -> str:
++    return datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
++
++
++def _sha256(path: Path) -> str:
++    digest = hashlib.sha256()
++    with path.open("rb") as stream:
++        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
++            digest.update(chunk)
++    return digest.hexdigest()
++
++
++def _atomic_json(path: Path, value: dict) -> None:
++    fd, name = tempfile.mkstemp(prefix=f".{path.name}-", dir=path.parent)
++    try:
++        with os.fdopen(fd, "w", encoding="utf-8") as out:
++            json.dump(value, out, sort_keys=True, ensure_ascii=False, indent=2)
++            out.flush()
++            os.fsync(out.fileno())
++        os.replace(name, path)
++    finally:
++        try:
++            os.unlink(name)
++        except FileNotFoundError:
++            pass
++
++
++def _read(path: Path) -> dict:
++    if path.is_symlink():
++        raise ValueError(f"Candidate metadata cannot be a symlink: {path.name}")
++    value = json.loads(path.read_text("utf-8"))
++    if not isinstance(value, dict):
++        raise ValueError(f"Invalid {path.name}")
++    return value
++
++
++def _status(run_dir: Path, **changes) -> dict:
++    path = run_dir / "status.json"
++    value = _read(path)
++    value.update(changes, updated_at=_utc())
++    _atomic_json(path, value)
++    return value
++
++
++def _verify(run_dir: Path, config: dict, manifest: dict) -> None:
++    if _sha256(run_dir / "dataset_manifest.json") != config["dataset_manifest_sha256"]:
++        raise RuntimeError("Frozen dataset manifest hash mismatch")
++    if config.get("mapping_version") != "uniform-garments-v1":
++        raise RuntimeError("Class mapping version changed")
++    expected_class_map = {"mapping_version": "uniform-garments-v1", "classes": [
++        {"index": 0, "category": "campus_uniform"},
++        {"index": 1, "category": "organizational_shirt"},
++        {"index": 2, "category": "other_clothing"}]}
++    if _read(run_dir / "class_map.json") != expected_class_map:
++        raise RuntimeError("Class map/index order mismatch")
++    entries = manifest.get("entries", [])
++    if not entries:
++        raise RuntimeError("Frozen manifest is empty")
++    base_name = config.get("base_weights_file", "")
++    base_rel = Path(base_name)
++    if base_rel.is_absolute() or ".." in base_rel.parts:
++        raise RuntimeError("Base weight path escapes the candidate bundle")
++    immutable = _read(run_dir / "immutable_checksums.json")
++    expected_paths = {"base_weights.pt", "class_map.json", "dataset_manifest.json", "config.json"}
++    expected_paths.update(entry.get("prepared_path") for entry in entries)
++    if set(immutable) != expected_paths:
++        raise RuntimeError("Immutable checksum inventory is incomplete")
++    for relative, expected in immutable.items():
++        relative_path = Path(relative)
++        if relative_path.is_absolute() or ".." in relative_path.parts:
++            raise RuntimeError(f"Unsafe frozen input path: {relative}")
++        path = run_dir / relative_path
++        cursor = run_dir
++        for component in relative_path.parts:
++            cursor = cursor / component
++            if cursor.is_symlink():
++                raise RuntimeError(f"Frozen input path contains a symlink: {relative}")
++        resolved = path.resolve()
++        if path.is_symlink() or run_dir.resolve() not in resolved.parents or not resolved.is_file() or _sha256(resolved) != expected:
++            raise RuntimeError(f"Frozen input integrity check failed: {relative}")
++    if manifest.get("mapping_version") != config.get("mapping_version"):
++        raise RuntimeError("Class mapping changed during candidate run")
++
++
++def _atomic_torch_save(torch, value, path: Path) -> None:
++    fd, name = tempfile.mkstemp(prefix=f".{path.name}-", suffix=".tmp", dir=path.parent)
++    os.close(fd)
++    try:
++        torch.save(value, name)
++        with open(name, "rb") as stream:
++            os.fsync(stream.fileno())
++        os.replace(name, path)
++    finally:
++        try:
++            os.unlink(name)
++        except FileNotFoundError:
++            pass
++
++
++def _checkpoint(torch, random, np, model, optimizer, epoch, run_dir, metadata):
++    path = run_dir / f"checkpoint_epoch_{epoch:06d}.pt"
++    _atomic_torch_save(torch, {
++        **metadata, "epoch": epoch, "model_state_dict": model.state_dict(),
++        "optimizer_state_dict": optimizer.state_dict(), "torch_rng_state": torch.get_rng_state(),
++        "python_rng_state": random.getstate(), "numpy_rng_state": np.random.get_state(),
++    }, path)
++    digest = _sha256(path)
++    sidecar = {**metadata, "epoch": epoch, "sha256": digest}
++    _atomic_json(run_dir / f"{path.name}.sha256.json", sidecar)
++    _atomic_json(run_dir / "last_checkpoint.json", {"file": path.name, "epoch": epoch, "sha256": digest})
++
++
++def _cancelled(run_dir: Path) -> bool:
++    return (run_dir / "cancel.flag").exists()
++
++
++def _bundle_checksums(run_dir: Path) -> dict:
++    files = {}
++    for path in sorted(run_dir.rglob("*")):
++        if not path.is_file() or path.name in {"bundle_checksums.json", "train.log", "status.json", "cancel.flag"}:
++            continue
++        if path.name.endswith(".tmp"):
++            continue
++        files[str(path.relative_to(run_dir))] = _sha256(path)
++    return files
++
++
++def train(run_dir: Path, lock_fd: int, mode: str) -> int:
++    # The parent acquired this advisory lock before snapshotting and passed its
++    # open file description into this process. Keep it open for this worker's life.
++    os.fstat(lock_fd)
++    _status(run_dir, process_id=os.getpid(), worker_started_at=_utc(), nondeployable=True)
++    import cv2  # noqa: F401 -- fixed preprocessing dependencies already loaded by frozen tensors
++    import numpy as np
++    import torch
++    import torch.nn as nn
++    from ultralytics.nn.tasks import ClassificationModel
++
++    config = _read(run_dir / "config.json")
++    manifest = _read(run_dir / "dataset_manifest.json")
++    _verify(run_dir, config, manifest)
++    torch.set_num_threads(config["threads"])
++    try:
++        torch.set_num_interop_threads(config["threads"])
++    except RuntimeError:
++        pass
++    seed = int(run_dir.name[:8], 16)
++    if mode == "start":
++        random.seed(seed)
++        np.random.seed(seed % (2 ** 32))
++        torch.manual_seed(seed)
++    device = torch.device("cpu")
++    base_relative = Path(config.get("base_weights_file", ""))
++    if base_relative.is_absolute() or ".." in base_relative.parts:
++        raise RuntimeError("Base weights path escapes the candidate bundle")
++    checkpoint_path = run_dir / base_relative
++    if checkpoint_path.is_symlink() or run_dir.resolve() not in checkpoint_path.resolve().parents:
++        raise RuntimeError("Base weights cannot be a symlink")
++    base = torch.load(checkpoint_path, map_location=device, weights_only=False)
++    base_model = base.get("model") if isinstance(base, dict) else None
++    if not isinstance(base_model, ClassificationModel):
++        raise RuntimeError("Trusted local weights are not an Ultralytics ClassificationModel")
++    if base_model.yaml.get("scale") != "n" or Path(base_model.yaml.get("yaml_file", "")).name != "yolov8n-cls.yaml":
++        raise RuntimeError("Trusted weights are not the expected YOLOv8n classification architecture")
++    model = base_model.float().to(device)
++    head = model.model[-1]
++    if not hasattr(head, "linear") or not isinstance(head.linear, nn.Linear):
++        raise RuntimeError("Trusted local classifier head does not match expected YOLOv8n architecture")
++    head.linear = nn.Linear(head.linear.in_features, 3)
++    model.names = {0: "campus_uniform", 1: "organizational_shirt", 2: "other_clothing"}
++    for parameter in model.parameters():
++        parameter.requires_grad_(True)
++    head_parameter_ids = {id(parameter) for parameter in head.parameters()}
++    if not any(parameter.requires_grad and id(parameter) not in head_parameter_ids
++               for parameter in model.parameters()):
++        raise RuntimeError("YOLOv8n classifier backbone has no trainable parameters")
++    if not any(parameter.requires_grad for parameter in head.parameters()):
++        raise RuntimeError("Three-class classifier head has no trainable parameters")
++    architecture_record = {"architecture": "ultralytics-yolov8n-classification",
++                           "yaml_file": Path(model.yaml.get("yaml_file", "")).name,
++                           "scale": model.yaml.get("scale"), "mapping_version": config["mapping_version"],
++                           "class_indices": {str(k): v for k, v in model.names.items()},
++                           "trainable_parameter_count": sum(p.numel() for p in model.parameters() if p.requires_grad),
++                           "trainable_backbone_parameter_count": sum(
++                               p.numel() for p in model.parameters() if p.requires_grad and id(p) not in head_parameter_ids),
++                           "trainable_head_parameter_count": sum(p.numel() for p in head.parameters() if p.requires_grad)}
++    architecture_path = run_dir / "architecture.json"
++    if mode == "resume" and architecture_path.is_file():
++        if _read(architecture_path) != architecture_record:
++            raise RuntimeError("Loaded model architecture or trainable parameter inventory changed")
++    else:
++        _atomic_json(architecture_path, architecture_record)
++    optimizer = torch.optim.AdamW(model.parameters(), lr=config["learning_rate"], weight_decay=config["weight_decay"])
++    config_hash = _sha256(run_dir / "config.json")
++    checkpoint_metadata = {"run_uuid": run_dir.name, "mapping_version": config["mapping_version"],
++                           "dataset_manifest_sha256": config["dataset_manifest_sha256"],
++                           "base_weights_sha256": config["base_weights_sha256"], "config_sha256": config_hash}
++    start_epoch = 0
++    if mode == "resume":
++        pointer = _read(run_dir / "last_checkpoint.json")
++        checkpoint_file = Path(pointer.get("file", ""))
++        if (checkpoint_file.is_absolute() or ".." in checkpoint_file.parts
++                or not re.fullmatch(r"checkpoint_epoch_[0-9]{6}\.pt", checkpoint_file.name)):
++            raise RuntimeError("Checkpoint path escapes the bundle")
++        sidecar_path = run_dir / f"{checkpoint_file.name}.sha256.json"
++        checkpoint_path = run_dir / checkpoint_file
++        for candidate_path in (checkpoint_path, sidecar_path):
++            cursor = run_dir
++            for component in candidate_path.relative_to(run_dir).parts:
++                cursor = cursor / component
++                if cursor.is_symlink():
++                    raise RuntimeError("Checkpoint path contains a symlink")
++        sidecar = _read(sidecar_path)
++        if any(sidecar.get(k) != v for k, v in checkpoint_metadata.items()):
++            raise RuntimeError("Checkpoint sidecar metadata does not match this run")
++        if (sidecar.get("sha256") != pointer.get("sha256") or not checkpoint_path.is_file()
++                or _sha256(checkpoint_path) != sidecar.get("sha256")):
++            raise RuntimeError("Checkpoint SHA256 verification failed")
++        if checkpoint_file.name != f"checkpoint_epoch_{int(sidecar.get('epoch', -1)):06d}.pt":
++            raise RuntimeError("Checkpoint filename does not match its epoch metadata")
++        saved = torch.load(checkpoint_path, map_location=device, weights_only=False)
++        if any(saved.get(key) != value for key, value in checkpoint_metadata.items()):
++            raise RuntimeError("Checkpoint run, dataset, base weights, or mapping does not match this bundle")
++        model.load_state_dict(saved["model_state_dict"], strict=True)
++        optimizer.load_state_dict(saved["optimizer_state_dict"])
++        start_epoch = int(saved["epoch"])
++        torch.set_rng_state(saved["torch_rng_state"])
++        random.setstate(saved["python_rng_state"])
++        np.random.set_state(saved["numpy_rng_state"])
++    else:
++        _checkpoint(torch, random, np, model, optimizer, 0, run_dir, checkpoint_metadata)
++    entries = manifest["entries"]
++    if not entries:
++        raise RuntimeError("Frozen candidate manifest contains no examples")
++    labels = torch.tensor([int(entry["class_index"]) for entry in entries], dtype=torch.long)
++    paths = []
++    for entry in entries:
++        path = (run_dir / entry["prepared_path"]).resolve()
++        if run_dir.resolve() not in path.parents or _sha256(path) != entry["prepared_sha256"]:
++            raise RuntimeError("Prepared tensor changed after the manifest was frozen")
++        paths.append(path)
++    criterion = nn.CrossEntropyLoss()
++    for epoch in range(start_epoch, config["epochs"]):
++        if _cancelled(run_dir):
++            _status(run_dir, status="cancelled", epoch=start_epoch, resumable=True,
++                    message="Cancelled at epoch boundary; last complete epoch checkpoint is preserved.")
++            return 0
++        model.train()
++        permutation = torch.randperm(len(paths)).tolist()
++        loss_sum = 0.0
++        examples = 0
++        cancelled = False
++        for offset in range(0, len(permutation), config["batch"]):
++            if _cancelled(run_dir):
++                cancelled = True
++                break
++            batch_indices = permutation[offset:offset + config["batch"]]
++            batch_np = np.stack([np.load(paths[i], allow_pickle=False) for i in batch_indices])
++            batch = torch.from_numpy(np.moveaxis(batch_np, -1, 1).copy()).to(dtype=torch.float32, device=device)
++            target = labels[batch_indices]
++            optimizer.zero_grad(set_to_none=True)
++            logits = model(batch)
++            if not isinstance(logits, torch.Tensor) or logits.shape != (len(batch_indices), 3):
++                raise RuntimeError(f"Classifier returned an unexpected output shape: {getattr(logits, 'shape', None)}")
++            loss = criterion(logits, target)
++            if not torch.isfinite(loss):
++                raise RuntimeError("Training produced a non-finite loss")
++            loss.backward()
++            optimizer.step()
++            loss_sum += float(loss.detach()) * len(batch_indices)
++            examples += len(batch_indices)
++        if cancelled or _cancelled(run_dir):
++            _status(run_dir, status="cancelled", epoch=start_epoch, resumable=True,
++                    message="Cancelled during epoch; the partial epoch will be retrained from the last complete checkpoint.")
++            return 0
++        completed_epoch = epoch + 1
++        _checkpoint(torch, random, np, model, optimizer, completed_epoch, run_dir, checkpoint_metadata)
++        average_loss = loss_sum / max(1, examples)
++        _status(run_dir, status="running", epoch=completed_epoch, epochs=config["epochs"],
++                train_loss=average_loss, resumable=True,
++                message=f"Completed epoch {completed_epoch}/{config['epochs']}; no validation metrics are produced.")
++        print(f"[{_utc()}] run_uuid={run_dir.name} epoch={completed_epoch} train_loss={average_loss:.8f}", flush=True)
++        start_epoch = completed_epoch
++    weights = {"architecture": "ultralytics-yolov8n-classification", "mapping_version": config["mapping_version"],
++               "classes": model.names, "state_dict": model.state_dict(), "input_size": 224,
++               "preprocessing": manifest["model_preprocess"], "nondeployable": True}
++    _atomic_torch_save(torch, weights, run_dir / "candidate.pt")
++    limitations = ("EXPERIMENTAL TRAIN-ONLY candidate. No validation or evaluation was performed.\n"
++                   "Training loss is not an accuracy measure. Candidate is not activated and is not a drop-in live model.\n")
++    (run_dir / "limitations.txt").write_text(limitations, encoding="utf-8")
++    checksums = _bundle_checksums(run_dir)
++    _atomic_json(run_dir / "bundle_checksums.json", checksums)
++    _status(run_dir, status="completed", epoch=config["epochs"], epochs=config["epochs"],
++            resumable=False, message="Candidate training completed; no validation/evaluation or activation was performed.",
++            candidate_file="candidate.pt", nondeployable=True,
++            bundle_checksums_sha256=_sha256(run_dir / "bundle_checksums.json"))
++    return 0
++
++
++def main(argv: list[str] | None = None) -> int:
++    args = list(sys.argv[1:] if argv is None else argv)
++    if len(args) != 3:
++        print("usage: python -m core.uniform_candidate_worker RUN_DIR LOCK_FD start|resume", file=sys.stderr)
++        return 2
++    run_dir = Path(args[0]).resolve()
++    try:
++        lock_fd, mode = int(args[1]), args[2]
++        if mode not in {"start", "resume"}:
++            raise ValueError("Invalid worker mode")
++        return train(run_dir, lock_fd, mode)
++    except BaseException as exc:
++        try:
++            state = _read(run_dir / "status.json")
++            checkpoint = run_dir / "last_checkpoint.json"
++            state.update(status="failed", message=f"{type(exc).__name__}: {exc}",
++                         resumable=checkpoint.is_file(), nondeployable=True, updated_at=_utc())
++            limitations = run_dir / "limitations.txt"
++            if not limitations.exists():
++                limitations.write_text("NONDEPLOYABLE candidate. Training failure; no evaluation or activation.\n", encoding="utf-8")
++            _atomic_json(run_dir / "status.json", state)
++        except Exception:
++            pass
++        traceback.print_exc()
++        return 1
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+--- /dev/null
++++ b/ui/uniform_candidate_panel.py
+@@ -0,0 +1,203 @@
++"""Shared candidate controls. Catalog reads, snapshots and job operations stay off Tk."""
++from pathlib import Path
++import customtkinter as ctk
++
++from core.uniform_dataset import CATEGORIES
++from ui.background_task import BackgroundTask
++from ui.scrolling import ScrollableFrame
++from ui.components import COLOR_BG, COLOR_ACCENT, COLOR_TEXT_MUTED, heading_font
++
++TRAIN_ACTION = 'Train candidate with approved datasets'
++ACTIVE_STATES = {'preparing', 'running', 'cancel_requested'}
++
++
++def _job_status(service, run_id):
++    return {**service.status(run_id), 'training_slot_busy': service.is_busy()}
++
++
++class CandidateTrainingWindow(ctk.CTkToplevel):
++    def __init__(self, master, service, candidates_root, *, training_busy=lambda: False):
++        super().__init__(master)
++        self.title(TRAIN_ACTION)
++        self.geometry('940x780')
++        self.minsize(820, 500)
++        self.transient(master.winfo_toplevel())
++        self.service, self.candidates_root = service, Path(candidates_root)
++        self.training_busy = training_busy
++        self.task = BackgroundTask(self)
++        self.summary = {}
++        self.current = {}
++        self.run_id = None
++        self.selected_run_id = None
++        self._poll = None
++        self._closed = False
++        self.protocol('WM_DELETE_WINDOW', self.destroy)
++        self.bind('<Escape>', lambda e: self.destroy())
++        body = ScrollableFrame(self, fg_color=COLOR_BG)
++        body.pack(fill='both', expand=True)
++        ctk.CTkLabel(body, text=TRAIN_ACTION, font=heading_font()).pack(anchor='w', padx=14, pady=10)
++        self.coverage = ctk.CTkLabel(body, text='Reading approved dataset…', justify='left', anchor='w', wraplength=850)
++        self.coverage.pack(fill='x', padx=14, pady=6)
++        self.readiness = ctk.CTkLabel(body, text='', justify='left', anchor='w', wraplength=850)
++        self.readiness.pack(fill='x', padx=14, pady=6)
++        ctk.CTkLabel(body, text=(
++            'Only reviewed crops in the three garment categories are included. Unresolved quality or association warnings are excluded. '
++            'Unable to assess is an uncertainty outcome, not a clothing class.\n'
++            'Ten eligible examples per class is a software minimum for an experiment, not evidence of accuracy. '
++            'Unknown provenance stays together. A train-only experiment has no independent evaluation.\n'
++            'Candidates use the local YOLOv8n classifier with a versioned three-class head and live-compatible 224 px letterboxing. '
++            'No automatic mirroring, architecture downloads, or active-model replacement.'),
++            justify='left', anchor='w', wraplength=850, text_color=COLOR_TEXT_MUTED).pack(fill='x', padx=14, pady=8)
++        config = ctk.CTkFrame(body, fg_color='transparent')
++        config.pack(fill='x', padx=14, pady=6)
++        self.options = {}
++        for name, title, values, default in (
++            ('epochs', 'Epochs', ['1', '2', '5', '10', '20', '40'], '5'),
++            ('batch', 'Batch size', ['2', '4', '8', '16'], '4'),
++            ('threads', 'CPU threads', ['1', '2', '3', '4'], '2')):
++            ctk.CTkLabel(config, text=title).pack(side='left', padx=(0, 6))
++            menu = ctk.CTkOptionMenu(config, values=values, width=95)
++            menu.set(default)
++            menu.pack(side='left', padx=(0, 16))
++            self.options[name] = menu
++        ctk.CTkLabel(body, text=(
++            'CPU training can slow live monitoring. Pause monitoring before training if possible. '
++            'Camera ownership is unchanged. Another Training job must finish first.\n'
++            'Closing this window does not stop the job. Use Cancel; reopen here to recover its status. '
++            'Resume continues from the last complete epoch with the frozen dataset and original configuration.'),
++            justify='left', anchor='w', wraplength=850).pack(fill='x', padx=14, pady=8)
++        self.ack = ctk.CTkCheckBox(body, text='I understand training can compete with live monitoring', command=self._buttons)
++        self.ack.pack(anchor='w', padx=14, pady=6)
++        actions = ctk.CTkFrame(body, fg_color='transparent')
++        actions.pack(fill='x', padx=10, pady=8)
++        self.start_button = ctk.CTkButton(actions, text=TRAIN_ACTION, width=310, state='disabled', command=self.start)
++        self.start_button.pack(side='left', padx=4)
++        self.cancel_button = ctk.CTkButton(actions, text='Cancel', width=90, state='disabled', command=self.cancel)
++        self.cancel_button.pack(side='left', padx=4)
++        self.resume_button = ctk.CTkButton(actions, text='Resume', width=90, state='disabled', command=self.resume)
++        self.resume_button.pack(side='left', padx=4)
++        self.refresh_button = ctk.CTkButton(actions, text='Refresh', width=90, command=self.refresh)
++        self.refresh_button.pack(side='left', padx=4)
++        self.run_picker = ctk.CTkOptionMenu(body, values=['Latest candidate'], command=self.select_run)
++        self.run_picker.pack(fill='x', padx=14, pady=8)
++        self.progress = ctk.CTkProgressBar(body, progress_color=COLOR_ACCENT)
++        self.progress.set(0)
++        self.progress.pack(fill='x', padx=14, pady=8)
++        self.message = ctk.CTkLabel(body, text='Reading job status…', justify='left', anchor='w', wraplength=850)
++        self.message.pack(fill='x', padx=14, pady=8)
++        self.artifact = ctk.CTkLabel(body, text='', justify='left', anchor='w', wraplength=850, text_color=COLOR_TEXT_MUTED)
++        self.artifact.pack(fill='x', padx=14, pady=8)
++        ctk.CTkLabel(body, text='Evaluation and activation belong to later stages. No accuracy or deployment eligibility is asserted here.',
++                     justify='left', anchor='w', wraplength=850).pack(fill='x', padx=14, pady=8)
++        self.refresh()
++
++    def _buttons(self):
++        active = self.current.get('status') in ACTIVE_STATES
++        available = not self.task.busy and not self.training_busy() and not self.current.get('training_slot_busy')
++        self.start_button.configure(state='normal' if available and not active and self.summary.get('eligible') and self.ack.get() else 'disabled')
++        self.cancel_button.configure(state='normal' if active and not self.task.busy and self.current.get('status') != 'cancel_requested' else 'disabled')
++        self.resume_button.configure(state='normal' if available and not active and self.current.get('resumable') and self.ack.get() else 'disabled')
++        self.refresh_button.configure(state='disabled' if self.task.busy else 'normal')
++        self.run_picker.configure(state='disabled' if self.task.busy else 'normal')
++        for menu in self.options.values():
++            menu.configure(state='disabled' if active or self.task.busy else 'normal')
++
++    def _schedule(self):
++        if self._poll is not None:
++            self.after_cancel(self._poll)
++        self._poll = self.after(1500, self._tick)
++
++    def _tick(self):
++        self._poll = None
++        if not self._closed:
++            if self.task.busy:
++                self._schedule()
++            else:
++                service, summary, run_id = self.service, self.summary, self.selected_run_id
++                self.task.run(lambda: (summary, _job_status(service, run_id)), self._loaded, self._failure)
++
++    def _failure(self, error):
++        self.message.configure(text=str(error))
++        self._buttons()
++        self._schedule()
++
++    def refresh(self):
++        if self.task.busy:
++            self._schedule()
++            return
++        service, run_id = self.service, self.selected_run_id
++        # A fresh catalog summary is required each time; approvals can change elsewhere.
++        self.task.run(lambda: (service.summary(), _job_status(service, run_id), service.list_runs()), self._loaded, self._failure)
++        self._buttons()
++
++    def _loaded(self, result):
++        self.summary, current = result[:2]
++        if len(result) > 2:
++            choices = ['Latest candidate'] + [f"{row['run_id']} • {row['status']}" for row in result[2]]
++            self.run_picker.configure(values=choices)
++            if self.selected_run_id:
++                choice = next((c for c in choices if c.startswith(self.selected_run_id)), 'Latest candidate')
++                self.run_picker.set(choice)
++        self.current = current or {}
++        self.run_id = self.current.get('run_id')
++        lines = []
++        for category in ('campus_uniform', 'organizational_shirt', 'other_clothing'):
++            groups = self.summary.get('groups_by_category', {}).get(category, {})
++            lines.append(f"{CATEGORIES[category]}: {self.summary.get('included_by_category', {}).get(category, 0)} included • "
++                         f"{groups.get('known', 0)} known capture groups • {groups.get('unknown', 0)} unknown-provenance group(s)")
++        lines.append(f"Pending: {self.summary.get('pending', 0)} • Excluded: {self.summary.get('excluded', 0)} • "
++                     f"Approved but quality/association blocked: {self.summary.get('quality_blocked', 0)}")
++        self.coverage.configure(text='Current dataset eligibility (Refresh after review):\n' + '\n'.join(lines))
++        reasons = self.summary.get('reasons', [])
++        self.readiness.configure(text=('Eligible for experimental training.' if self.summary.get('eligible') else 'Training blocked.')
++                                 + ('\n' + '\n'.join(reasons) if reasons else ''))
++        state = self.current.get('status', 'idle')
++        epoch, epochs = self.current.get('epoch', 0), self.current.get('epochs', 0)
++        self.progress.set(min(1, max(0, epoch / epochs)) if epochs else 0)
++        self.message.configure(text=f"{state.replace('_', ' ').capitalize()} • epoch {epoch}/{epochs}\n" + self.current.get('message', 'No candidate job yet.'))
++        self.artifact.configure(text=('Candidate bundle: ' + str(self.candidates_root / self.run_id) + '\nLogs: train.log • Frozen manifest, mapping, configuration and recovery checkpoint are stored in this bundle.') if self.run_id else '')
++        if self.current.get('training_slot_busy') and state not in ACTIVE_STATES:
++            self.message.configure(text='The training slot is occupied. Starting or resuming is available after it is released.')
++        if self.training_busy():
++            self.message.configure(text='Another Training operation is running. Finish it before starting or resuming a candidate.')
++        self._buttons()
++        self._schedule()
++
++    def select_run(self, value):
++        self.selected_run_id = None if value == 'Latest candidate' else value.split(' • ')[0]
++        self.refresh()
++
++    def _operate(self, operation, message):
++        if self.task.busy:
++            return
++        self.message.configure(text=message)
++        self.task.run(operation, lambda _: self.refresh(), self._failure)
++        self._buttons()
++
++    def start(self):
++        if self.task.busy or self.training_busy() or not self.summary.get('eligible') or not self.ack.get():
++            return
++        config = {name: int(menu.get()) for name, menu in self.options.items()}
++        config.update(min_per_class=10, synthetic_smoke=False)
++        service = self.service
++        self.selected_run_id = None
++        self.run_picker.set('Latest candidate')
++        self._operate(lambda: service.start(config), 'Freezing approved dataset and preparing candidate…')
++
++    def cancel(self):
++        if self.run_id and self.current.get('status') in ACTIVE_STATES:
++            service, run_id = self.service, self.run_id
++            self._operate(lambda: service.cancel(run_id), 'Requesting cancellation; waiting for a safe checkpoint…')
++
++    def resume(self):
++        if self.task.busy or self.training_busy() or not self.current.get('resumable') or not self.ack.get():
++            return
++        service, run_id = self.service, self.run_id
++        self._operate(lambda: service.resume(run_id), 'Validating frozen bundle and recovery checkpoint…')
++
++    def destroy(self):
++        self._closed = True
++        if self._poll is not None:
++            self.after_cancel(self._poll)
++            self._poll = None
++        super().destroy()
+--- /dev/null
++++ b/tests/test_uniform_candidate.py
+@@ -0,0 +1,356 @@
++"""Disposable safety and integrity checks for isolated uniform candidates."""
++from __future__ import annotations
++
++import hashlib
++import json
++import os
++import subprocess
++import sys
++import tempfile
++import unittest
++import random
++import threading
++import time
++from unittest.mock import patch
++from pathlib import Path
++
++import cv2
++import numpy as np
++from PIL import Image
++
++from core.uniform_candidate import (
++    BLOCKING_FLAGS, CandidateService, _TrainingLock, candidate_summary,
++)
++from core.uniform_dataset import CATEGORIES, UniformDataset
++from core.trainer import _letterbox
++
++
++class CandidateSummaryTests(unittest.TestCase):
++    def record(self, category, status="approved", *, flags=None, crop=(0, 0, 100, 100), group=None):
++        return {"category": category, "status": status, "flags": flags or [],
++                "crop": list(crop), "width": 100, "height": 100,
++                "capture_group": group, "capture_groups": [group] if group else [],
++                "has_unknown_provenance": not bool(group)}
++
++    def test_only_clean_approved_valid_crops_count_and_unknown_is_shared_group(self):
++        records = [self.record("campus_uniform"), self.record("campus_uniform", group="camera-session")]
++        records += [self.record("organizational_shirt") for _ in range(2)]
++        records += [self.record("other_clothing") for _ in range(2)]
++        records += [self.record("campus_uniform", flags=["possible_blur"]),
++                    self.record("campus_uniform", crop=(-1, 0, 99, 99)),
++                    self.record("campus_uniform", "pending_review"),
++                    self.record("campus_uniform", "excluded")]
++        result = candidate_summary({"records": records}, min_per_class=2)
++        self.assertEqual(result["included_by_category"], {
++            "campus_uniform": 2, "organizational_shirt": 2, "other_clothing": 2})
++        self.assertEqual(result["approved_by_category"]["campus_uniform"], 4)
++        self.assertEqual(result["groups_by_category"]["campus_uniform"], {"known": 1, "unknown": 1})
++        self.assertEqual(result["pending"], 1)
++        self.assertEqual(result["excluded"], 1)
++        self.assertEqual(result["quality_blocked"], 2)
++        self.assertTrue(result["eligible"])
++        self.assertFalse(result.get("evaluation_ready", False))
++
++    def test_config_bounds_and_unknown_keys(self):
++        with self.assertRaises(ValueError):
++            CandidateService.validate_config({"epochs": 41})
++        with self.assertRaises(ValueError):
++            CandidateService.validate_config({"synthetic_smoke": True, "min_per_class": 1})
++        with self.assertRaises(ValueError):
++            CandidateService.validate_config({"publish": True})
++
++    def test_missing_approved_categories_are_not_eligible(self):
++        summary = candidate_summary({"records": [self.record("campus_uniform") for _ in range(10)]})
++        self.assertFalse(summary["eligible"])
++        self.assertFalse(summary["experimental_training_eligible"])
++        self.assertFalse(summary["evaluation_ready"])
++        self.assertTrue(any("organizational_shirt" in reason for reason in summary["readiness_reasons"]))
++
++
++class CandidateFreezeTests(unittest.TestCase):
++    def add_approved(self, ds: UniformDataset, category: str, seed: int, group: str):
++        rng = np.random.default_rng(seed)
++        arr = rng.integers(0, 256, size=(72, 91, 3), dtype=np.uint8)
++        path = ds.root / f"fixture-{seed}.png"
++        Image.fromarray(arr).save(path)
++        image_id = ds.import_paths([path], category, capture_group=group)[0]
++        record = ds.snapshot()["records"]
++        row = next(item for item in record if item["image_id"] == image_id)
++        # These are synthetic fixtures, explicitly labelled only in this disposable catalog.
++        cat = ds._load()
++        target = next(item for item in cat["records"] if item["image_id"] == image_id)
++        target["sources"][0]["kind"] = "synthetic_smoke"
++        ds._save(cat)
++        ds.review(image_id, category=category, crop=[0, 0, row["width"], row["height"]],
++                  status="approved", flags=[])
++        return image_id, arr
++
++    def make_fixture(self, root: Path):
++        dataset = UniformDataset(root / "dataset")
++        examples = {}
++        for class_index, category in enumerate(("campus_uniform", "organizational_shirt", "other_clothing")):
++            examples[category] = [self.add_approved(dataset, category, 10 * class_index + i + 1, f"camera-{class_index}")
++                                  for i in range(2)]
++        base = root / "local-yolov8n-cls.pt"
++        base.write_bytes(b"fixture-only local weights placeholder")
++        service = CandidateService(dataset, candidates_root=root / "candidates", base_weights=base)
++        return dataset, service, examples
++
++    def test_frozen_data_matches_live_letterbox_and_checksums(self):
++        with tempfile.TemporaryDirectory() as temporary:
++            root = Path(temporary)
++            dataset, service, examples = self.make_fixture(root)
++            summary = service.summary(min_per_class=2)
++            self.assertTrue(summary["eligible"])
++            run_id = "a" * 32
++            run_dir = service._run_dir(run_id)
++            run_dir.mkdir()
++            config = service.validate_config({"synthetic_smoke": True, "min_per_class": 2, "epochs": 1})
++            frozen = service._freeze(run_dir, config)
++            self.assertEqual(len(json.loads((run_dir / "dataset_manifest.json").read_text())["entries"]), 6)
++            service._verify_bundle(run_dir)
++            manifest = json.loads((run_dir / "dataset_manifest.json").read_text())
++            self.assertEqual(manifest["eligibility_snapshot"]["included_by_category"], {
++                "campus_uniform": 2, "organizational_shirt": 2, "other_clothing": 2})
++            import numpy as np
++            entry = manifest["entries"][0]
++            row = next(r for r in dataset.snapshot()["records"] if r["image_id"] == entry["image_id"])
++            raster = np.asarray(dataset.image(entry["image_id"]), dtype=np.uint8)
++            x1, y1, x2, y2 = row["crop"]
++            crop_bgr = cv2.cvtColor(raster[y1:y2, x1:x2], cv2.COLOR_RGB2BGR)
++            expected = cv2.cvtColor(_letterbox(crop_bgr, 224), cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
++            actual = np.load(run_dir / entry["prepared_path"], allow_pickle=False)
++            np.testing.assert_array_equal(actual, expected)
++            self.assertEqual(entry["split"], "train")
++            self.assertTrue(all(e["unknown_provenance"] is False for e in manifest["entries"]))
++            self.assertTrue(frozen["config"]["nondeployable"])
++
++    def test_invalid_approved_crop_is_excluded_consistently_with_summary(self):
++        with tempfile.TemporaryDirectory() as temporary:
++            dataset, service, _ = self.make_fixture(Path(temporary))
++            image_id, _ = self.add_approved(dataset, 'campus_uniform', 999, 'extra-session')
++            catalog = dataset._load()
++            next(r for r in catalog['records'] if r['image_id'] == image_id)['crop'] = [-1, 0, 10, 10]
++            dataset._save(catalog)
++            self.assertEqual(service.summary(min_per_class=2)['quality_blocked'], 1)
++            run_dir = service._run_dir('e' * 32)
++            run_dir.mkdir()
++            service._freeze(run_dir, service.validate_config({'synthetic_smoke': True, 'min_per_class': 2}))
++            manifest = json.loads((run_dir / 'dataset_manifest.json').read_text())
++            self.assertEqual(len(manifest['entries']), 6)
++            self.assertNotIn(image_id, [r['image_id'] for r in manifest['entries']])
++
++    def test_mutated_prepared_tensor_and_manifest_are_rejected(self):
++        with tempfile.TemporaryDirectory() as temporary:
++            root = Path(temporary)
++            _, service, _ = self.make_fixture(root)
++            run_dir = service._run_dir("b" * 32)
++            run_dir.mkdir()
++            service._freeze(run_dir, service.validate_config({"synthetic_smoke": True, "min_per_class": 2}))
++            entry = json.loads((run_dir / "dataset_manifest.json").read_text())["entries"][0]
++            with (run_dir / entry["prepared_path"]).open("ab") as stream:
++                stream.write(b"tamper")
++            with self.assertRaisesRegex(ValueError, "hash mismatch"):
++                service._verify_bundle(run_dir)
++
++    def test_symlink_original_is_rejected_before_resolution(self):
++        with tempfile.TemporaryDirectory() as temporary:
++            root = Path(temporary)
++            ds, service, _ = self.make_fixture(root)
++            snap = ds.snapshot()
++            row = snap["records"][0]
++            original = ds.root / row["original_path"]
++            target = original.with_suffix(".hidden")
++            original.rename(target)
++            original.symlink_to(target.name)
++            run_dir = service._run_dir("c" * 32)
++            run_dir.mkdir()
++            with self.assertRaisesRegex(ValueError, "symlink"):
++                service._freeze(run_dir, service.validate_config({"synthetic_smoke": True, "min_per_class": 2}))
++
++    def test_checkpoint_pointer_is_the_recoverable_marker(self):
++        with tempfile.TemporaryDirectory() as temporary:
++            run_dir = Path(temporary)
++            (run_dir / "last_checkpoint.json").write_text("{}")
++            self.assertTrue(CandidateService._has_checkpoint(run_dir))
++
++    def test_real_child_inherited_flock_blocks_competitor_and_releases_on_exit(self):
++        with tempfile.TemporaryDirectory() as temporary:
++            root = Path(temporary)
++            owner = _TrainingLock(root)
++            self.assertTrue(owner.acquire())
++            fd = owner.file.fileno()
++            child = subprocess.Popen([sys.executable, "-c",
++                                      "import os,sys,time; os.fstat(int(sys.argv[1])); time.sleep(.35)", str(fd)],
++                                     pass_fds=(fd,), stdin=subprocess.DEVNULL)
++            owner.handoff()
++            self.assertFalse(_TrainingLock(root).acquire())
++            self.assertEqual(child.wait(timeout=3), 0)
++            contender = _TrainingLock(root)
++            self.assertTrue(contender.acquire())
++            contender.release()
++
++    def test_cancel_during_prepare_writes_only_flag_and_finishes(self):
++        with tempfile.TemporaryDirectory() as temporary:
++            root = Path(temporary)
++            _, service, _ = self.make_fixture(root)
++            entered, proceed = threading.Event(), threading.Event()
++            def freeze(run_dir, config):
++                entered.set()
++                self.assertTrue(proceed.wait(3))
++                return {"cancelled_during_freeze": True}
++            service._freeze = freeze
++            run_id = service.start({"epochs": 1, "batch": 2, "threads": 1,
++                                    "min_per_class": 2, "synthetic_smoke": True})
++            self.assertTrue(entered.wait(3))
++            status_path = Path(service.candidates_root) / run_id / "status.json"
++            before = json.loads(status_path.read_text())
++            service.cancel(run_id)
++            self.assertEqual(json.loads(status_path.read_text()), before)
++            proceed.set()
++            deadline = time.monotonic() + 3
++            while service.status(run_id)["status"] != "cancelled" and time.monotonic() < deadline:
++                time.sleep(0.01)
++            self.assertEqual(service.status(run_id)["status"], "cancelled")
++
++    def test_stale_status_recovers_and_latest_uses_microsecond_timestamp(self):
++        with tempfile.TemporaryDirectory() as temporary:
++            root = Path(temporary)
++            service = CandidateService(candidates_root=root / "candidates", dataset_root=root / "dataset")
++            older, newer = "1" * 32, "2" * 32
++            for run_id, started in ((older, "2026-11-01T00:00:00.000001Z"),
++                                    (newer, "2026-11-01T00:00:00.000002Z")):
++                run_dir = Path(service.candidates_root) / run_id
++                run_dir.mkdir(mode=0o700)
++                (run_dir / "status.json").write_text(json.dumps({"run_id": run_id, "status": "running",
++                    "epoch": 0, "epochs": 3, "started_at": started, "resumable": False}))
++            self.assertEqual(service.status()["run_id"], newer)
++            recovered = service.status(older)
++            self.assertEqual(recovered["status"], "interrupted")
++            self.assertFalse(recovered["resumable"])
++
++    def test_symlink_run_directories_are_not_scanned(self):
++        with tempfile.TemporaryDirectory() as temporary:
++            root = Path(temporary)
++            external = root / "external"
++            external.mkdir()
++            (external / "status.json").write_text(json.dumps({"run_id": "3" * 32, "status": "running"}))
++            candidates = root / "candidates"
++            candidates.mkdir()
++            (candidates / ("3" * 32)).symlink_to(external, target_is_directory=True)
++            service = CandidateService(candidates_root=candidates, dataset_root=root / "dataset")
++            self.assertEqual(service.status()["status"], "idle")
++            self.assertEqual(json.loads((external / "status.json").read_text())["status"], "running")
++
++    def test_class_map_mutation_and_resume_checkpoint_tamper_are_rejected(self):
++        with tempfile.TemporaryDirectory() as temporary:
++            root = Path(temporary)
++            _, service, _ = self.make_fixture(root)
++            run_id = "e" * 32
++            run_dir = service._run_dir(run_id)
++            run_dir.mkdir(mode=0o700)
++            service._freeze(run_dir, service.validate_config({"synthetic_smoke": True, "min_per_class": 2}))
++            class_map_path = run_dir / "class_map.json"
++            saved_map = class_map_path.read_bytes()
++            class_map_path.write_text(json.dumps({"mapping_version": "wrong", "classes": []}))
++            with self.assertRaisesRegex(ValueError, "Class mapping"):
++                service._verify_bundle(run_dir)
++            class_map_path.write_bytes(saved_map)
++
++            import numpy as np
++            import torch
++            from core.uniform_candidate_worker import _checkpoint
++            config = json.loads((run_dir / "config.json").read_text())
++            metadata = {"run_uuid": run_id, "mapping_version": config["mapping_version"],
++                        "dataset_manifest_sha256": config["dataset_manifest_sha256"],
++                        "base_weights_sha256": config["base_weights_sha256"],
++                        "config_sha256": hashlib.sha256((run_dir / "config.json").read_bytes()).hexdigest()}
++            model = torch.nn.Linear(4, 3)
++            _checkpoint(torch, random, np, model, torch.optim.AdamW(model.parameters()), 1, run_dir, metadata)
++            self.assertEqual(service._checkpoint_epoch(run_dir), 1)
++            with (run_dir / "checkpoint_epoch_000001.pt").open("ab") as stream:
++                stream.write(b"tampered")
++            with self.assertRaisesRegex(ValueError, "SHA256"):
++                service._checkpoint_epoch(run_dir)
++            (run_dir / "status.json").write_text(json.dumps({"run_id": run_id, "status": "cancelled"}))
++            with self.assertRaisesRegex(ValueError, "SHA256"):
++                service.resume(run_id)
++
++    def test_start_hands_lock_to_child_and_reaps_without_a_real_worker(self):
++        import time
++        from unittest.mock import MagicMock
++        with tempfile.TemporaryDirectory() as temporary:
++            root = Path(temporary)
++            dataset, service, _ = self.make_fixture(root)
++            fake = MagicMock()
++            fake.pid = 24680
++            fake.wait.return_value = 0
++            fake.poll.return_value = 0
++            with patch("core.uniform_candidate.subprocess.Popen", return_value=fake) as popen:
++                run_id = service.start({"epochs": 1, "batch": 2, "threads": 1,
++                                        "min_per_class": 2, "synthetic_smoke": True})
++                self.assertEqual(len(run_id), 32)
++                self.assertEqual((Path(service.candidates_root) / run_id).stat().st_mode & 0o777, 0o700)
++                deadline = time.monotonic() + 5
++                while not popen.called and time.monotonic() < deadline:
++                    time.sleep(0.01)
++                if not popen.called:
++                    self.fail(f"Candidate preparation did not launch worker: {service.status(run_id)}")
++                popen.assert_called_once()
++                kwargs = popen.call_args.kwargs
++                self.assertTrue(kwargs["pass_fds"])
++                self.assertIn(service.status(run_id)["status"], {"running", "interrupted"})
++                deadline = time.monotonic() + 2
++                while service.is_busy() and time.monotonic() < deadline:
++                    time.sleep(0.01)
++                self.assertFalse(service.is_busy())
++                self.assertIn(service.status(run_id)["status"], {"running", "interrupted"})
++
++    def test_lock_probe_and_release(self):
++        with tempfile.TemporaryDirectory() as temporary:
++            root = Path(temporary)
++            first = _TrainingLock(root)
++            self.assertTrue(first.acquire())
++            self.assertFalse(_TrainingLock(root).acquire())
++            first.release()
++            third = _TrainingLock(root)
++            self.assertTrue(third.acquire())
++            third.release()
++
++    def test_worker_cpu_cross_entropy_step_is_finite_and_updates_weights(self):
++        import torch
++        import torch.nn as nn
++        torch.set_num_threads(1)
++        model = nn.Sequential(nn.Flatten(), nn.Linear(3 * 8 * 8, 3)).cpu()
++        optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
++        batch = torch.rand(2, 3, 8, 8)
++        labels = torch.tensor([0, 2], dtype=torch.long)
++        before = model[-1].weight.detach().clone()
++        loss = nn.CrossEntropyLoss()(model(batch), labels)
++        self.assertTrue(torch.isfinite(loss).item())
++        optimizer.zero_grad(set_to_none=True)
++        loss.backward()
++        optimizer.step()
++        self.assertFalse(torch.equal(before, model[-1].weight.detach()))
++
++    def test_worker_checkpoint_sidecar_and_pointer_are_consistent(self):
++        import numpy as np
++        import torch
++        from core.uniform_candidate_worker import _checkpoint
++        with tempfile.TemporaryDirectory() as temporary:
++            run_dir = Path(temporary)
++            model = torch.nn.Linear(4, 3)
++            optimizer = torch.optim.AdamW(model.parameters())
++            metadata = {"run_uuid": "d" * 32, "mapping_version": "uniform-garments-v1",
++                        "dataset_manifest_sha256": "a" * 64, "base_weights_sha256": "b" * 64,
++                        "config_sha256": "c" * 64}
++            _checkpoint(torch, random, np, model, optimizer, 1, run_dir, metadata)
++            pointer = json.loads((run_dir / "last_checkpoint.json").read_text())
++            sidecar = json.loads((run_dir / f"{pointer['file']}.sha256.json").read_text())
++            self.assertEqual(pointer["sha256"], sidecar["sha256"])
++            self.assertEqual(pointer["epoch"], 1)
++            self.assertEqual(hashlib.sha256((run_dir / pointer["file"]).read_bytes()).hexdigest(), pointer["sha256"])
++
++
++if __name__ == "__main__":
++    unittest.main()
+--- /dev/null
++++ b/tests/test_uniform_candidate_ui.py
+@@ -0,0 +1,135 @@
++"""Native candidate workflow with disposable state; no model or camera jobs."""
++import tempfile
++import threading
++import time
++from pathlib import Path
++import unittest
++from unittest.mock import Mock
++
++from ui.uniform_candidate_panel import CandidateTrainingWindow
++from ui.window_lifecycle import WorkspaceWindow
++
++
++class CandidateUITests(unittest.TestCase):
++    def setUp(self):
++        self.tmp = tempfile.TemporaryDirectory()
++        self.root = WorkspaceWindow()
++        self.errors = []
++        self.root.report_callback_exception = lambda *a: self.errors.append(a)
++        self.service = Mock()
++        self.service.summary.return_value = dict(included_by_category={'campus_uniform': 0,
++            'organizational_shirt': 0, 'other_clothing': 0}, groups_by_category={}, pending=963,
++            excluded=0, quality_blocked=0, eligible=False, reasons=['Campus Uniform needs reviewed examples.'])
++        self.service.status.return_value = dict(run_id=None, status='idle', epoch=0, epochs=0,
++                                                message='No candidate job exists.', resumable=False)
++        self.service.is_busy.return_value = False
++        self.service.list_runs.return_value = []
++        self.busy = False
++        self.view = CandidateTrainingWindow(self.root, self.service, self.tmp.name,
++                                             training_busy=lambda: self.busy)
++        self.wait()
++
++    def tearDown(self):
++        self.root.destroy()
++        self.tmp.cleanup()
++        self.assertEqual(self.errors, [])
++
++    def pump(self, ms=40):
++        self.root.after(ms, self.root.quit)
++        self.root.mainloop()
++
++    def wait(self):
++        end = time.monotonic() + 5
++        while self.view.task.busy and time.monotonic() < end:
++            self.pump()
++        self.assertFalse(self.view.task.busy)
++
++    def eligible(self):
++        self.service.summary.return_value.update(eligible=True, reasons=[],
++            included_by_category={c:10 for c in ('campus_uniform','organizational_shirt','other_clothing')})
++        self.view.refresh()
++        self.wait()
++        self.view.ack.select()
++        self.view._buttons()
++
++    def test_missing_approvals_block_and_show_counts(self):
++        self.assertIn('Pending: 963', self.view.coverage.cget('text'))
++        self.assertIn('Training blocked', self.view.readiness.cget('text'))
++        self.view.ack.select()
++        self.view.start()
++        self.service.start.assert_not_called()
++        self.assertEqual(self.view.start_button.cget('state'), 'disabled')
++
++    def test_start_off_tk_with_resource_ack_and_bounded_config(self):
++        main = threading.get_ident()
++        threads = []
++        self.service.start.side_effect = lambda config: threads.append(threading.get_ident()) or 'a'*32
++        self.eligible()
++        self.view.ack.deselect()
++        self.view.start()
++        self.service.start.assert_not_called()
++        self.view.ack.select()
++        self.view.start()
++        self.wait()
++        self.service.start.assert_called_once_with(dict(epochs=5,batch=4,threads=2,min_per_class=10,synthetic_smoke=False))
++        self.assertNotIn(main, threads)
++
++    def test_other_training_blocks_start_and_resume(self):
++        self.eligible()
++        self.busy = True
++        self.view.start()
++        self.view.current.update(resumable=True)
++        self.view.resume()
++        self.service.start.assert_not_called()
++        self.service.resume.assert_not_called()
++
++    def test_cancel_progress_and_recover_resume(self):
++        state = dict(run_id='a'*32,status='running',epoch=1,epochs=5,message='Epoch complete.',resumable=True)
++        self.service.status.return_value = state
++        self.view.refresh(); self.wait()
++        self.assertEqual(self.view.cancel_button.cget('state'), 'normal')
++        self.assertAlmostEqual(self.view.progress.get(), .2)
++        self.view.cancel(); self.wait()
++        self.service.cancel.assert_called_once_with('a'*32)
++        state.update(status='cancelled')
++        self.view.refresh(); self.wait()
++        self.view.ack.select()
++        self.view.resume(); self.wait()
++        self.service.resume.assert_called_once_with('a'*32)
++        self.assertIn(str(Path(self.tmp.name)/('a'*32)), self.view.artifact.cget('text'))
++
++    def test_terminal_status_waits_for_worker_lock_release(self):
++        self.eligible()
++        self.service.status.return_value = dict(run_id='a'*32,status='cancelled',epoch=1,epochs=5,resumable=True)
++        self.service.is_busy.return_value = True
++        self.view.refresh(); self.wait()
++        self.assertEqual(self.view.start_button.cget('state'), 'disabled')
++        self.assertEqual(self.view.resume_button.cget('state'), 'disabled')
++        self.service.is_busy.return_value = False
++        self.view.refresh(); self.wait()
++        self.assertEqual(self.view.resume_button.cget('state'), 'normal')
++
++    def test_recover_selected_older_candidate(self):
++        old = dict(run_id='b'*32,status='cancelled',epoch=1,epochs=5,message='Cancelled.',resumable=True)
++        self.service.list_runs.return_value = [old]
++        self.service.status.side_effect = lambda run_id=None: old if run_id else dict(run_id='a'*32,status='completed',epoch=5,epochs=5,resumable=False)
++        self.view.refresh(); self.wait()
++        self.view.select_run('b'*32 + ' • cancelled'); self.wait()
++        self.view.ack.select()
++        self.view.resume(); self.wait()
++        self.service.resume.assert_called_once_with('b'*32)
++
++    def test_failure_report_and_close_during_operation(self):
++        self.eligible()
++        self.service.start.side_effect = ValueError('Frozen input hash mismatch')
++        self.view.start(); self.wait()
++        self.assertIn('Frozen input hash mismatch', self.view.message.cget('text'))
++        gate = threading.Event()
++        done = threading.Event()
++        self.service.start.side_effect = lambda _: (gate.wait(2), done.set())
++        self.view.start()
++        self.view.destroy()
++        gate.set()
++        self.assertTrue(done.wait(2))
++        self.pump(100)
++        self.service.cancel.assert_not_called()
+--- /dev/null
++++ b/scripts/smoke_uniform_candidate.py
+@@ -0,0 +1,226 @@
++#!/usr/bin/env python3
++"""Opt-in disposable CPU smoke for the isolated uniform candidate service.
++
++Creates a retained run under data/uniform_candidate_smoke/<uuid>; trains only
++synthetic fixtures, requests cancellation after an epoch, resumes, verifies the
++bundle and confirms all Stage 1-audited artifacts retain their original hashes.
++Run only when explicitly authorized by the project lead.
++"""
++from __future__ import annotations
++
++import hashlib
++import json
++import os
++import time
++import uuid
++from pathlib import Path
++
++import numpy as np
++from PIL import Image
++
++from core.uniform_candidate import CandidateService
++from core.uniform_dataset import UniformDataset
++
++REPO = Path(__file__).resolve().parents[1]
++AUDIT = REPO / "output" / "uniform-stage1" / "final-audit.json"
++RESULTS = REPO / "output" / "uniform-stage2" / "smoke-results.json"
++
++
++def file_fingerprint(path: Path):
++    if not path.exists():
++        return None
++    digest = hashlib.sha256()
++    with path.open("rb") as stream:
++        while chunk := stream.read(1024 * 1024):
++            digest.update(chunk)
++    return digest.hexdigest()
++
++
++def persist(result: dict) -> None:
++    RESULTS.parent.mkdir(parents=True, exist_ok=True)
++    temp = RESULTS.with_suffix(".json.tmp")
++    temp.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
++    os.replace(temp, RESULTS)
++
++
++def verified_bundle(run_dir: Path) -> dict:
++    checksums = json.loads((run_dir / "bundle_checksums.json").read_text("utf-8"))
++    for relative, expected in checksums.items():
++        path = run_dir / relative
++        if not path.is_file() or file_fingerprint(path) != expected:
++            raise RuntimeError(f"Bundle checksum mismatch: {relative}")
++    pointer = json.loads((run_dir / "last_checkpoint.json").read_text("utf-8"))
++    checkpoint = run_dir / pointer["file"]
++    sidecar = json.loads((run_dir / f"{pointer['file']}.sha256.json").read_text("utf-8"))
++    if (file_fingerprint(checkpoint) != pointer["sha256"] or sidecar.get("sha256") != pointer["sha256"]
++            or sidecar.get("epoch") != pointer.get("epoch")):
++        raise RuntimeError("Final checkpoint pointer/sidecar checksum mismatch")
++    class_map = json.loads((run_dir / "class_map.json").read_text("utf-8"))
++    if class_map != {"mapping_version": "uniform-garments-v1", "classes": [
++            {"index": 0, "category": "campus_uniform"},
++            {"index": 1, "category": "organizational_shirt"},
++            {"index": 2, "category": "other_clothing"}]}:
++        raise RuntimeError("Candidate class map is incorrect")
++    architecture = json.loads((run_dir / "architecture.json").read_text("utf-8"))
++    if (architecture.get("scale") != "n" or architecture.get("yaml_file") != "yolov8n-cls.yaml"
++            or architecture.get("trainable_backbone_parameter_count", 0) <= 0
++            or architecture.get("trainable_head_parameter_count", 0) <= 0):
++        raise RuntimeError(f"Candidate architecture/trainable parameter check failed: {architecture}")
++    manifest = json.loads((run_dir / "dataset_manifest.json").read_text("utf-8"))
++    if manifest.get("model_preprocess") != {"version": "trainer-letterbox-rgb-0-1-v1", "size": 224,
++                                              "color": "RGB", "range": [0.0, 1.0], "augmentation": "none"}:
++        raise RuntimeError("Frozen candidate preprocessing record differs from expected letterbox RGB [0,1]")
++    if any(entry.get("split") != "train" for entry in manifest.get("entries", [])):
++        raise RuntimeError("Synthetic smoke bundle contains a non-train split")
++    config = json.loads((run_dir / "config.json").read_text("utf-8"))
++    if not config.get("nondeployable"):
++        raise RuntimeError("Smoke candidate is not marked nondeployable")
++    if not (run_dir / "candidate.pt").is_file() or not (run_dir / "limitations.txt").is_file():
++        raise RuntimeError("Candidate output or limitations record is missing")
++    return {"bundle_files_verified": len(checksums), "candidate_sha256": file_fingerprint(run_dir / "candidate.pt"),
++            "checkpoint_sha256": pointer["sha256"], "architecture": architecture,
++            "class_map": class_map, "preprocessing": manifest["model_preprocess"]}
++
++
++def main() -> int:
++    if not AUDIT.is_file():
++        raise FileNotFoundError(f"Stage 1 protected-artifact audit is missing: {AUDIT}")
++    audit = json.loads(AUDIT.read_text("utf-8"))
++    expected_hashes = audit.get("model_artifacts_sha256", {})
++    if len(expected_hashes) != 7:
++        raise RuntimeError("Expected seven audited protected artifact hashes")
++    before = {relative: file_fingerprint(REPO / relative) for relative in expected_hashes}
++    if before != expected_hashes:
++        raise RuntimeError("Protected model artifact fingerprints do not match Stage 1 audit before smoke")
++
++    smoke_root = REPO / "data" / "uniform_candidate_smoke" / uuid.uuid4().hex
++    smoke_root.mkdir(parents=True, mode=0o700)
++    os.chmod(smoke_root, 0o700)
++    result = {"run_id": None, "status": "preparing", "created_at": time.time(),
++              "smoke_root": str(smoke_root), "bundle": None, "stages": [],
++              "process_metadata": {}, "protected_artifact_sha256_before": before,
++              "protected_artifact_sha256_after": None, "failure": None}
++    persist(result)
++    service = None
++    run_id = None
++
++    def stage(name: str, **details):
++        result["stages"].append({"name": name, "at": time.time(), **details})
++        persist(result)
++
++    try:
++        dataset = UniformDataset(smoke_root / "stage1")
++        categories = ("campus_uniform", "organizational_shirt", "other_clothing")
++        for class_index, category in enumerate(categories):
++            for sample_index in range(2):
++                rng = np.random.default_rng(1000 + class_index * 10 + sample_index)
++                pixels = rng.integers(0, 256, size=(80, 96, 3), dtype=np.uint8)
++                fixture = smoke_root / f"fixture-{class_index}-{sample_index}.png"
++                Image.fromarray(pixels).save(fixture, format="PNG")
++                image_id = dataset.import_paths([fixture], category, capture_group=f"smoke-camera-{class_index}")[0]
++                catalog = dataset._load()
++                record = next(row for row in catalog["records"] if row["image_id"] == image_id)
++                record["sources"][0]["kind"] = "synthetic_smoke"
++                dataset._save(catalog)
++                dataset.review(image_id, category=category,
++                               crop=[0, 0, record["width"], record["height"]], status="approved", flags=[])
++        stage("synthetic_dataset_ready", records=6)
++
++        service = CandidateService(dataset, candidates_root=smoke_root / "candidates",
++                                   base_weights=REPO / "yolov8n-cls.pt")
++        summary = service.summary(min_per_class=2)
++        if not summary["eligible"]:
++            raise RuntimeError(f"Synthetic fixture did not pass eligibility: {summary['reasons']}")
++        run_id = service.start({"epochs": 10, "batch": 2, "threads": 1,
++                                "min_per_class": 2, "synthetic_smoke": True})
++        run_dir = Path(service.candidates_root) / run_id
++        result.update(run_id=run_id, bundle=str(run_dir), status="running")
++        persist(result)
++        deadline = time.monotonic() + 300
++        while time.monotonic() < deadline:
++            status = service.status(run_id)
++            result["process_metadata"] = {k: status.get(k) for k in ("process_id", "run_uuid", "started_at", "worker_started_at")}
++            result["last_status"] = status
++            persist(result)
++            if status.get("status") == "running" and status.get("epoch", 0) >= 1:
++                stage("first_epoch_complete", status=status)
++                service.cancel(run_id)
++                stage("cancel_requested", status=service.status(run_id))
++                break
++            if status.get("status") in {"failed", "completed", "cancelled"}:
++                raise RuntimeError(f"Unexpected first phase status: {status}")
++            time.sleep(0.01)
++        else:
++            raise TimeoutError("Candidate did not reach its first completed epoch")
++        while time.monotonic() < deadline:
++            status = service.status(run_id)
++            result["last_status"] = status
++            persist(result)
++            if status.get("status") == "cancelled":
++                stage("cancelled_at_checkpoint", status=status)
++                break
++            if status.get("status") in {"failed", "completed"}:
++                raise RuntimeError(f"Unexpected cancellation status: {status}")
++            time.sleep(0.01)
++        else:
++            raise TimeoutError("Worker did not honor cancellation")
++
++        # Terminal status is written before the child releases its OS lock.
++        while service.is_busy() and time.monotonic() < deadline:
++            time.sleep(0.05)
++        if service.is_busy():
++            raise TimeoutError("Cancelled worker did not release its training lock")
++
++        # Recreate the controller as a reopened UI/process would; the immutable
++        # bundle and persistent status/checkpoint must be sufficient to recover.
++        service = CandidateService(dataset, candidates_root=smoke_root / "candidates",
++                                  base_weights=REPO / "yolov8n-cls.pt")
++        service.resume(run_id)
++        stage("resumed", status=service.status(run_id))
++        while time.monotonic() < deadline:
++            status = service.status(run_id)
++            result["last_status"] = status
++            result["process_metadata"] = {k: status.get(k) for k in ("process_id", "run_uuid", "started_at", "worker_started_at")}
++            persist(result)
++            if status.get("status") == "completed":
++                break
++            if status.get("status") in {"failed", "cancelled"}:
++                raise RuntimeError(f"Unexpected resumed status: {status}")
++            time.sleep(0.01)
++        else:
++            raise TimeoutError("Resumed candidate did not finish")
++
++        service._verify_bundle(run_dir)
++        bundle_check = verified_bundle(run_dir)
++        after = {relative: file_fingerprint(REPO / relative) for relative in expected_hashes}
++        if before != after:
++            raise RuntimeError("A protected Stage 1-audited artifact changed during isolated smoke")
++        result.update(status="completed", verification=bundle_check,
++                      protected_artifact_sha256_after=after, finished_at=time.time())
++        stage("smoke_complete", result_status="completed")
++        print(json.dumps(result, indent=2, sort_keys=True))
++        return 0
++    except BaseException as exc:
++        result.update(status="failed", failure=f"{type(exc).__name__}: {exc}", finished_at=time.time())
++        if run_id and service is not None:
++            try:
++                current = service.status(run_id)
++                if current.get("status") in {"preparing", "running", "cancel_requested"}:
++                    service.cancel(run_id)
++                    deadline = time.monotonic() + 60
++                    while time.monotonic() < deadline:
++                        current = service.status(run_id)
++                        result["last_status"] = current
++                        if current.get("status") not in {"preparing", "running", "cancel_requested"}:
++                            break
++                        time.sleep(0.01)
++                    if current.get("status") in {"preparing", "running", "cancel_requested"}:
++                        result["cancel_cleanup_timeout"] = True
++            except Exception as cancel_error:
++                result["cancel_cleanup_error"] = f"{type(cancel_error).__name__}: {cancel_error}"
++        persist(result)
++        raise
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())

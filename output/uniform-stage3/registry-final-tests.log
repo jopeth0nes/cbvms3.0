@@ -1,0 +1,14 @@
+test_active_pointer_failure_recovers_as_aborted_and_never_partially_switches (tests.test_uniform_model_registry.RegistryFixture.test_active_pointer_failure_recovers_as_aborted_and_never_partially_switches) ... ok
+test_binding_preprocessing_support_and_synthetic_mismatches_are_denied (tests.test_uniform_model_registry.RegistryFixture.test_binding_preprocessing_support_and_synthetic_mismatches_are_denied) ... ok
+test_class_map_preprocess_and_bundle_checksum_corruption_never_switch (tests.test_uniform_model_registry.RegistryFixture.test_class_map_preprocess_and_bundle_checksum_corruption_never_switch) ... ok
+test_current_session_role_rechecked_and_denied_without_pointer (tests.test_uniform_model_registry.RegistryFixture.test_current_session_role_rechecked_and_denied_without_pointer) ... ok
+test_published_bundle_checksum_corruption_is_detected_without_fallback (tests.test_uniform_model_registry.RegistryFixture.test_published_bundle_checksum_corruption_is_detected_without_fallback) ... ok
+test_recovery_recognizes_pointer_committed_before_journal_update (tests.test_uniform_model_registry.RegistryFixture.test_recovery_recognizes_pointer_committed_before_journal_update) ... ok
+test_reviewed_report_checksum_mismatch_is_denied (tests.test_uniform_model_registry.RegistryFixture.test_reviewed_report_checksum_mismatch_is_denied) ... ok
+test_stale_token_denied_and_result_guard_serializes_pointer_switch (tests.test_uniform_model_registry.RegistryFixture.test_stale_token_denied_and_result_guard_serializes_pointer_switch) ... ok
+test_valid_activation_and_rollback_switch_pointer_atomically (tests.test_uniform_model_registry.RegistryFixture.test_valid_activation_and_rollback_switch_pointer_atomically) ... ok
+
+----------------------------------------------------------------------
+Ran 9 tests in 0.383s
+
+OK

@@ -1,0 +1,14 @@
+usage: smoke_uniform_observation.py [-h] --candidate CANDIDATE
+                                    [--backend {cpu,mps,both}]
+                                    [--passages PASSAGES] --output OUTPUT
+
+Bounded synthetic passage plumbing with real candidate inference. Scripted
+face/body localization is a fixture, NOT a physical-camera measurement. No
+garment labels or real-world accuracy are asserted. No database is opened.
+
+options:
+  -h, --help            show this help message and exit
+  --candidate CANDIDATE
+  --backend {cpu,mps,both}
+  --passages PASSAGES
+  --output OUTPUT

@@ -1,0 +1,18 @@
+{
+  "protected_files": 1772,
+  "changed_protected_files": [],
+  "scrolling_files": 20,
+  "changed_scrolling_files": [],
+  "catalog_sha256": "1e96842d40ab26b65d84650672ae1cb93c6512a2864d745d0e27f0055d205d8d",
+  "catalog_unchanged": true,
+  "active_artifacts_sha256": {
+    "models/uniform_color_ref.json": "ad031db790ce11bc3e8e85a726a2b65fcf238d919388bd1844980a0e6ca497e4",
+    "models/uniform_embed_ref.npz": "b6b9c197fa7b0a81d334e08557658cb84424a4ca25e4c314ca12bc5cf2037fbc",
+    "models/yolov8n.pt": "31e20dde3def09e2cf938c7be6fe23d9150bbbe503982af13345706515f2ef95",
+    "models/uniform_cls.pt": "8fba6e1da0c11c97873b16049b940ce21d5699838cc2040f069d5d5249a15680",
+    "yolov8n-cls.pt": "11fa19f2aea79bc960d680a13f82f22105982b325eb9e17a4a5e1a9f8245980a",
+    "yolov8n-pose.pt": "c6fa93dd1ee4a2c18c900a45c1d864a1c6f7aba75d84f91648a30b7fb641d212",
+    "yolov8n.pt": "f59b3d833e2ff32e194b5bb8e08d211dc7c5bdf144b90d2c8412c47ccfc83b36"
+  },
+  "active_artifacts_unchanged": true
+}

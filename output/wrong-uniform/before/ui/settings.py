@@ -1,0 +1,954 @@
+"""Settings panel — Computer Based Vision Monitoring System (CBVMS)."""
+
+from __future__ import annotations
+
+import threading
+from datetime import datetime
+from pathlib import Path
+from typing import Callable
+
+from typing import TYPE_CHECKING
+
+import customtkinter as ctk
+from ui.scrolling import ScrollableFrame
+
+from core.trainer import MODULES
+from core.detection_audio import LABELS
+
+if TYPE_CHECKING:
+    from core.notifier import Notifier
+    from core.recognizer import Recognizer
+    from core.trainer import ViolationTrainer
+    from core.violation_engine import LiveViolationChecker
+
+from database.db_manager import CBVMSDatabase
+from ui.camera_configuration import CameraConfigurationSection
+from ui.components import (
+    COLOR_ACCENT,
+    COLOR_ACCENT_HOVER,
+    COLOR_BG,
+    COLOR_BORDER,
+    COLOR_DANGER,
+    COLOR_SAFE,
+    COLOR_SURFACE,
+    COLOR_TEXT,
+    COLOR_TEXT_MUTED,
+    COLOR_WARNING,
+    CORNER_RADIUS,
+    PADDING,
+    body_small_font,
+    enable_trackpad_scroll,
+    heading_font,
+    panel_title_font,
+    section_title_font,
+    show_toast,
+)
+
+# Dark tinted badge backgrounds for the sensitivity indicator (no components.py equivalent).
+_SENS_BG_STRICT = "#15233D"    # dark blue
+_SENS_BG_BALANCED = "#12281F"  # dark green
+_SENS_BG_LENIENT = "#2E2310"   # dark orange
+
+
+class SettingsPanel(ctk.CTkFrame):
+    def __init__(
+        self,
+        master,
+        *,
+        database: CBVMSDatabase,
+        recognizer: "Recognizer | None",
+        username: str,
+        get_detector_loaded: Callable[[], bool],
+        apply_camera_settings: Callable[[int, tuple[int, int], int], None],
+        on_camera_source_connected: Callable[[dict], None] | None = None,
+        on_camera_sources_changed: Callable[[list[dict]], None] | None = None,
+        trainer: "ViolationTrainer | None" = None,
+        checker: "LiveViolationChecker | None" = None,
+        notifier: "Notifier | None" = None,
+        **kwargs,
+    ) -> None:
+        super().__init__(master, fg_color=COLOR_BG, **kwargs)
+        self.database = database
+        self.recognizer = recognizer
+        self.trainer = trainer
+        self.checker = checker
+        self.notifier = notifier
+        self.username = username
+        self.get_detector_loaded = get_detector_loaded
+        self.apply_camera_settings = apply_camera_settings
+        self.on_camera_source_connected = on_camera_source_connected or (lambda _p: None)
+        self.on_camera_sources_changed = on_camera_sources_changed or (lambda _items: None)
+        self._camera_section: CameraConfigurationSection | None = None
+
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(0, weight=1)
+
+        self._build()
+        self._refresh_faces_loaded()
+        self._refresh_model_status()
+
+    def _build(self) -> None:
+        scroll = ScrollableFrame(self, fg_color="transparent")
+        scroll.grid(row=0, column=0, sticky="nsew")
+        scroll.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(
+            scroll,
+            text="Settings",
+            font=panel_title_font(),
+            text_color=COLOR_TEXT,
+        ).grid(row=0, column=0, sticky="w", padx=PADDING, pady=(PADDING, 10))
+
+        row = 1
+        row = self._cloud_sync_section(scroll, row=row)
+        row = self._camera_configuration_section(scroll, row=row)
+        row = self._recognition_section(scroll, row=row)
+        row = self._violation_section(scroll, row=row)
+        row = self._academic_term_section(scroll, row=row)
+        row = self._notifications_section(scroll, row=row)
+        row = self._model_status_section(scroll, row=row)
+        row = self._admin_section(scroll, row=row)
+        row = self._ai_settings_section(scroll, row=row)
+        row = self._email_settings_section(scroll, row=row)
+
+        # Reliable trackpad/mouse-wheel scrolling over all the settings content.
+        enable_trackpad_scroll(scroll)
+
+    def _section_card(self, master, title: str) -> ctk.CTkFrame:
+        card = ctk.CTkFrame(
+            master,
+            fg_color=COLOR_SURFACE,
+            corner_radius=CORNER_RADIUS,
+            border_width=1,
+            border_color=COLOR_BORDER,
+        )
+        ctk.CTkLabel(card, text=title, font=section_title_font(), text_color=COLOR_TEXT).pack(
+            anchor="w", padx=PADDING, pady=(PADDING, 8)
+        )
+        return card
+
+    def _cloud_sync_section(self, master, *, row):
+        import queue
+        from core.sync_status import read_status
+        card = self._section_card(master, 'Student portal synchronization')
+        card.grid(row=row, column=0, sticky='ew', padx=PADDING, pady=8)
+        label = ctk.CTkLabel(card, text='', justify='left', wraplength=680)
+        label.pack(anchor='w', padx=PADDING, pady=8)
+        results = queue.Queue()
+        busy = [False]
+        def launch(apply=False):
+            if busy[0]:
+                return
+            busy[0] = True
+            def work():
+                try:
+                    import json
+                    from core.cloud_sync import CONFIG, CloudClient, sync_once
+                    from core.sync_audit import audit
+                    config = json.loads(CONFIG.read_text()) if CONFIG.exists() else {}
+                    client = CloudClient(config) if config else None
+                    if apply:
+                        if not client or config.get('enabled') is not True:
+                            raise ValueError('Sync is paused until source registration and production approval.')
+                        sync_once(self.database, client)
+                        result = 'Retry finished. See verified status below.'
+                    else:
+                        report = audit(self.database.db_path, client)
+                        result = json.dumps(report, indent=2)
+                    results.put(result)
+                except Exception:
+                    results.put('Operation stopped. Check source registration, schema and connectivity. No automatic reset or deletion was performed.')
+            threading.Thread(target=work, daemon=True, name='cloud-sync-admin').start()
+        ctk.CTkButton(card, text='Read-only audit', command=launch).pack(anchor='w', padx=PADDING, pady=4)
+        ctk.CTkButton(card, text='Retry approved sync', command=lambda: launch(True)).pack(anchor='w', padx=PADDING, pady=4)
+        output = ctk.CTkTextbox(card, height=130)
+        output.pack(fill='x', padx=PADDING, pady=8)
+        def refresh():
+            if not self.winfo_exists():
+                return
+            state = read_status(self.database.db_path)
+            label.configure(text=f"{state.get('state', 'paused').title()} · Last verified: {state.get('last_success', 'never')}\n"
+                f"Pending: {state.get('pending', 'unknown')} · Oldest: {state.get('oldest_pending') or 'unknown'} · Evidence verified: {state.get('evidence_verified', 0)}\n"
+                f"{state.get('message', '')}")
+            try:
+                result = results.get_nowait()
+                busy[0] = False
+                output.delete('1.0', 'end')
+                output.insert('1.0', result)
+            except queue.Empty:
+                pass
+            self.after(2000, refresh)
+        refresh()
+        return row + 1
+
+    def _camera_configuration_section(self, master, *, row: int) -> int:
+        section = CameraConfigurationSection(
+            master,
+            on_camera_connected=self.on_camera_source_connected,
+            apply_stream_settings=self.apply_camera_settings,
+            on_camera_sources_changed=self.on_camera_sources_changed,
+        )
+        self._camera_section = section
+        section.grid(row=row, column=0, sticky="ew", padx=PADDING, pady=(0, 12))
+        return row + 1
+
+    def on_show(self) -> None:
+        if self._camera_section is not None:
+            self._camera_section.on_show()
+        self._refresh_academic_term()
+
+    def on_hide(self) -> None:
+        if self._camera_section is not None:
+            self._camera_section.on_hide()
+
+    @staticmethod
+    def _sens_badge_style(label: str) -> tuple[str, str]:
+        """Return (bg, fg) for a sensitivity label."""
+        if label in ("Very Strict", "Strict"):
+            return _SENS_BG_STRICT, COLOR_ACCENT
+        if label == "Balanced":
+            return _SENS_BG_BALANCED, COLOR_SAFE
+        return _SENS_BG_LENIENT, COLOR_WARNING
+
+    @staticmethod
+    def _sens_effect_for(t: float) -> dict:
+        """Map a threshold to (text, color) for False Positives / Accuracy / False Negatives.
+
+        Bands tuned for ArcFace (buffalo_l): genuine pairs sit <= ~0.5 and unknowns
+        >= ~0.85, so accuracy stays high and false positives low even at strict
+        settings — false positives only climb once the threshold gets lenient.
+        """
+        if t <= 0.40:
+            return {"fp": ("Very Low", COLOR_SAFE), "acc": ("High", COLOR_SAFE), "fn": ("Medium", COLOR_WARNING)}
+        if t <= 0.50:
+            return {"fp": ("Very Low", COLOR_SAFE), "acc": ("Very High", COLOR_SAFE), "fn": ("Low", COLOR_SAFE)}
+        if t <= 0.60:
+            return {"fp": ("Low", COLOR_SAFE), "acc": ("High", COLOR_SAFE), "fn": ("Low", COLOR_SAFE)}
+        return {"fp": ("High", COLOR_DANGER), "acc": ("Medium", COLOR_WARNING), "fn": ("Very Low", COLOR_SAFE)}
+
+    def _recognition_section(self, master, *, row: int) -> int:
+        card = ctk.CTkFrame(
+            master, fg_color=COLOR_SURFACE, corner_radius=16,
+            border_width=1, border_color=COLOR_BORDER,
+        )
+        card.grid(row=row, column=0, sticky="ew", padx=PADDING, pady=(0, 12))
+        card.grid_columnconfigure(0, weight=1)
+
+        threshold0 = float(getattr(self.recognizer, "threshold", 0.6))
+        label0 = getattr(self.recognizer, "sensitivity_label", "Balanced")
+
+        # Title row: heading + live sensitivity badge
+        title_row = ctk.CTkFrame(card, fg_color="transparent")
+        title_row.pack(fill="x", padx=PADDING, pady=(PADDING, 4))
+        title_row.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(
+            title_row, text="Recognition Sensitivity", font=heading_font(16), text_color=COLOR_TEXT,
+        ).grid(row=0, column=0, sticky="w")
+        bg0, fg0 = self._sens_badge_style(label0)
+        self._sens_badge = ctk.CTkLabel(
+            title_row, text=label0, font=body_small_font(), text_color=fg0,
+            fg_color=bg0, corner_radius=8, padx=10, pady=3,
+        )
+        self._sens_badge.grid(row=0, column=1, sticky="e")
+
+        # Subtitle
+        ctk.CTkLabel(
+            card,
+            text="Lower = stricter matching (fewer false positives). "
+                 "Higher = more lenient (fewer missed faces).",
+            font=body_small_font(), text_color=COLOR_TEXT_MUTED, wraplength=520, justify="left",
+        ).pack(anchor="w", padx=PADDING, pady=(0, 10))
+
+        # Slider
+        slider = ctk.CTkSlider(
+            card, from_=0.30, to=0.85, number_of_steps=11, command=self._on_threshold,
+        )
+        slider.set(threshold0)
+        slider.pack(fill="x", padx=PADDING, pady=(0, 2))
+
+        # Value label (centered)
+        self._sens_value = ctk.CTkLabel(
+            card, text=f"{threshold0:.2f}", font=body_small_font(), text_color=COLOR_TEXT_MUTED,
+        )
+        self._sens_value.pack(pady=(0, 4))
+
+        # Range labels
+        range_row = ctk.CTkFrame(card, fg_color="transparent")
+        range_row.pack(fill="x", padx=PADDING, pady=(0, 12))
+        range_row.grid_columnconfigure((0, 1), weight=1)
+        ctk.CTkLabel(
+            range_row, text="← Strict", font=body_small_font(), text_color=COLOR_TEXT_MUTED,
+        ).grid(row=0, column=0, sticky="w")
+        ctk.CTkLabel(
+            range_row, text="Lenient →", font=body_small_font(), text_color=COLOR_TEXT_MUTED,
+        ).grid(row=0, column=1, sticky="e")
+
+        # Live effect indicator — 3 mini-cards
+        eff = self._sens_effect_for(threshold0)
+        eff_row = ctk.CTkFrame(card, fg_color="transparent")
+        eff_row.pack(fill="x", padx=PADDING, pady=(0, 12))
+        eff_row.grid_columnconfigure((0, 1, 2), weight=1, uniform="eff")
+
+        def _mini(col: int, icon: str, header: str, value: str, color: str):
+            mc = ctk.CTkFrame(eff_row, fg_color=COLOR_BG, corner_radius=8)
+            mc.grid(row=0, column=col, sticky="ew", padx=(0 if col == 0 else 8, 0))
+            mc.grid_columnconfigure(0, weight=1)
+            ctk.CTkLabel(
+                mc, text=f"{icon}  {header}", font=body_small_font(), text_color=COLOR_TEXT_MUTED,
+            ).grid(row=0, column=0, pady=(10, 2), padx=8)
+            val = ctk.CTkLabel(mc, text=value, font=body_small_font(), text_color=color)
+            val.grid(row=1, column=0, pady=(0, 10), padx=8)
+            return val
+
+        self._eff_fp = _mini(0, "⚠", "False Positives", eff["fp"][0], eff["fp"][1])
+        self._eff_acc = _mini(1, "🎯", "Accuracy", eff["acc"][0], eff["acc"][1])
+        self._eff_fn = _mini(2, "🙈", "False Negatives", eff["fn"][0], eff["fn"][1])
+
+        # Apply & Reload Faces
+        ctk.CTkButton(
+            card, text="Apply & Reload Faces", height=40, corner_radius=10,
+            fg_color=COLOR_ACCENT, hover_color=COLOR_ACCENT_HOVER, command=self._apply_and_reload,
+        ).pack(fill="x", padx=PADDING, pady=(0, PADDING))
+
+        return row + 1
+
+    def _on_threshold(self, v: float) -> None:
+        stepped = round(float(v) / 0.05) * 0.05
+        stepped = max(0.30, min(0.85, stepped))
+        try:
+            self.recognizer.threshold = float(stepped)
+        except Exception:
+            pass
+        self._sens_value.configure(text=f"{stepped:.2f}")
+        label = getattr(self.recognizer, "sensitivity_label", "Balanced")
+        bg, fg = self._sens_badge_style(label)
+        self._sens_badge.configure(text=label, fg_color=bg, text_color=fg)
+        eff = self._sens_effect_for(stepped)
+        self._eff_fp.configure(text=eff["fp"][0], text_color=eff["fp"][1])
+        self._eff_acc.configure(text=eff["acc"][0], text_color=eff["acc"][1])
+        self._eff_fn.configure(text=eff["fn"][0], text_color=eff["fn"][1])
+
+    def _apply_and_reload(self) -> None:
+        """Reload enrolled faces off the UI thread; toast on completion."""
+        def _work() -> None:
+            try:
+                self.recognizer.load_known_faces()
+                ok, msg = True, "Sensitivity applied. Known faces reloaded."
+            except Exception as exc:
+                ok, msg = False, f"Failed to reload faces: {exc}"
+
+            def _done() -> None:
+                try:
+                    show_toast(self, msg, type="success" if ok else "error")
+                except Exception:
+                    pass
+                if ok:
+                    self._refresh_faces_loaded()
+
+            try:
+                if self.winfo_exists():
+                    self.after(0, _done)
+            except Exception:
+                pass
+
+        threading.Thread(target=_work, daemon=True).start()
+
+    def _refresh_faces_loaded(self) -> None:
+        try:
+            count = len(getattr(self.recognizer, "known_faces", []) or [])
+        except Exception:
+            count = 0
+        if hasattr(self, "_faces_loaded_label"):
+            self._faces_loaded_label.configure(text=f"{count} faces loaded")
+
+    def _violation_section(self, master, *, row: int) -> int:
+        card = self._section_card(master, "Violation Checks")
+        card.grid(row=row, column=0, sticky="ew", padx=PADDING, pady=(0, 12))
+        card.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(
+            card,
+            text="Choose which checks run on the live feed. Each uses its trained model.",
+            font=body_small_font(), text_color=COLOR_TEXT_MUTED, wraplength=520, justify="left",
+        ).pack(anchor="w", padx=PADDING, pady=(0, 8))
+
+        switches = ctk.CTkFrame(card, fg_color="transparent")
+        switches.pack(fill="x", padx=PADDING, pady=(0, PADDING))
+        switches.grid_columnconfigure(0, weight=1)
+
+        # Initialise from the live checker so the switches reflect the real state.
+        self._enable_uniform = ctk.BooleanVar(value=bool(getattr(self.checker, "check_uniform", True)))
+        self._enable_earring = ctk.BooleanVar(value=bool(getattr(self.checker, "check_earring", True)))
+
+        items = [
+            ("Enable Uniform Check", self._enable_uniform, "uniform"),
+            ("Enable Earring Check", self._enable_earring, "earring"),
+        ]
+        for i, (label, var, key) in enumerate(items):
+            sw = ctk.CTkSwitch(
+                switches,
+                text=label,
+                variable=var,
+                onvalue=True,
+                offvalue=False,
+                command=lambda k=key: self._apply_violation_toggles(k),
+            )
+            sw.grid(row=i, column=0, sticky="w", pady=4)
+
+        self._apply_violation_toggles(None)
+        return row + 1
+
+    def _apply_violation_toggles(self, _changed: str | None) -> None:
+        # Uniform / earring map to the live checker (the trained classifiers).
+        for attr, var in [
+            ("check_uniform", self._enable_uniform),
+            ("check_earring", self._enable_earring),
+        ]:
+            try:
+                setattr(self.checker, attr, bool(var.get()))
+            except Exception:
+                pass
+
+    def _academic_term_section(self, master, *, row: int) -> int:
+        from ui.academic_terms import AcademicTermsWindow
+        card = self._section_card(master, "Academic Terms")
+        card.grid(row=row,column=0,sticky="ew",padx=PADDING,pady=(0,12))
+        self._term_current_label=ctk.CTkLabel(card,text='')
+        self._term_current_label.pack(padx=PADDING,pady=8)
+        ctk.CTkLabel(card,text='Campus dates activate automatically in Asia/Manila. Report filters do not change eligibility.').pack(padx=PADDING)
+        ctk.CTkButton(card,text='Calendar, roster and enrollment reviews',
+            command=lambda:AcademicTermsWindow(self,self.database,self.username)).pack(padx=PADDING,pady=8)
+        self._refresh_academic_term()
+        return row+1
+
+    def _refresh_academic_term(self) -> None:
+        if not hasattr(self, "_term_current_label"):
+            return
+        term = self.database.get_current_academic_term()
+        self._term_current_label.configure(
+            text=(
+                f"Active: {term.get('semester_name', '—')} · "
+                f"School Year {term.get('school_year', '—')}"
+            )
+        )
+
+
+    def _notifications_section(self, master, *, row: int) -> int:
+        card = self._section_card(master, "Notifications")
+        card.grid(row=row, column=0, sticky="ew", padx=PADDING, pady=(0, 12))
+        card.grid_columnconfigure(0, weight=1)
+
+        switches = ctk.CTkFrame(card, fg_color="transparent")
+        switches.pack(fill="x", padx=PADDING, pady=(0, PADDING))
+        switches.grid_columnconfigure(0, weight=1)
+
+        sound_on = bool(getattr(self.notifier, "sound_enabled", True))
+        toast_on = bool(getattr(self.notifier, "toast_enabled", True))
+        self._enable_sound = ctk.BooleanVar(value=sound_on)
+        self._enable_toast = ctk.BooleanVar(value=toast_on)
+
+        items = [
+            ("Sound alerts", self._enable_sound, "sound_enabled"),
+            ("On-screen toasts", self._enable_toast, "toast_enabled"),
+        ]
+        for i, (label, var, attr) in enumerate(items):
+            sw = ctk.CTkSwitch(
+                switches, text=label, variable=var, onvalue=True, offvalue=False,
+                command=lambda a=attr: self._apply_notification_toggles(a),
+            )
+            sw.grid(row=i, column=0, sticky="w", pady=4)
+
+        self._sound_types = {}
+        for i, (kind, label) in enumerate(LABELS.items(), start=2):
+            var = ctk.BooleanVar(value=self.notifier.audio.kind_enabled(kind) if self.notifier else True)
+            self._sound_types[kind] = var
+            ctk.CTkSwitch(
+                switches, text=label, variable=var, onvalue=True, offvalue=False,
+                command=lambda k=kind, v=var: self.notifier.audio.set_kind_enabled(k, v.get())
+                if self.notifier else None,
+            ).grid(row=i, column=0, sticky="w", pady=4)
+            ctk.CTkButton(
+                switches, text="Preview", width=90,
+                command=lambda k=kind: self._preview_sound(k),
+            ).grid(row=i, column=1, padx=(12, 0), pady=4)
+        ctk.CTkLabel(
+            card, text="Previews respect master sound and individual switches. Settings apply to this session.",
+            font=body_small_font(), text_color=COLOR_TEXT_MUTED, wraplength=520, justify="left",
+        ).pack(anchor="w", padx=PADDING, pady=(0, PADDING))
+
+        return row + 1
+
+    def _preview_sound(self, kind) -> None:
+        if self.notifier is not None:
+            self.notifier.audio.preview(kind)
+
+    def _apply_notification_toggles(self, _changed: str | None) -> None:
+        for attr, var in [
+            ("sound_enabled", self._enable_sound),
+            ("toast_enabled", self._enable_toast),
+        ]:
+            try:
+                setattr(self.notifier, attr, bool(var.get()))
+            except Exception:
+                pass
+
+    _CLASSIFIER_TITLES = {"uniform": "Uniform Check", "earring": "Earring Check"}
+
+    def _model_status_section(self, master, *, row: int) -> int:
+        card = self._section_card(master, "Model Status")
+        card.grid(row=row, column=0, sticky="ew", padx=PADDING, pady=(0, 12))
+        card.grid_columnconfigure(0, weight=1)
+
+        # Person detector (YOLOv8) — single-line status
+        det_row = ctk.CTkFrame(card, fg_color="transparent")
+        det_row.pack(fill="x", padx=PADDING, pady=4)
+        ctk.CTkLabel(
+            det_row, text="Person Detector  ·  yolov8n.pt",
+            font=body_small_font(), text_color=COLOR_TEXT,
+        ).pack(side="left")
+        self._detector_status_label = ctk.CTkLabel(
+            det_row, text="—", font=body_small_font(), text_color=COLOR_TEXT_MUTED,
+        )
+        self._detector_status_label.pack(side="right")
+
+        # Trainable classifiers (uniform / earring)
+        self._cls_status: dict[str, dict] = {}
+        for module in ("uniform", "earring"):
+            title = self._CLASSIFIER_TITLES[module]
+            model_file = Path(MODULES[module]["model_out"]).name
+
+            top = ctk.CTkFrame(card, fg_color="transparent")
+            top.pack(fill="x", padx=PADDING, pady=(8, 0))
+            ctk.CTkLabel(
+                top, text=f"{title}  ·  {model_file}",
+                font=body_small_font(), text_color=COLOR_TEXT,
+            ).pack(side="left")
+            badge = ctk.CTkLabel(
+                top, text="—", font=body_small_font(), text_color=COLOR_TEXT_MUTED,
+            )
+            badge.pack(side="right")
+
+            detail = ctk.CTkLabel(
+                card, text="", font=body_small_font(), text_color=COLOR_TEXT_MUTED,
+                anchor="w", justify="left",
+            )
+            detail.pack(fill="x", padx=PADDING, pady=(0, 2))
+
+            self._cls_status[module] = {"badge": badge, "detail": detail}
+
+        btns = ctk.CTkFrame(card, fg_color="transparent")
+        btns.pack(fill="x", padx=PADDING, pady=(10, PADDING))
+        ctk.CTkButton(
+            btns,
+            text="Training Guide",
+            height=34,
+            corner_radius=CORNER_RADIUS,
+            fg_color=COLOR_BORDER,
+            hover_color=COLOR_ACCENT_HOVER,
+            command=self._open_training_guide,
+        ).pack(side="left")
+
+        ctk.CTkButton(
+            btns,
+            text="Refresh Status",
+            height=34,
+            corner_radius=CORNER_RADIUS,
+            fg_color=COLOR_ACCENT,
+            hover_color=COLOR_ACCENT_HOVER,
+            command=self._refresh_model_status,
+        ).pack(side="right")
+
+        return row + 1
+
+    def _refresh_model_status(self) -> None:
+        # Person detector
+        yolov8 = Path(__file__).resolve().parents[1] / "models" / "yolov8n.pt"
+        loaded = self.get_detector_loaded()
+        self._detector_status_label.configure(
+            text="Loaded" if loaded else ("Not found" if not yolov8.exists() else "Not loaded"),
+            text_color=COLOR_SAFE if loaded else (COLOR_DANGER if not yolov8.exists() else COLOR_WARNING),
+        )
+
+        # Trainable classifiers
+        for module, refs in getattr(self, "_cls_status", {}).items():
+            if self.trainer is None:
+                refs["badge"].configure(text="Unavailable", text_color=COLOR_TEXT_MUTED)
+                refs["detail"].configure(text="")
+                continue
+
+            counts = self.trainer.get_sample_counts(module)
+            parts = "  ·  ".join(
+                f"{label.replace('_', ' ')}: {count}" for label, count in counts.items()
+            )
+
+            if module == "uniform":
+                # Uniform detection uses a pretrained-embedding "fingerprint" (+ colour check),
+                # not the YOLO classifier — report whether that reference is built.
+                try:
+                    from core.uniform_embedder import UniformEmbedMatcher
+                    built = UniformEmbedMatcher().is_loaded()
+                except Exception:
+                    built = False
+                refs["badge"].configure(
+                    text="Fingerprint ✓" if built else "Not built",
+                    text_color=COLOR_SAFE if built else COLOR_WARNING,
+                )
+                refs["detail"].configure(
+                    text=parts + "  ·  pretrained-embedding match + colour check")
+                continue
+
+            trained = self.trainer.is_trained(module)
+            refs["badge"].configure(
+                text="Trained ✓" if trained else "Not trained",
+                text_color=COLOR_SAFE if trained else COLOR_WARNING,
+            )
+            if trained:
+                mtime = self.trainer.model_mtime(module)
+                if mtime:
+                    parts += f"  ·  last trained {datetime.fromtimestamp(mtime):%Y-%m-%d %H:%M}"
+            refs["detail"].configure(text=parts)
+
+    def _open_training_guide(self) -> None:
+        win = ctk.CTkToplevel(self)
+        win.title("CBVMS — Model Training Guide")
+        win.geometry("620x520")
+        win.configure(fg_color=COLOR_BG)
+
+        ctk.CTkLabel(
+            win,
+            text="CBVMS — Model Training Guide",
+            font=panel_title_font(),
+            text_color=COLOR_TEXT,
+        ).pack(anchor="w", padx=PADDING, pady=(PADDING, 8))
+
+        text = (
+            "Train classifiers directly inside CBVMS — no scripts or manual files needed.\n\n"
+            "1) Open the Training tab\n"
+            "   - Click 🎓 Training in the left sidebar.\n"
+            "   - Choose a tab: Uniform Check or Earring Check.\n\n"
+            "2) Build the dataset (per class)\n"
+            "   - UNIFORM: correct_uniform vs wrong_uniform.\n"
+            "   - EARRING: no_earring vs with_earring.\n"
+            "   - Use 'Upload Photos' or 'Capture from Camera' for each class.\n"
+            "   - Minimum 10 photos per class (more = better accuracy).\n\n"
+            "3) Train\n"
+            "   - Click 'Train Now'. A YOLOv8 classifier trains on your photos.\n"
+            "   - The model is saved automatically to the models/ folder\n"
+            "     (uniform_cls.pt / earring_cls.pt).\n\n"
+            "4) Check status\n"
+            "   - Return here and click 'Refresh Status'.\n"
+            "   - A trained model shows 'Trained ✓' with its sample counts\n"
+            "     and last-trained time.\n"
+        )
+        box = ctk.CTkTextbox(
+            win,
+            fg_color=COLOR_SURFACE,
+            corner_radius=CORNER_RADIUS,
+            border_width=1,
+            border_color=COLOR_BORDER,
+            font=body_small_font(),
+            text_color=COLOR_TEXT,
+        )
+        box.pack(fill="both", expand=True, padx=PADDING, pady=(0, PADDING))
+        box.insert("1.0", text)
+        box.configure(state="disabled")
+
+    def _admin_section(self, master, *, row: int) -> int:
+        card = self._section_card(master, "Admin")
+        card.grid(row=row, column=0, sticky="ew", padx=PADDING, pady=(0, PADDING))
+
+        form = ctk.CTkFrame(card, fg_color="transparent")
+        form.pack(fill="x", padx=PADDING, pady=(0, 8))
+        form.grid_columnconfigure(1, weight=1)
+
+        self._pw_current = ctk.CTkEntry(form, show="•")
+        self._pw_new = ctk.CTkEntry(form, show="•")
+        self._pw_confirm = ctk.CTkEntry(form, show="•")
+
+        for r, (label, entry) in enumerate(
+            [
+                ("Current Password", self._pw_current),
+                ("New Password", self._pw_new),
+                ("Confirm New Password", self._pw_confirm),
+            ]
+        ):
+            ctk.CTkLabel(form, text=label, font=body_small_font(), text_color=COLOR_TEXT_MUTED).grid(
+                row=r, column=0, sticky="w", padx=(0, 12), pady=6
+            )
+            entry.grid(row=r, column=1, sticky="ew", pady=6)
+
+        self._pw_msg = ctk.CTkLabel(card, text="", font=body_small_font(), text_color=COLOR_TEXT_MUTED)
+        self._pw_msg.pack(anchor="w", padx=PADDING, pady=(0, 8))
+
+        ctk.CTkButton(
+            card,
+            text="Save Password",
+            height=36,
+            corner_radius=CORNER_RADIUS,
+            fg_color=COLOR_ACCENT,
+            hover_color=COLOR_ACCENT_HOVER,
+            command=self._save_password,
+        ).pack(anchor="e", padx=PADDING, pady=(0, PADDING))
+
+        return row + 1
+
+    def _save_password(self) -> None:
+        current = self._pw_current.get().strip()
+        new = self._pw_new.get().strip()
+        confirm = self._pw_confirm.get().strip()
+
+        if not current or not new or not confirm:
+            self._pw_msg.configure(text="Please fill in all password fields.", text_color=COLOR_WARNING)
+            return
+        if len(new) < 6:
+            self._pw_msg.configure(text="New password must be at least 6 characters.", text_color=COLOR_WARNING)
+            return
+        if new != confirm:
+            self._pw_msg.configure(text="New password and confirmation do not match.", text_color=COLOR_WARNING)
+            return
+        if current == new:
+            self._pw_msg.configure(text="New password must be different from current.", text_color=COLOR_WARNING)
+            return
+
+        try:
+            ok = self.database.verify_user(self.username, current)
+        except Exception as exc:
+            self._pw_msg.configure(text=f"Database error: {exc}", text_color=COLOR_DANGER)
+            return
+        if not ok:
+            self._pw_msg.configure(text="Current password is incorrect.", text_color=COLOR_DANGER)
+            return
+
+        try:
+            # Update password hash directly (kept here to avoid API drift).
+            from database.db_manager import hash_password
+
+            with self.database.connect() as conn:
+                conn.execute(
+                    "UPDATE users SET password_hash = ? WHERE username = ?",
+                    (hash_password(new), self.username),
+                )
+                conn.commit()
+        except Exception as exc:
+            self._pw_msg.configure(text=f"Failed to save password: {exc}", text_color=COLOR_DANGER)
+            return
+
+        self._pw_current.delete(0, "end")
+        self._pw_new.delete(0, "end")
+        self._pw_confirm.delete(0, "end")
+        self._pw_msg.configure(text="Password updated successfully.", text_color=COLOR_SAFE)
+        show_toast(self, "Password updated.", type="success")
+
+    # ------------------------------------------------------------------
+    # AI Analysis (Anthropic API key)
+    # ------------------------------------------------------------------
+
+    def _ai_settings_section(self, master, *, row: int) -> int:
+        from core.email_sender import load_smtp_config, save_smtp_config
+
+        card = self._section_card(master, "AI Analysis  (Appeal Review)")
+        card.grid(row=row, column=0, sticky="ew", padx=PADDING, pady=(0, PADDING))
+
+        ctk.CTkLabel(
+            card,
+            text=(
+                "Used to automatically analyse student appeals with Claude AI.\n"
+                "Get your API key at console.anthropic.com → API Keys."
+            ),
+            font=body_small_font(),
+            text_color=COLOR_TEXT_MUTED,
+            justify="left",
+            wraplength=680,
+        ).pack(anchor="w", padx=PADDING, pady=(0, 10))
+
+        form = ctk.CTkFrame(card, fg_color="transparent")
+        form.pack(fill="x", padx=PADDING, pady=(0, 8))
+        form.grid_columnconfigure(1, weight=1)
+
+        cfg = load_smtp_config()
+
+        ctk.CTkLabel(form, text="Anthropic API Key", font=body_small_font(),
+                     text_color=COLOR_TEXT_MUTED).grid(
+            row=0, column=0, sticky="w", padx=(0, 12), pady=6)
+
+        _api_entry = ctk.CTkEntry(form, show="•", placeholder_text="sk-ant-...")
+        _api_entry.grid(row=0, column=1, sticky="ew", pady=6)
+        stored_key = cfg.get("anthropic_api_key", "")
+        if stored_key:
+            _api_entry.insert(0, stored_key)
+
+        _show_var = ctk.BooleanVar(value=False)
+
+        def _toggle_show():
+            _api_entry.configure(show="" if _show_var.get() else "•")
+
+        ctk.CTkCheckBox(form, text="Show key", variable=_show_var,
+                        command=_toggle_show, font=body_small_font(),
+                        text_color=COLOR_TEXT_MUTED).grid(
+            row=0, column=2, padx=(8, 0), pady=6)
+
+        _ai_msg = ctk.CTkLabel(card, text="", font=body_small_font(),
+                               text_color=COLOR_TEXT_MUTED, wraplength=680)
+        _ai_msg.pack(anchor="w", padx=PADDING, pady=(0, 4))
+
+        def _save_ai() -> None:
+            cfg2 = load_smtp_config()
+            cfg2["anthropic_api_key"] = _api_entry.get().strip()
+            save_smtp_config(cfg2)
+            _ai_msg.configure(text="API key saved.", text_color=COLOR_SAFE)
+            show_toast(self, "Anthropic API key saved.", type="success")
+
+        def _test_ai() -> None:
+            import threading as _t
+            _save_ai()
+            key = _api_entry.get().strip()
+            if not key:
+                _ai_msg.configure(text="Enter an API key first.", text_color=COLOR_WARNING)
+                return
+            _ai_msg.configure(text="Testing API key…", text_color=COLOR_TEXT_MUTED)
+
+            def _run():
+                try:
+                    import anthropic
+                    client = anthropic.Anthropic(api_key=key)
+                    resp = client.messages.create(
+                        model="claude-haiku-4-5-20251001",
+                        max_tokens=10,
+                        messages=[{"role": "user", "content": "Say OK"}],
+                    )
+                    reply = resp.content[0].text.strip()
+                    msg, color = f"API key valid — model replied: {reply}", COLOR_SAFE
+                except Exception as exc:
+                    msg, color = f"Test failed: {exc}", COLOR_DANGER
+                card.after(0, lambda: _ai_msg.configure(text=msg, text_color=color))
+
+            _t.Thread(target=_run, daemon=True).start()
+
+        btn_row = ctk.CTkFrame(card, fg_color="transparent")
+        btn_row.pack(anchor="e", padx=PADDING, pady=(0, PADDING))
+
+        ctk.CTkButton(
+            btn_row, text="Test Key", width=100, height=34,
+            corner_radius=CORNER_RADIUS, fg_color=COLOR_BORDER,
+            hover_color=COLOR_ACCENT_HOVER, command=_test_ai,
+        ).pack(side="left", padx=(0, 8))
+
+        ctk.CTkButton(
+            btn_row, text="Save", width=100, height=34,
+            corner_radius=CORNER_RADIUS, fg_color=COLOR_ACCENT,
+            hover_color=COLOR_ACCENT_HOVER, command=_save_ai,
+        ).pack(side="left")
+
+        return row + 1
+
+    # ------------------------------------------------------------------
+    # Email / SMTP settings
+    # ------------------------------------------------------------------
+
+    def _email_settings_section(self, master, *, row: int) -> int:
+        from core.email_sender import load_smtp_config, save_smtp_config, send_credentials
+
+        card = self._section_card(master, "Email Settings  (SMTP)")
+        card.grid(row=row, column=0, sticky="ew", padx=PADDING, pady=(0, PADDING))
+
+        desc = ctk.CTkLabel(
+            card,
+            text=(
+                "Used to send login credentials to students when they are enrolled.\n"
+                "For Gmail, create an App Password (Google Account → Security → App Passwords)."
+            ),
+            font=body_small_font(),
+            text_color=COLOR_TEXT_MUTED,
+            justify="left",
+            wraplength=680,
+        )
+        desc.pack(anchor="w", padx=PADDING, pady=(0, 10))
+
+        form = ctk.CTkFrame(card, fg_color="transparent")
+        form.pack(fill="x", padx=PADDING, pady=(0, 8))
+        form.grid_columnconfigure(1, weight=1)
+        form.grid_columnconfigure(3, weight=1)
+
+        cfg = load_smtp_config()
+
+        def _lbl(r, c, text):
+            ctk.CTkLabel(form, text=text, font=body_small_font(),
+                         text_color=COLOR_TEXT_MUTED).grid(
+                row=r, column=c, sticky="w", padx=(0, 8), pady=5)
+
+        def _entry(r, c, val="", show="", width=0):
+            kw = {"show": show} if show else {}
+            if width:
+                kw["width"] = width
+            e = ctk.CTkEntry(form, **kw)
+            e.grid(row=r, column=c, sticky="ew", pady=5, padx=(0, 12))
+            if val:
+                e.insert(0, val)
+            return e
+
+        _lbl(0, 0, "Sender Email")
+        _smtp_email = _entry(0, 1, cfg.get("sender_email", ""))
+
+        _lbl(0, 2, "App Password")
+        _smtp_pass = _entry(0, 3, cfg.get("sender_password", ""), show="•")
+
+        _lbl(1, 0, "SMTP Host")
+        _smtp_host = _entry(1, 1, cfg.get("host", "smtp.gmail.com"))
+
+        _lbl(1, 2, "Port")
+        _smtp_port = _entry(1, 3, str(cfg.get("port", 587)), width=90)
+
+        _smtp_msg = ctk.CTkLabel(card, text="", font=body_small_font(),
+                                 text_color=COLOR_TEXT_MUTED, wraplength=680)
+        _smtp_msg.pack(anchor="w", padx=PADDING, pady=(0, 4))
+
+        def _save_smtp() -> None:
+            new_cfg = {
+                "sender_email": _smtp_email.get().strip(),
+                "sender_password": _smtp_pass.get(),
+                "host": _smtp_host.get().strip() or "smtp.gmail.com",
+                "port": int(_smtp_port.get().strip() or "587"),
+            }
+            save_smtp_config(new_cfg)
+            _smtp_msg.configure(text="SMTP settings saved.", text_color=COLOR_SAFE)
+            show_toast(self, "SMTP settings saved.", type="success")
+
+        def _test_smtp() -> None:
+            import threading as _t
+            _smtp_msg.configure(text="Sending test email…", text_color=COLOR_TEXT_MUTED)
+            _save_smtp()
+            email_addr = _smtp_email.get().strip()
+            if not email_addr:
+                _smtp_msg.configure(text="Enter a sender email first.", text_color=COLOR_WARNING)
+                return
+
+            def _run():
+                ok, err = send_credentials(
+                    to_email=email_addr,
+                    student_name="Test Student",
+                    student_id="TEST-001",
+                    username="TEST-001",
+                    password="TestPass123",
+                )
+                msg = "Test email sent to sender address." if ok else f"Test failed: {err}"
+                color = COLOR_SAFE if ok else COLOR_DANGER
+                card.after(0, lambda: _smtp_msg.configure(text=msg, text_color=color))
+
+            _t.Thread(target=_run, daemon=True).start()
+
+        btn_row = ctk.CTkFrame(card, fg_color="transparent")
+        btn_row.pack(anchor="e", padx=PADDING, pady=(0, PADDING))
+
+        ctk.CTkButton(
+            btn_row, text="Test Email", width=110, height=34,
+            corner_radius=CORNER_RADIUS, fg_color=COLOR_BORDER,
+            hover_color=COLOR_ACCENT_HOVER, command=_test_smtp,
+        ).pack(side="left", padx=(0, 8))
+
+        ctk.CTkButton(
+            btn_row, text="Save", width=100, height=34,
+            corner_radius=CORNER_RADIUS, fg_color=COLOR_ACCENT,
+            hover_color=COLOR_ACCENT_HOVER, command=_save_smtp,
+        ).pack(side="left")
+
+        return row + 1

@@ -1,0 +1,82 @@
+test_annotation_conflicts_types_bounds_and_duplicate_frames_reject (tests.test_uniform_walkthrough.UniformWalkthroughTests.test_annotation_conflicts_types_bounds_and_duplicate_frames_reject) ... ok
+test_assessed_and_timed_out_are_separate_from_detection (tests.test_uniform_walkthrough.UniformWalkthroughTests.test_assessed_and_timed_out_are_separate_from_detection) ... ok
+test_distinct_presence_ids_duplicate_logical_results_but_same_presence_updates_do_not (tests.test_uniform_walkthrough.UniformWalkthroughTests.test_distinct_presence_ids_duplicate_logical_results_but_same_presence_updates_do_not) ... ok
+test_fixed_500ms_timing_trial_and_policy_are_scored_separately (tests.test_uniform_walkthrough.UniformWalkthroughTests.test_fixed_500ms_timing_trial_and_policy_are_scored_separately) ... ok
+test_history_is_bounded_and_dropped_rows_reported (tests.test_uniform_walkthrough.UniformWalkthroughTests.test_history_is_bounded_and_dropped_rows_reported) ... ok
+test_incomplete_cutoff_excludes_future_passages_and_marks_started_one (tests.test_uniform_walkthrough.UniformWalkthroughTests.test_incomplete_cutoff_excludes_future_passages_and_marks_started_one) ... ok
+test_late_bad_result_cannot_replace_timely_correct_and_updates_are_not_duplicates (tests.test_uniform_walkthrough.UniformWalkthroughTests.test_late_bad_result_cannot_replace_timely_correct_and_updates_are_not_duplicates) ... ok
+test_legacy_binary_uniform_output_is_policy_only_not_three_class_garment (tests.test_uniform_walkthrough.UniformWalkthroughTests.test_legacy_binary_uniform_output_is_policy_only_not_three_class_garment) ... ok
+test_missed_unlabeled_and_missing_timestamps_do_not_create_accuracy (tests.test_uniform_walkthrough.UniformWalkthroughTests.test_missed_unlabeled_and_missing_timestamps_do_not_create_accuracy) ... ok
+test_own_torso_required_and_same_garment_neighbor_is_wrong_person (tests.test_uniform_walkthrough.UniformWalkthroughTests.test_own_torso_required_and_same_garment_neighbor_is_wrong_person) ... ok
+test_policy_prediction_without_independent_policy_truth_is_not_scored (tests.test_uniform_walkthrough.UniformWalkthroughTests.test_policy_prediction_without_independent_policy_truth_is_not_scored) ... ok
+test_poor_overlap_without_neighbor_match_is_mismatch_not_wrong_person (tests.test_uniform_walkthrough.UniformWalkthroughTests.test_poor_overlap_without_neighbor_match_is_mismatch_not_wrong_person) ... ok
+test_replay_annotation_rows_are_unique_and_fps_is_never_guessed (tests.test_uniform_walkthrough.UniformWalkthroughTests.test_replay_annotation_rows_are_unique_and_fps_is_never_guessed) ... ok
+test_result_assessments_join_by_presence_when_lists_are_reordered (tests.test_uniform_walkthrough.UniformWalkthroughTests.test_result_assessments_join_by_presence_when_lists_are_reordered) ... ok
+test_detection_miss_is_counted_even_without_assessment (tests.test_camera_replay.CameraReplayMetricsTests.test_detection_miss_is_counted_even_without_assessment) ... ok
+test_failed_worker_result_does_not_count_as_completed_assessment (tests.test_camera_replay.CameraReplayMetricsTests.test_failed_worker_result_does_not_count_as_completed_assessment) ... ok
+test_gallery_listener_can_be_removed_when_monitor_closes (tests.test_camera_replay.CameraReplayMetricsTests.test_gallery_listener_can_be_removed_when_monitor_closes) ... ok
+test_gallery_reload_advances_revision_and_notifies_candidate_invalidator (tests.test_camera_replay.CameraReplayMetricsTests.test_gallery_reload_advances_revision_and_notifies_candidate_invalidator) ... ok
+test_missing_authorized_identity_labels_produce_null_accuracy (tests.test_camera_replay.CameraReplayMetricsTests.test_missing_authorized_identity_labels_produce_null_accuracy) ... ok
+test_prior_frame_labels_are_joined_to_selected_frame_and_first_confirmation_sticks (tests.test_camera_replay.CameraReplayMetricsTests.test_prior_frame_labels_are_joined_to_selected_frame_and_first_confirmation_sticks) ... ok
+test_torso_mismatch_requires_annotated_geometry (tests.test_camera_replay.CameraReplayMetricsTests.test_torso_mismatch_requires_annotated_geometry) ... ok
+test_unknown_false_accept_and_missing_assessment_are_separate (tests.test_camera_replay.CameraReplayMetricsTests.test_unknown_false_accept_and_missing_assessment_are_separate) ... ok
+test_wrong_uniform_is_not_erased_by_later_correct_and_requires_correct_identity (tests.test_camera_replay.CameraReplayMetricsTests.test_wrong_uniform_is_not_erased_by_later_correct_and_requires_correct_identity) ... ok
+
+----------------------------------------------------------------------
+Ran 23 tests in 0.002s
+
+OK
+usage: replay_camera_assessment.py [-h] --video VIDEO --annotations
+                                   ANNOTATIONS --mode {baseline,candidate}
+                                   --output OUTPUT
+                                   [--evaluation-db EVALUATION_DB]
+                                   [--identity-alias-map IDENTITY_ALIAS_MAP]
+                                   [--max-frames MAX_FRAMES]
+                                   [--clear-frame-selection]
+                                   [--prioritized-assessment]
+                                   [--uniform-observation-config UNIFORM_OBSERVATION_CONFIG]
+                                   [--body-backend {cpu,mps}]
+                                   [--camera-label CAMERA_LABEL]
+                                   [--camera-mode {color,infrared,unknown}]
+
+Sequential model-backed replay through the CBVMS tracking/assessment path. Use
+a disposable evaluation database (`--evaluation-db`) containing only the
+authorized evaluation gallery and eligible synthetic/evaluation students. The
+database is SQLite-backed into a temporary copy before initialization. With no
+database, an empty temporary roster exercises real detection/assessment
+plumbing but identity/uniform metrics are unavailable. Nothing writes to
+production DB. Run `--mode baseline` and `--mode candidate` sequentially with
+the same video, annotations, evaluation DB, flags, and model settings.
+Candidate mode uses ClearFrameRouter; both modes use FaceTrackingProcessor and
+LiveProcessor with the real installed models and the hard observation-only
+persistence gate.
+
+options:
+  -h, --help            show this help message and exit
+  --video VIDEO
+  --annotations ANNOTATIONS
+  --mode {baseline,candidate}
+  --output OUTPUT
+  --evaluation-db EVALUATION_DB
+                        authorized disposable SQLite evaluation gallery;
+                        original is never opened for writes
+  --identity-alias-map IDENTITY_ALIAS_MAP
+                        JSON alias->student_id map for authorized identity
+                        scoring; IDs are never output
+  --max-frames MAX_FRAMES
+                        0 means the full video
+  --clear-frame-selection
+                        candidate mode: retain/select clearer original frames
+                        per passage
+  --prioritized-assessment
+                        candidate mode: enable fair prioritized candidate
+                        scheduling
+  --uniform-observation-config UNIFORM_OBSERVATION_CONFIG
+                        Explicit Stage 4 candidate config; observation-only,
+                        no activation
+  --body-backend {cpu,mps}
+  --camera-label CAMERA_LABEL
+                        Human-readable source label in the report
+  --camera-mode {color,infrared,unknown}
+
+exit_statuses tests=0 compile=0 help=0

@@ -1,0 +1,56 @@
+test_close_during_worker_cancels_and_has_no_late_tk_callbacks (tests.test_uniform_models_ui.ModelsWindowTests.test_close_during_worker_cancels_and_has_no_late_tk_callbacks) ... ok
+test_evaluation_progress_cancellation_and_recovered_report (tests.test_uniform_models_ui.ModelsWindowTests.test_evaluation_progress_cancellation_and_recovered_report) ... ok
+test_no_candidate_metrics_or_deployment_enabled_without_prerequisites (tests.test_uniform_models_ui.ModelsWindowTests.test_no_candidate_metrics_or_deployment_enabled_without_prerequisites) ... ok
+test_report_nulls_and_legacy_limitations_are_explicit (tests.test_uniform_models_ui.ModelsWindowTests.test_report_nulls_and_legacy_limitations_are_explicit) ... ok
+test_review_requires_confirmation_and_correct_session_and_candidate (tests.test_uniform_models_ui.ModelsWindowTests.test_review_requires_confirmation_and_correct_session_and_candidate) ... ok
+test_capture_uses_supplied_frame_and_shared_group_without_flip (tests.test_uniform_workspace.UniformWorkspaceTests.test_capture_uses_supplied_frame_and_shared_group_without_flip) ... ok
+test_crop_proposal_does_not_approve_and_remains_editable (tests.test_uniform_workspace.UniformWorkspaceTests.test_crop_proposal_does_not_approve_and_remains_editable) ... ok
+test_destroy_during_background_work_has_no_tk_callback (tests.test_uniform_workspace.UniformWorkspaceTests.test_destroy_during_background_work_has_no_tk_callback) ... ok
+test_import_and_decode_stay_off_tk_thread (tests.test_uniform_workspace.UniformWorkspaceTests.test_import_and_decode_stay_off_tk_thread) ... ok
+test_named_categories_and_models_entry (tests.test_uniform_workspace.UniformWorkspaceTests.test_named_categories_and_models_entry) ... ok
+test_shared_action_opens_real_readiness_from_organizational_shirt (tests.test_uniform_workspace.UniformWorkspaceTests.test_shared_action_opens_real_readiness_from_organizational_shirt) ... Thread 0x000000016ee23000 (most recent call first):
+  File "/opt/homebrew/Cellar/python@3.12/3.12.13_2/Frameworks/Python.framework/Versions/3.12/lib/python3.12/tkinter/font.py", line 121 in __del__
+  File "/Users/jopethones/Documents/GitHub/cbvms3.0/core/uniform_dataset.py", line 362 in snapshot
+  File "/Users/jopethones/Documents/GitHub/cbvms3.0/ui/uniform_workspace.py", line 127 in load
+  File "/Users/jopethones/Documents/GitHub/cbvms3.0/ui/background_task.py", line 33 in work
+  File "/opt/homebrew/Cellar/python@3.12/3.12.13_2/Frameworks/Python.framework/Versions/3.12/lib/python3.12/threading.py", line 1012 in run
+  File "/opt/homebrew/Cellar/python@3.12/3.12.13_2/Frameworks/Python.framework/Versions/3.12/lib/python3.12/threading.py", line 1075 in _bootstrap_inner
+  File "/opt/homebrew/Cellar/python@3.12/3.12.13_2/Frameworks/Python.framework/Versions/3.12/lib/python3.12/threading.py", line 1032 in _bootstrap
+
+Current thread 0x00000001ee685e80 (most recent call first):
+  Garbage-collecting
+  File "/Users/jopethones/Documents/GitHub/cbvms3.0/tests/test_uniform_workspace.py", line 54 in wait
+  File "/Users/jopethones/Documents/GitHub/cbvms3.0/tests/test_uniform_workspace.py", line 36 in setUp
+  File "/opt/homebrew/Cellar/python@3.12/3.12.13_2/Frameworks/Python.framework/Versions/3.12/lib/python3.12/unittest/case.py", line 586 in _callSetUp
+  File "/opt/homebrew/Cellar/python@3.12/3.12.13_2/Frameworks/Python.framework/Versions/3.12/lib/python3.12/unittest/case.py", line 630 in run
+  File "/opt/homebrew/Cellar/python@3.12/3.12.13_2/Frameworks/Python.framework/Versions/3.12/lib/python3.12/unittest/case.py", line 690 in __call__
+  File "/opt/homebrew/Cellar/python@3.12/3.12.13_2/Frameworks/Python.framework/Versions/3.12/lib/python3.12/unittest/suite.py", line 122 in run
+  File "/opt/homebrew/Cellar/python@3.12/3.12.13_2/Frameworks/Python.framework/Versions/3.12/lib/python3.12/unittest/suite.py", line 84 in __call__
+  File "/opt/homebrew/Cellar/python@3.12/3.12.13_2/Frameworks/Python.framework/Versions/3.12/lib/python3.12/unittest/suite.py", line 122 in run
+  File "/opt/homebrew/Cellar/python@3.12/3.12.13_2/Frameworks/Python.framework/Versions/3.12/lib/python3.12/unittest/suite.py", line 84 in __call__
+  File "/opt/homebrew/Cellar/python@3.12/3.12.13_2/Frameworks/Python.framework/Versions/3.12/lib/python3.12/unittest/suite.py", line 122 in run
+  File "/opt/homebrew/Cellar/python@3.12/3.12.13_2/Frameworks/Python.framework/Versions/3.12/lib/python3.12/unittest/suite.py", line 84 in __call__
+  File "/opt/homebrew/Cellar/python@3.12/3.12.13_2/Frameworks/Python.framework/Versions/3.12/lib/python3.12/unittest/runner.py", line 240 in run
+  File "/opt/homebrew/Cellar/python@3.12/3.12.13_2/Frameworks/Python.framework/Versions/3.12/lib/python3.12/unittest/main.py", line 281 in runTests
+  File "/opt/homebrew/Cellar/python@3.12/3.12.13_2/Frameworks/Python.framework/Versions/3.12/lib/python3.12/unittest/main.py", line 105 in __init__
+  File "/opt/homebrew/Cellar/python@3.12/3.12.13_2/Frameworks/Python.framework/Versions/3.12/lib/python3.12/unittest/__main__.py", line 18 in <module>
+  File "<frozen runpy>", line 88 in _run_code
+  File "<frozen runpy>", line 198 in _run_module_as_main
+FAIL
+test_training_panel_keeps_sections_and_routes_camera_saves (tests.test_uniform_workspace.UniformWorkspaceTests.test_training_panel_keeps_sections_and_routes_camera_saves) ... ok
+test_upload_gallery_review_approval_and_label_correction (tests.test_uniform_workspace.UniformWorkspaceTests.test_upload_gallery_review_approval_and_label_correction) ... ok
+
+======================================================================
+FAIL: test_shared_action_opens_real_readiness_from_organizational_shirt (tests.test_uniform_workspace.UniformWorkspaceTests.test_shared_action_opens_real_readiness_from_organizational_shirt)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/jopethones/Documents/GitHub/cbvms3.0/tests/test_uniform_workspace.py", line 36, in setUp
+    self.wait()
+  File "/Users/jopethones/Documents/GitHub/cbvms3.0/tests/test_uniform_workspace.py", line 55, in wait
+    self.assertFalse(task.busy)
+AssertionError: True is not false
+
+----------------------------------------------------------------------
+Ran 13 tests in 17.729s
+
+FAILED (failures=1)

@@ -1,0 +1,8 @@
+test_shared_action_opens_real_readiness_from_organizational_shirt (tests.test_uniform_workspace.UniformWorkspaceTests.test_shared_action_opens_real_readiness_from_organizational_shirt) ... ok
+test_training_panel_keeps_sections_and_routes_camera_saves (tests.test_uniform_workspace.UniformWorkspaceTests.test_training_panel_keeps_sections_and_routes_camera_saves) ... ok
+test_upload_gallery_review_approval_and_label_correction (tests.test_uniform_workspace.UniformWorkspaceTests.test_upload_gallery_review_approval_and_label_correction) ... ok
+
+----------------------------------------------------------------------
+Ran 3 tests in 2.725s
+
+OK
