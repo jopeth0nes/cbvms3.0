@@ -37,6 +37,7 @@ CATEGORIES = {
     "other_clothing": "Wrong Uniform",
     "unassigned": "Unassigned (Legacy Review)",
 }
+GARMENT_CATEGORIES = frozenset({"campus_uniform", "organizational_shirt", "other_clothing"})
 MAX_FILE_BYTES = 20 * 1024 * 1024
 MAX_IMAGE_PIXELS = 40_000_000
 MAX_DIMENSION = 12_000
@@ -80,6 +81,10 @@ class ImportSummary(list):
     def message(self):
         return (f"Imported: {self.imported}; skipped as duplicates: {self.duplicates}; "
                 f"left unprocessed: {self.unprocessed}.")
+
+
+class _BatchReviewSkip(ValueError):
+    """A selected record became ineligible before its locked review write."""
 
 
 def _is_supported_zip_image(info) -> bool:
@@ -546,7 +551,9 @@ class UniformDataset:
                flags: list[str] | None = None, notes: str = "",
                crop_source: str = "manual", logo_reviewed: bool = False,
                logo_source_kind: str = "uncertain",
-               logo_association_confirmed: bool = False) -> dict:
+               logo_association_confirmed: bool = False,
+               _batch_expected: dict | None = None,
+               _batch_garment_only: bool = False) -> dict:
         _validate_category(category)
         if status not in {"pending_review", "approved", "excluded"}:
             raise ValueError("Invalid review status")
@@ -561,9 +568,31 @@ class UniformDataset:
             raise ValueError("Invalid logo source kind")
         with self._locked():
             catalog = self._load()
-            record = next((r for r in catalog["records"] if r["image_id"] == image_id), None)
+            matches = [r for r in catalog["records"] if r.get("image_id") == image_id]
+            record = matches[0] if matches else None
             if record is None:
                 raise KeyError(image_id)
+            if _batch_expected is not None:
+                if len(matches) != 1:
+                    raise _BatchReviewSkip("Image ID is ambiguous in the catalog.")
+                if _batch_expected.get("fingerprint") != self._batch_fingerprint(record):
+                    shown = _batch_expected.get("expected", {})
+                    changed = []
+                    for key, title in (("category", "category"), ("crop", "crop"), ("status", "review status"),
+                                       ("flags", "training-blocking flags")):
+                        if key in shown and shown[key] != record.get(key, [] if key == "flags" else None):
+                            changed.append(title)
+                    if "review_revision" in shown and shown["review_revision"] != len(record.get("review_history", [])):
+                        changed.append("review history")
+                    reason = (", ".join(changed) + " changed since display." if changed else
+                              "Record details, source uniqueness, crop proposal, or logo source changed since display.")
+                    raise _BatchReviewSkip(reason)
+                reason = self._batch_block_reason(record, crop, id_count=len(matches))
+                if reason:
+                    raise _BatchReviewSkip(reason)
+                if crop != (record.get("crop") or (record.get("crop_proposal") or {}).get("box")) or category != record.get("category"):
+                    raise _BatchReviewSkip("Displayed crop or category differs from the current record.")
+                crop_source = record.get("crop_source") or ("manual" if record.get("crop") else "detector")
             if not isinstance(crop, (list, tuple)) or len(crop) != 4 or any(type(x) is not int for x in crop):
                 raise ValueError("Crop must be four integer raster coordinates")
             x1, y1, x2, y2 = crop
@@ -615,14 +644,16 @@ class UniformDataset:
                     raise ValueError("Reference artwork cannot be approved as a training garment")
             reviewed_at = _review_now()
             new = {"category": category, "status": status, "crop": list(crop),
-                   "logo_visibility": logo_visibility, "logo_box": list(logo_box) if logo_box else None,
-                   "flags": list(dict.fromkeys(flags or [])), "notes": str(notes),
+                   "logo_visibility": record.get("logo_visibility", logo_visibility) if _batch_garment_only else logo_visibility,
+                   "logo_box": copy.deepcopy(record.get("logo_box")) if _batch_garment_only else (list(logo_box) if logo_box else None),
+                   "flags": copy.deepcopy(record.get("flags", [])) if _batch_garment_only else list(dict.fromkeys(flags or [])),
+                   "notes": record.get("notes", "") if _batch_garment_only else str(notes),
                    "preprocess_version": PREPROCESS_VERSION, "crop_source": crop_source}
             record.update(new)
             record["preprocess_version"] = PREPROCESS_VERSION
             record["crop_source"] = crop_source
-            annotate_logo = (logo_reviewed or logo_source_kind != "uncertain"
-                             or prior_annotation.get("schema") == "printed-logo-v1")
+            annotate_logo = (not _batch_garment_only and (logo_reviewed or logo_source_kind != "uncertain"
+                             or prior_annotation.get("schema") == "printed-logo-v1"))
             history_entry = {"at": reviewed_at, **new}
             if annotate_logo:
                 annotation = {
@@ -647,9 +678,101 @@ class UniformDataset:
                 }
                 record["logo_annotation"] = annotation
                 history_entry["logo_annotation"] = copy.deepcopy(annotation)
+            elif _batch_garment_only and prior_annotation:
+                history_entry["logo_annotation"] = copy.deepcopy(prior_annotation)
             record["review_history"].append(history_entry)
             self._save(catalog)
             return dict(record)
+
+    @staticmethod
+    def _batch_block_reason(record: dict, displayed_crop=None, *, id_count: int = 1) -> str | None:
+        # Import lazily to keep the catalog independent from the trainer module.
+        from core.uniform_candidate import BLOCKING_FLAGS, _flags, _valid_crop
+        if record.get("status") != "pending_review":
+            return "Record is no longer pending review."
+        if record.get("category") not in GARMENT_CATEGORIES:
+            return "Record has no approvable garment category."
+        if id_count != 1:
+            return "Image ID is ambiguous in the catalog."
+        blocked_flags = _flags(record) & BLOCKING_FLAGS
+        if blocked_flags:
+            return "Unresolved training-blocking flags: " + ", ".join(sorted(blocked_flags))
+        crop_record = dict(record, crop=displayed_crop) if displayed_crop is not None else record
+        if not _valid_crop(crop_record):
+            return "Crop is missing or invalid."
+        if record.get("duplicate_of") or len(record.get("sources", [])) != 1:
+            return "Record is duplicated or has ambiguous source occurrences."
+        if (record.get("logo_annotation") or {}).get("source_kind") == "reference_artwork":
+            return "Reference artwork cannot be approved as a training garment."
+        crop = displayed_crop if displayed_crop is not None else record.get("crop")
+        if not record.get("crop"):
+            proposal = record.get("crop_proposal") or {}
+            if proposal.get("box") != crop or proposal.get("association_uncertain"):
+                return "Current detector crop proposal is missing or has unresolved person association."
+        elif record.get("crop_source") == "detector" and not any(
+                p.get("box") == crop and not p.get("association_uncertain")
+                for p in record.get("crop_proposal_history", [])):
+            return "Detector crop has no confirmed stored proposal."
+        return None
+
+    def batch_review(self, selections: list[dict]) -> dict:
+        """Approve displayed pending records independently and durably by stable image ID.
+
+        Each selection contains image_id, displayed crop/category and a record
+        fingerprint captured by ``batch_review_snapshot``. A failure for one
+        image never rolls back earlier approvals.
+        """
+        results = []
+        seen = set()
+        for selection in selections:
+            image_id = str(selection.get("image_id", ""))
+            if image_id in seen:
+                results.append({"image_id": image_id, "status": "skipped", "reason": "Duplicate image ID in request."})
+                continue
+            seen.add(image_id)
+            try:
+                crop = list(selection.get("crop", []))
+                self.review(image_id, category=selection.get("category"), crop=crop, status="approved",
+                            logo_visibility="unknown", flags=[], notes="", crop_source=selection.get("crop_source") or "manual",
+                            _batch_expected=selection, _batch_garment_only=True)
+                results.append({"image_id": image_id, "status": "approved", "reason": "Approved."})
+            except _BatchReviewSkip as exc:
+                results.append({"image_id": image_id, "status": "skipped", "reason": str(exc)})
+            except Exception as exc:
+                results.append({"image_id": image_id, "status": "failed", "reason": f"{type(exc).__name__}: {exc}"})
+        return {"results": results,
+                "approved": sum(r["status"] == "approved" for r in results),
+                "skipped": sum(r["status"] == "skipped" for r in results),
+                "failed": sum(r["status"] == "failed" for r in results)}
+
+    @staticmethod
+    def _batch_fingerprint(record: dict) -> str:
+        value = {key: record.get(key) for key in ("image_id", "crop", "category", "status", "flags",
+                 "review_history", "duplicate_of", "sources", "crop_source", "crop_proposal", "crop_proposal_history",
+                 "logo_annotation", "sha256", "original_path", "width", "height", "preprocess_version")}
+        return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"), default=str).encode()).hexdigest()
+
+    @staticmethod
+    def batch_review_expectation(record: dict) -> dict:
+        return {"category": record.get("category"), "crop": copy.deepcopy(record.get("crop")),
+                "status": record.get("status"), "flags": copy.deepcopy(record.get("flags", [])),
+                "review_revision": len(record.get("review_history", []))}
+
+    def batch_review_snapshot(self, image_ids: list[str]) -> dict[str, dict]:
+        snap = self.snapshot()
+        by_id = {}
+        for record in snap["records"]:
+            if record.get("image_id") in image_ids:
+                by_id.setdefault(record["image_id"], []).append(record)
+        result = {}
+        for image_id, matches in by_id.items():
+            if len(matches) == 1:
+                row = matches[0]
+                crop = row.get("crop") or (row.get("crop_proposal") or {}).get("box")
+                reason = self._batch_block_reason(row, crop, id_count=len(matches))
+                result[image_id] = {"record": row, "crop": list(crop) if crop else None,
+                                    "reason": reason, "fingerprint": self._batch_fingerprint(row)}
+        return result
 
     def image(self, image_id: str, crop: bool = False) -> Image.Image:
         snap = self.snapshot()

@@ -118,6 +118,257 @@ class UniformWorkspaceTests(unittest.TestCase):
         self.assertEqual(result['status'], 'approved')
         self.assertEqual(self.source.read_bytes(), (self.dataset.root/result['original_path']).read_bytes())
 
+    def test_batch_gallery_selects_three_of_five_and_refreshes_trainer_eligibility(self):
+        paths = []
+        for index in range(5):
+            path = Path(self.tmp.name) / f'batch-{index}.png'
+            pixels = np.random.default_rng(700 + index).integers(0, 256, (180, 200, 3), dtype=np.uint8)
+            Image.fromarray(pixels).save(path)
+            paths.append(path)
+        ids = self.dataset.import_paths(paths, 'campus_uniform')
+        for index, iid in enumerate(ids):
+            self.dataset.review(iid, category='campus_uniform', crop=[20, 20, 180, 160],
+                                status='pending_review', flags=['obstruction'] if index == 4 else [],
+                                notes=f'fixture-{index}')
+        other = Path(self.tmp.name) / 'other-category.png'
+        Image.fromarray(np.random.default_rng(999).integers(0, 256, (180, 200, 3), dtype=np.uint8)).save(other)
+        other_id = self.dataset.import_paths([other], 'organizational_shirt')[0]
+        self.dataset.review(other_id, category='organizational_shirt', crop=[20, 20, 180, 160], status='pending_review', flags=[])
+        self.view.show_category('campus_uniform'); self.wait()
+        buttons = {w.cget('text'): w for w in self.descendants(self.view.tabs.tab('Campus Uniform'))
+                   if isinstance(w, ctk.CTkButton)}
+        buttons['Review multiple'].invoke(); self.wait()
+        gallery = self.view.views['campus_uniform'][0]
+        cards = sorted(gallery.winfo_children(), key=lambda card: (card.grid_info()['row'], card.grid_info()['column']))
+        checks = [next(w for w in card.winfo_children() if isinstance(w, ctk.CTkCheckBox))
+                  for card in cards if any(isinstance(w, ctk.CTkCheckBox) for w in card.winfo_children())]
+        self.assertEqual(len(checks), 4)  # blocked fifth row has a reason and individual review only
+        self.assertTrue(all(not check.get() for check in checks))
+        for check in checks[:3]:
+            check.toggle()
+        button = self.view.views['campus_uniform'][4]
+        self.assertEqual(button.cget('text'), 'Approve selected (3)')
+        before = CandidateService(self.dataset, candidates_root=Path(self.tmp.name)/'candidates').summary()['included_by_category']['campus_uniform']
+        button.invoke(); self.wait()
+        after = CandidateService(self.dataset, candidates_root=Path(self.tmp.name)/'candidates').summary()['included_by_category']['campus_uniform']
+        self.assertEqual(after - before, 3)
+        self.assertIn('3 approved, 0 skipped, 0 failed', self.view.status.cget('text'))
+        rows = {r['image_id']: r for r in self.dataset.snapshot()['records']}
+        self.assertEqual([rows[iid]['status'] for iid in ids],
+                         ['approved', 'approved', 'approved', 'pending_review', 'pending_review'])
+        self.assertEqual(sum(rows[iid]['status'] == 'approved' for iid in ids), 3)
+        self.assertEqual(sum(rows[iid]['status'] == 'pending_review' for iid in ids), 2)
+        self.view.refresh(); self.wait()
+        self.assertEqual(sum(r['status'] == 'approved' for r in self.dataset.snapshot()['records']), 3)
+        self.assertIn('3 approved • 2 pending review', self.view.views['campus_uniform'][1].cget('text'))
+        self.assertEqual(next(r for r in self.dataset.snapshot()['records'] if r['image_id'] == other_id)['status'], 'pending_review')
+        self.view.destroy()
+        self.view = UniformWorkspace(self.root, capture=self.capture, dataset=UniformDataset(self.dataset.root),
+            candidate_service=CandidateService(UniformDataset(self.dataset.root), candidates_root=Path(self.tmp.name)/'candidates'))
+        self.view.pack(fill='both', expand=True); self.wait()
+        self.view.show_category('campus_uniform'); self.wait()
+        self.assertIn('3 approved • 2 pending review', self.view.views['campus_uniform'][1].cget('text'))
+        reopened = {r['image_id']: r for r in self.view.dataset.snapshot()['records']}
+        self.assertEqual([reopened[iid]['status'] for iid in ids],
+                         ['approved', 'approved', 'approved', 'pending_review', 'pending_review'])
+        self.assertEqual(self.view.candidate_service.summary()['included_by_category']['campus_uniform'] - before, 3)
+
+    def test_batch_selection_clears_when_category_or_page_changes(self):
+        path = Path(self.tmp.name) / 'scope.png'
+        Image.fromarray(np.random.default_rng(811).integers(0, 256, (180, 200, 3), dtype=np.uint8)).save(path)
+        iid = self.dataset.import_paths([path], 'campus_uniform')[0]
+        self.dataset.review(iid, category='campus_uniform', crop=[20, 20, 180, 160], status='pending_review', flags=[])
+        second = Path(self.tmp.name) / 'scope-second.png'
+        Image.fromarray(np.random.default_rng(813).integers(0, 256, (180, 200, 3), dtype=np.uint8)).save(second)
+        second_id = self.dataset.import_paths([second], 'campus_uniform')[0]
+        self.dataset.review(second_id, category='campus_uniform', crop=[20, 20, 180, 160], status='pending_review', flags=[])
+        other = Path(self.tmp.name) / 'scope-other.png'
+        Image.fromarray(np.random.default_rng(812).integers(0, 256, (180, 200, 3), dtype=np.uint8)).save(other)
+        other_id = self.dataset.import_paths([other], 'organizational_shirt')[0]
+        self.dataset.review(other_id, category='organizational_shirt', crop=[20, 20, 180, 160], status='pending_review', flags=[])
+        self.view.show_category('campus_uniform'); self.wait()
+        self.view.toggle_batch('campus_uniform'); self.wait()
+        card = self.view.views['campus_uniform'][0].winfo_children()[0]
+        check = next(w for w in card.winfo_children() if isinstance(w, ctk.CTkCheckBox))
+        check.toggle()
+        self.assertEqual(self.view.views['campus_uniform'][4].cget('text'), 'Approve selected (1)')
+        with patch('ui.uniform_workspace.PAGE_SIZE', 1):
+            self.view.refresh(); self.wait()
+            card = self.view.views['campus_uniform'][0].winfo_children()[0]
+            next(w for w in card.winfo_children() if isinstance(w, ctk.CTkCheckBox)).toggle()
+            self.assertEqual(self.view.views['campus_uniform'][4].cget('text'), 'Approve selected (1)')
+            footer = next(w for w in self.descendants(self.view)
+                          if isinstance(w, ctk.CTkButton) and w.cget('text') == 'Next')
+            footer.invoke(); self.wait()
+            self.assertEqual(self.view.page, 1)
+        self.assertEqual(self.view.views['campus_uniform'][4].cget('text'), 'Approve selected (0)')
+        with patch('ui.uniform_workspace.PAGE_SIZE', 1):
+            previous = next(w for w in self.descendants(self.view)
+                            if isinstance(w, ctk.CTkButton) and w.cget('text') == 'Previous')
+            previous.invoke(); self.wait()
+        card = self.view.views['campus_uniform'][0].winfo_children()[0]
+        check = next(w for w in card.winfo_children() if isinstance(w, ctk.CTkCheckBox))
+        self.assertFalse(check.get())
+        check.toggle()
+        self.view.tabs._segmented_button._buttons_dict['Organizational Shirt'].invoke(); self.wait()
+        self.view.tabs._segmented_button._buttons_dict['Campus Uniform'].invoke(); self.wait()
+        self.assertEqual(self.view.views['campus_uniform'][4].cget('text'), 'Approve selected (0)')
+        self.assertEqual(self.dataset.snapshot()['records'][0]['status'], 'pending_review')
+        self.assertEqual(next(r for r in self.dataset.snapshot()['records'] if r['image_id'] == other_id)['status'], 'pending_review')
+
+    def test_unreadable_original_blocks_only_its_gallery_card(self):
+        iid = self.dataset.import_paths([self.source], 'campus_uniform')[0]
+        self.dataset.review(iid, category='campus_uniform', crop=[20, 20, 180, 160],
+                            status='pending_review', flags=[])
+        row = self.dataset.snapshot()['records'][0]
+        (self.dataset.root / row['original_path']).unlink()
+        self.view.show_category('campus_uniform'); self.wait()
+        self.view.toggle_batch('campus_uniform'); self.wait()
+        card = self.view.views['campus_uniform'][0].winfo_children()[0]
+        self.assertTrue(any(isinstance(w, ctk.CTkLabel) and 'Original image unavailable' in w.cget('text')
+                            for w in card.winfo_children()))
+        self.assertFalse(any(isinstance(w, ctk.CTkCheckBox) for w in card.winfo_children()))
+
+    def test_batch_rechecks_crop_after_selection(self):
+        path = Path(self.tmp.name) / 'stale-crop.png'
+        Image.fromarray(np.random.default_rng(820).integers(0, 256, (180, 200, 3), dtype=np.uint8)).save(path)
+        iid = self.dataset.import_paths([path], 'campus_uniform')[0]
+        self.dataset.review(iid, category='campus_uniform', crop=[20, 20, 180, 160], status='pending_review', flags=[])
+        self.view.show_category('campus_uniform'); self.wait()
+        next(w for w in self.descendants(self.view) if isinstance(w, ctk.CTkButton) and w.cget('text') == 'Review multiple').invoke()
+        self.wait()
+        card = self.view.views['campus_uniform'][0].winfo_children()[0]
+        next(w for w in card.winfo_children() if isinstance(w, ctk.CTkCheckBox)).toggle()
+        self.dataset.review(iid, category='campus_uniform', crop=[21, 20, 180, 160], status='pending_review', flags=[])
+        self.view.views['campus_uniform'][4].invoke(); self.wait()
+        row = next(r for r in self.dataset.snapshot()['records'] if r['image_id'] == iid)
+        self.assertEqual(row['status'], 'pending_review')
+        self.assertEqual(row['crop'], [21, 20, 180, 160])
+        self.assertIn('crop', self.view.status.cget('text'))
+        self.assertIn('changed since display', self.view.status.cget('text'))
+
+    def test_batch_organizational_shirt_refreshes_open_trainer_counts(self):
+        path = Path(self.tmp.name) / 'organizational-batch.png'
+        Image.fromarray(np.random.default_rng(860).integers(
+            0, 256, (180, 200, 3), dtype=np.uint8)).save(path)
+        iid = self.dataset.import_paths([path], 'organizational_shirt')[0]
+        self.dataset.review(iid, category='organizational_shirt', crop=[20, 20, 180, 160],
+                            status='pending_review', flags=[])
+        self.view.show_category('organizational_shirt'); self.wait()
+        self.view.open_candidates(); self.wait()
+        window = self.view._candidate_window
+        self.wait(window.task)
+        self.assertIn('Organizational Shirt: 0 approved • 0 eligible/included', window.coverage.cget('text'))
+        next(w for w in self.descendants(self.view.tabs.tab('Organizational Shirt'))
+             if isinstance(w, ctk.CTkButton) and w.cget('text') == 'Review multiple').invoke()
+        self.wait()
+        self.assertEqual(self.view.views['organizational_shirt'][4].cget('text'), 'Approve selected (0)')
+        check = next(w for w in self.descendants(self.view.views['organizational_shirt'][0])
+                     if isinstance(w, ctk.CTkCheckBox))
+        check.toggle()
+        # An already-running readiness read must finish before the new one starts.
+        release = threading.Event()
+        try:
+            window.task.run(lambda: release.wait(3), lambda _: None, self.fail)
+            self.view.views['organizational_shirt'][4].invoke(); self.wait()
+        finally:
+            release.set()
+        deadline = time.monotonic() + 8
+        while ('Organizational Shirt: 1 approved • 1 eligible/included' not in window.coverage.cget('text')
+               and time.monotonic() < deadline):
+            self.pump()
+        self.assertIn('Organizational Shirt: 1 approved • 1 eligible/included', window.coverage.cget('text'))
+        self.assertIn('requires 10', window.readiness.cget('text'))
+        self.assertEqual(window.start_button.cget('state'), 'disabled')
+        window.destroy()
+
+    def test_batch_stable_ids_survive_reorder_and_refresh_clears_selection(self):
+        ids = []
+        for index in range(2):
+            path = Path(self.tmp.name) / f'reorder-{index}.png'
+            Image.fromarray(np.random.default_rng(850 + index).integers(
+                0, 256, (180, 200, 3), dtype=np.uint8)).save(path)
+            iid = self.dataset.import_paths([path], 'other_clothing')[0]
+            self.dataset.review(iid, category='other_clothing', crop=[20, 20, 180, 160],
+                                status='pending_review', flags=[])
+            ids.append(iid)
+        self.view.show_category('other_clothing'); self.wait()
+        next(w for w in self.descendants(self.view.tabs.tab('Wrong Uniform'))
+             if isinstance(w, ctk.CTkButton) and w.cget('text') == 'Review multiple').invoke()
+        self.wait()
+        card = self.view.views['other_clothing'][0].winfo_children()[0]
+        next(w for w in card.winfo_children() if isinstance(w, ctk.CTkCheckBox)).toggle()
+        with self.dataset._locked():
+            catalog = self.dataset._load()
+            catalog['records'].reverse()
+            self.dataset._save(catalog)
+        self.view.views['other_clothing'][4].invoke(); self.wait()
+        rows = {r['image_id']: r for r in self.dataset.snapshot()['records']}
+        self.assertEqual(rows[ids[0]]['status'], 'approved')
+        self.assertEqual(rows[ids[1]]['status'], 'pending_review')
+        self.assertNotIn('logo_annotation', rows[ids[0]])
+        check = next(w for w in self.descendants(self.view.views['other_clothing'][0])
+                     if isinstance(w, ctk.CTkCheckBox))
+        check.toggle()
+        self.view.refresh()
+        self.assertEqual(self.view.views['other_clothing'][4].cget('text'), 'Approve selected (0)')
+        self.assertEqual(check.cget('state'), 'disabled')
+        self.wait()
+        self.view.views['other_clothing'][4].invoke(); self.wait()
+        self.assertEqual(next(r for r in self.dataset.snapshot()['records']
+                              if r['image_id'] == ids[1])['status'], 'pending_review')
+
+    def test_batch_double_click_partial_failure_and_retry_from_gallery(self):
+        ids = []
+        for index in range(2):
+            path = Path(self.tmp.name) / f'partial-{index}.png'
+            Image.fromarray(np.random.default_rng(830 + index).integers(0, 256, (180, 200, 3), dtype=np.uint8)).save(path)
+            iid = self.dataset.import_paths([path], 'campus_uniform')[0]
+            self.dataset.review(iid, category='campus_uniform', crop=[20, 20, 180, 160], status='pending_review', flags=[])
+            ids.append(iid)
+        self.view.show_category('campus_uniform'); self.wait()
+        next(w for w in self.descendants(self.view) if isinstance(w, ctk.CTkButton) and w.cget('text') == 'Review multiple').invoke()
+        self.wait()
+        cards = self.view.views['campus_uniform'][0].winfo_children()
+        for card in cards:
+            for widget in card.winfo_children():
+                if isinstance(widget, ctk.CTkCheckBox): widget.toggle()
+        button = self.view.views['campus_uniform'][4]
+        entered, release = threading.Event(), threading.Event()
+        original_save = self.dataset._save
+        calls = [0]
+        ui_thread = threading.get_ident()
+        def fail_second(catalog):
+            self.assertNotEqual(threading.get_ident(), ui_thread)
+            calls[0] += 1
+            if calls[0] == 1:
+                entered.set(); release.wait(2)
+            if calls[0] == 2:
+                raise OSError('fixture second-row save failure')
+            original_save(catalog)
+        with patch.object(self.dataset, '_save', side_effect=fail_second):
+            button.invoke()
+            self.assertTrue(entered.wait(1))
+            heartbeat = []
+            self.root.after(0, lambda: heartbeat.append(True))
+            self.pump()
+            self.assertEqual(heartbeat, [True])
+            button.invoke()  # A repeated click while the worker is busy cannot start another write.
+            release.set()
+            self.wait()
+        rows = {r['image_id']: r for r in self.dataset.snapshot()['records']}
+        self.assertEqual(sum(rows[iid]['status'] == 'approved' for iid in ids), 1)
+        self.assertEqual(sum(rows[iid]['status'] == 'pending_review' for iid in ids), 1)
+        self.assertIn('1 approved, 0 skipped, 1 failed', self.view.status.cget('text'))
+        self.view.show_category('campus_uniform'); self.wait()
+        for card in self.view.views['campus_uniform'][0].winfo_children():
+            checks = [w for w in card.winfo_children() if isinstance(w, ctk.CTkCheckBox)]
+            if checks: checks[0].toggle()
+        self.view.views['campus_uniform'][4].invoke(); self.wait()
+        rows = {r['image_id']: r for r in self.dataset.snapshot()['records']}
+        self.assertTrue(all(rows[iid]['status'] == 'approved' for iid in ids))
+        self.assertTrue(all(len(rows[iid]['review_history']) == 2 for iid in ids))
+
     def test_limit_failure_shows_progress_and_refreshes_partial_gallery(self):
         self.view.show_category("other_clothing"); self.wait()
         paths = []

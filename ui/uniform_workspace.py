@@ -29,6 +29,7 @@ class UniformWorkspace(ctk.CTkFrame):
         self.training_busy = training_busy
         self.candidate_service = candidate_service
         self._candidate_window = None
+        self._candidate_refresh_after = None
         self._models_window = None
         self.models_service = models_service
         self.model_actor_provider = model_actor_provider
@@ -39,6 +40,10 @@ class UniformWorkspace(ctk.CTkFrame):
         self._review = None
         self._refresh_again = False
         self._status_override = None
+        self._batch_mode = False
+        self._batch_scope = None
+        self._batch_selection = {}
+        self._batch_checkboxes = []
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(2, weight=1)
         self.status = ctk.CTkLabel(self, text='Loading review dataset…', anchor='w', wraplength=950)
@@ -52,7 +57,7 @@ class UniformWorkspace(ctk.CTkFrame):
             title = CATEGORIES[category] if category in GARMENTS else 'Evaluation & Models'
             tab = self.tabs.add(title)
             tab.grid_columnconfigure(0, weight=1)
-            tab.grid_rowconfigure(3, weight=1)
+            tab.grid_rowconfigure(4, weight=1)
             if category == 'unassigned':
                 self.readiness = ctk.CTkLabel(tab, text='Reading readiness…', justify='left', anchor='w', wraplength=900)
                 self.readiness.grid(row=0, column=0, sticky='ew', padx=8)
@@ -71,29 +76,51 @@ class UniformWorkspace(ctk.CTkFrame):
                     ('Import ZIP', lambda c=category: self.import_zip(c)),
                     ('Capture from Camera', lambda c=category: self.capture(c))):
                     ctk.CTkButton(actions, text=title, command=action, width=145).pack(side='left', padx=4, pady=6)
+                ctk.CTkButton(actions, text='Review multiple', width=145,
+                              command=lambda c=category: self.toggle_batch(c)).pack(side='left', padx=4, pady=6)
                 text = ('Add clear examples of clothing outside the Campus Uniform and Organizational Shirt categories.'
                         if category == 'other_clothing' else
                         'Each original is preserved. Imports need crop and label review before approval.')
             counts = ctk.CTkLabel(tab, text=text, anchor='w', wraplength=900)
             counts.grid(row=2, column=0, sticky='ew', padx=8, pady=4)
+            batch_label = ctk.CTkLabel(tab, text='', anchor='w', wraplength=900, text_color=COLOR_TEXT_MUTED)
+            batch_label.grid(row=3, column=0, sticky='ew', padx=8)
             gallery = ScrollableFrame(tab, fg_color=COLOR_BG)
-            gallery.grid(row=3, column=0, sticky='nsew')
+            gallery.grid(row=4, column=0, sticky='nsew')
             for col in range(3):
                 gallery.grid_columnconfigure(col, weight=1)
             footer = ctk.CTkFrame(tab, fg_color='transparent')
-            footer.grid(row=4, column=0, sticky='ew')
+            footer.grid(row=5, column=0, sticky='ew')
             ctk.CTkButton(footer, text='Previous', width=95, command=lambda: self.move_page(-1)).pack(side='left', padx=4)
             page = ctk.CTkLabel(footer, text='')
             page.pack(side='left', padx=12)
             ctk.CTkButton(footer, text='Next', width=95, command=lambda: self.move_page(1)).pack(side='left', padx=4)
-            self.views[category] = (gallery, counts, page)
+            approve = ctk.CTkButton(footer, text='Approve selected (0)', command=lambda c=category: self.approve_selected(c))
+            self.views[category] = (gallery, counts, page, batch_label, approve)
         self.refresh()
+
+    def _refresh_candidate_counts(self):
+        self._candidate_refresh_after = None
+        window = self._candidate_window
+        if window is None or not window.winfo_exists():
+            return
+        if window.task.busy:
+            self._candidate_refresh_after = self.after(100, self._refresh_candidate_counts)
+        else:
+            window.refresh()
+
+    def destroy(self):
+        if self._candidate_refresh_after is not None:
+            self.after_cancel(self._candidate_refresh_after)
+            self._candidate_refresh_after = None
+        super().destroy()
 
     def category(self):
         title = self.tabs.get()
         return next((c for c in GARMENTS if CATEGORIES[c] == title), 'unassigned')
 
     def _tab_changed(self):
+        self._batch_selection.clear()
         self.page = 0
         self.refresh()
 
@@ -130,6 +157,17 @@ class UniformWorkspace(ctk.CTkFrame):
         return self.task.run(operation, finished, failed)
 
     def refresh(self):
+        # A refresh can reorder rows or complete an earlier asynchronous read.
+        # Drop all visual selections; the dataset still independently rechecks IDs.
+        self._batch_selection.clear()
+        for view in self.views.values():
+            view[4].configure(text='Approve selected (0)', state='disabled')
+        for checkbox in self._batch_checkboxes:
+            try:
+                checkbox.deselect()
+                checkbox.configure(state='disabled')
+            except Exception:
+                pass
         if self.task.busy:
             self._refresh_again = True
             return
@@ -139,43 +177,82 @@ class UniformWorkspace(ctk.CTkFrame):
             candidate = service or CandidateService(dataset, candidates_root=ROOT / 'data' / 'uniform_candidates')
             snapshot = dataset.snapshot()
             records = [r for r in snapshot['records'] if r['category'] == category]
+            id_counts = {}
+            for item in snapshot['records']:
+                id_counts[item.get('image_id')] = id_counts.get(item.get('image_id'), 0) + 1
             max_page = max(0, (len(records) - 1) // PAGE_SIZE)
             actual = min(page, max_page)
             rows = []
             for record in records[actual * PAGE_SIZE:(actual + 1) * PAGE_SIZE]:
-                image = dataset.image(record['image_id'])
-                image.thumbnail((190, 125))
-                rows.append((record, image))
+                crop = record.get('crop') or (record.get('crop_proposal') or {}).get('box')
+                image_error = None
+                try:
+                    image = dataset.image(record['image_id'])
+                    preview = image.crop(tuple(crop)) if crop and len(crop) == 4 else Image.new('RGB', (190, 125), '#343b46')
+                    preview.thumbnail((190, 125))
+                except Exception as exc:
+                    image_error = f"Original image unavailable: {exc}"
+                    preview = Image.new('RGB', (190, 125), '#343b46')
+                rows.append((record, preview, crop, image_error))
             models = []
             for name in ('uniform_cls.pt', 'uniform_embed_ref.npz', 'uniform_color_ref.json'):
                 path = ROOT / 'models' / name
                 models.append(f'{name}: SHA256 {hashlib.sha256(path.read_bytes()).hexdigest()[:12]}' if path.is_file() else f'{name}: not present')
-            return snapshot, records, rows, actual, models, candidate
+            return snapshot, records, rows, actual, models, candidate, id_counts
         def loaded(value):
-            snapshot, records, rows, actual, models, candidate = value
+            snapshot, records, rows, actual, models, candidate, id_counts = value
             self.candidate_service = candidate
             if category != self.category() or page != self.page:
                 self._refresh_again = False
                 self.refresh()
                 return
             self.page = actual
-            gallery, counts, page_label = self.views[category]
+            gallery, counts, page_label, batch_label, approve_button = self.views[category]
             for widget in gallery.winfo_children():
                 widget.destroy()
+            self._batch_checkboxes.clear()
             self._images.clear()
+            scope = (category, actual)
+            if self._batch_scope != scope:
+                self._batch_selection.clear()
+                self._batch_scope = scope
             totals = {s: sum(r['status'] == s for r in records) for s in ('approved', 'pending_review', 'excluded')}
             instruction = ('Add clear examples of clothing outside the Campus Uniform and Organizational Shirt categories.\n'
                            if category == 'other_clothing' else '')
             counts.configure(text=instruction + f"{len(records)} unique images • {totals['approved']} approved • {totals['pending_review']} pending review • {totals['excluded']} excluded\n"
                 + f"{sum(max(0, len(r.get('sources', []))-1) for r in records)} exact duplicate occurrences • {sum(bool(r.get('duplicate_of')) for r in records)} images flagged as near-duplicates")
+            batch_label.configure(text=(f"Selection is limited to {CATEGORIES[category]}, page {actual + 1}; changing category, page or refreshing clears it."
+                                        if self._batch_mode and category in GARMENTS else ""))
+            if self._batch_mode and category in GARMENTS:
+                if not approve_button.winfo_ismapped():
+                    approve_button.pack(side='left', padx=4)
+            else:
+                approve_button.pack_forget()
+            approve_button.configure(text=f"Approve selected ({len(self._batch_selection)})",
+                                     state='normal' if self._batch_mode and self._batch_selection else 'disabled')
             page_label.configure(text=f'Page {actual + 1} • showing {len(rows)} of {len(records)}')
-            for i, (record, picture) in enumerate(rows):
+            for i, (record, picture, display_crop, image_error) in enumerate(rows):
                 card = ctk.CTkFrame(gallery, fg_color=COLOR_SURFACE)
                 card.grid(row=i//3, column=i%3, sticky='nsew', padx=5, pady=5)
                 img = ctk.CTkImage(light_image=picture, dark_image=picture, size=picture.size)
                 self._images.append(img)
                 ctk.CTkLabel(card, text='', image=img).pack(pady=6)
-                ctk.CTkLabel(card, text=f"{record['status'].replace('_', ' ')} • {record['width']} × {record['height']}\n{len(record.get('sources', []))} source occurrence(s)", wraplength=200).pack(padx=6)
+                ctk.CTkLabel(card, text=f"{CATEGORIES.get(record.get('category'), record.get('category'))}\n{record['status'].replace('_', ' ')} • {record['width']} × {record['height']}\n{len(record.get('sources', []))} source occurrence(s)\nPhoto {record['image_id'][:10]}", wraplength=200).pack(padx=6)
+                if not display_crop and not image_error:
+                    ctk.CTkLabel(card, text='No saved or proposed torso crop', wraplength=200,
+                                 text_color=COLOR_TEXT_MUTED).pack(padx=6)
+                reason = dataset._batch_block_reason(record, display_crop, id_count=id_counts.get(record.get('image_id'), 0))
+                if image_error:
+                    reason = image_error
+                if self._batch_mode and record.get('status') == 'pending_review' and reason is None and display_crop and not image_error:
+                    selected = record['image_id'] in self._batch_selection
+                    check = ctk.CTkCheckBox(card, text='Select for approval', command=lambda r=record, c=category, p=actual, box=list(display_crop): self._toggle_selected(c, p, r, box))
+                    check.pack(padx=6, pady=3)
+                    self._batch_checkboxes.append(check)
+                    if selected:
+                        check.select()
+                elif self._batch_mode and reason:
+                    ctk.CTkLabel(card, text=reason, wraplength=200, text_color='#e89a73').pack(padx=6)
                 ctk.CTkButton(card, text='Review original & crop', command=lambda r=record: self.open_review(r)).pack(padx=6, pady=6)
             if not rows:
                 ctk.CTkLabel(gallery, text='No examples yet. Import photos to begin review.', text_color=COLOR_TEXT_MUTED).grid(row=0, column=0, columnspan=3, pady=25)
@@ -243,8 +320,57 @@ class UniformWorkspace(ctk.CTkFrame):
             self.candidate_launch_pending = False
 
     def move_page(self, delta):
+        self._batch_selection.clear()
         self.page = max(0, self.page + delta)
         self.refresh()
+
+    def toggle_batch(self, category):
+        if category != self.category() or category not in GARMENTS:
+            return
+        self._batch_mode = not self._batch_mode if self._batch_scope and self._batch_scope[0] == category else True
+        self._batch_selection.clear()
+        self._batch_scope = (category, self.page)
+        self.refresh()
+
+    def _toggle_selected(self, category, page, record, crop):
+        if (self.task.busy or not self._batch_mode or category != self.category()
+                or (category, page) != self._batch_scope or page != self.page):
+            return
+        iid = record['image_id']
+        if iid in self._batch_selection:
+            del self._batch_selection[iid]
+        else:
+            self._batch_selection[iid] = {
+                'image_id': iid, 'category': record.get('category'), 'crop': list(crop),
+                'fingerprint': self.dataset._batch_fingerprint(record),
+                'expected': self.dataset.batch_review_expectation(record),
+            }
+        _, _, _, _, button = self.views[category]
+        button.configure(text=f"Approve selected ({len(self._batch_selection)})",
+                         state='normal' if self._batch_selection else 'disabled')
+
+    def approve_selected(self, category):
+        if (self.task.busy or category != self.category() or (category, self.page) != self._batch_scope
+                or not self._batch_selection
+                or any(item.get('category') != category for item in self._batch_selection.values())):
+            return
+        selected = [dict(value) for value in self._batch_selection.values()]
+        self._batch_selection.clear()
+        _, _, _, label, button = self.views[category]
+        button.configure(text='Approving selected…', state='disabled')
+        for checkbox in self._batch_checkboxes:
+            checkbox.configure(state='disabled')
+        label.configure(text=f"Rechecking and saving {len(selected)} selected image(s)…")
+        dataset = self.dataset
+        def done(result):
+            details = [f"{r['image_id'][:10]}: {r['status']} — {r['reason']}" for r in result['results']]
+            self._status_override = (f"Batch review: {result['approved']} approved, {result['skipped']} skipped, "
+                                     f"{result['failed']} failed. " + ' '.join(details))
+            self.status.configure(text=self._status_override)
+            self._batch_mode = True
+            if self._candidate_refresh_after is None:
+                self._refresh_candidate_counts()
+        self.run(lambda: dataset.batch_review(selected), 'Approving selected garment photos…', done)
 
     def upload(self, category):
         dataset = self.dataset
