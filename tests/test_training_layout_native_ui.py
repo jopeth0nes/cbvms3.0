@@ -70,7 +70,7 @@ class TrainingLayoutTests(unittest.TestCase):
                         for child in w.winfo_children():
                             yield child
                             yield from descendants(child)
-                    required={'Upload Photos','Import Folder','Import ZIP','Capture from Camera','Review multiple'}
+                    required={'Upload Photos','Import Folder','Import ZIP','Capture from Camera','Approve All Pending Photos'}
                     visible={w.cget('text'):w for w in descendants(view)
                              if isinstance(w,ctk.CTkButton) and w.winfo_ismapped()}
                     self.assertTrue(required <= visible.keys())
@@ -78,12 +78,8 @@ class TrainingLayoutTests(unittest.TestCase):
                         self.assertGreaterEqual(button.winfo_rootx(),app.winfo_rootx())
                         self.assertLessEqual(button.winfo_rootx()+button.winfo_width(),app.winfo_rootx()+1280)
                         self.assertLessEqual(button.winfo_rooty()+button.winfo_height(),app.winfo_rooty()+800)
-                    visible['Review multiple'].invoke()
-                    wait(lambda: not view.task.busy)
-                    approve = view.views['other_clothing'][4]
-                    self.assertTrue(approve.winfo_ismapped())
-                    self.assertLessEqual(approve.winfo_rootx()+approve.winfo_width(), app.winfo_rootx()+1280)
-                    self.assertLessEqual(approve.winfo_rooty()+approve.winfo_height(), app.winfo_rooty()+800)
+                    self.assertFalse({'Review multiple','Approve selected (0)'} & visible.keys())
+                    self.assertFalse(any(isinstance(w,ctk.CTkCheckBox) for w in descendants(view)))
                     gallery=view.views['other_clothing'][0]
                     canvas=gallery._parent_canvas
                     before=canvas.yview()[0]

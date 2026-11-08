@@ -1,6 +1,7 @@
 """Uniform review and isolated candidates. Slow work uses BackgroundTask."""
 from pathlib import Path
 import hashlib
+import threading
 import tkinter as tk
 from tkinter import filedialog
 
@@ -38,18 +39,18 @@ class UniformWorkspace(ctk.CTkFrame):
         self.page = 0
         self._images = []
         self._review = None
+        self._review_write_pending = threading.Event()
         self._refresh_again = False
         self._status_override = None
-        self._batch_mode = False
-        self._batch_scope = None
-        self._batch_selection = {}
-        self._batch_checkboxes = []
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(2, weight=1)
         self.status = ctk.CTkLabel(self, text='Loading review dataset…', anchor='w', wraplength=950)
         self.status.grid(row=0, column=0, sticky='ew', padx=12, pady=6)
-        ctk.CTkButton(self, text=TRAIN_ACTION, command=self.open_candidates).grid(
-            row=1, column=0, sticky='w', padx=12, pady=4)
+        header_actions = ctk.CTkFrame(self, fg_color='transparent')
+        header_actions.grid(row=1, column=0, sticky='w', padx=8, pady=4)
+        ctk.CTkButton(header_actions, text=TRAIN_ACTION, command=self.open_candidates).pack(side='left', padx=4)
+        self.approve_all_button = ctk.CTkButton(header_actions, text='Approve All Pending Photos', command=self.confirm_approve_all)
+        self.approve_all_button.pack(side='left', padx=4)
         self.tabs = ctk.CTkTabview(self, command=self._tab_changed)
         self.tabs.grid(row=2, column=0, sticky='nsew')
         self.views = {}
@@ -74,17 +75,13 @@ class UniformWorkspace(ctk.CTkFrame):
                     ('Upload Photos', lambda c=category: self.upload(c)),
                     ('Import Folder', lambda c=category: self.import_folder(c)),
                     ('Import ZIP', lambda c=category: self.import_zip(c)),
-                    ('Capture from Camera', lambda c=category: self.capture(c))):
+                    ('Capture from Camera', lambda c=category: self.start_capture(c))):
                     ctk.CTkButton(actions, text=title, command=action, width=145).pack(side='left', padx=4, pady=6)
-                ctk.CTkButton(actions, text='Review multiple', width=145,
-                              command=lambda c=category: self.toggle_batch(c)).pack(side='left', padx=4, pady=6)
                 text = ('Add clear examples of clothing outside the Campus Uniform and Organizational Shirt categories.'
                         if category == 'other_clothing' else
-                        'Each original is preserved. Imports need crop and label review before approval.')
+                        'Bulk approval accepts pending photos; crop quality, warnings, and provenance still affect training eligibility.')
             counts = ctk.CTkLabel(tab, text=text, anchor='w', wraplength=900)
             counts.grid(row=2, column=0, sticky='ew', padx=8, pady=4)
-            batch_label = ctk.CTkLabel(tab, text='', anchor='w', wraplength=900, text_color=COLOR_TEXT_MUTED)
-            batch_label.grid(row=3, column=0, sticky='ew', padx=8)
             gallery = ScrollableFrame(tab, fg_color=COLOR_BG)
             gallery.grid(row=4, column=0, sticky='nsew')
             for col in range(3):
@@ -95,8 +92,7 @@ class UniformWorkspace(ctk.CTkFrame):
             page = ctk.CTkLabel(footer, text='')
             page.pack(side='left', padx=12)
             ctk.CTkButton(footer, text='Next', width=95, command=lambda: self.move_page(1)).pack(side='left', padx=4)
-            approve = ctk.CTkButton(footer, text='Approve selected (0)', command=lambda c=category: self.approve_selected(c))
-            self.views[category] = (gallery, counts, page, batch_label, approve)
+            self.views[category] = (gallery, counts, page)
         self.refresh()
 
     def _refresh_candidate_counts(self):
@@ -120,7 +116,6 @@ class UniformWorkspace(ctk.CTkFrame):
         return next((c for c in GARMENTS if CATEGORIES[c] == title), 'unassigned')
 
     def _tab_changed(self):
-        self._batch_selection.clear()
         self.page = 0
         self.refresh()
 
@@ -157,17 +152,6 @@ class UniformWorkspace(ctk.CTkFrame):
         return self.task.run(operation, finished, failed)
 
     def refresh(self):
-        # A refresh can reorder rows or complete an earlier asynchronous read.
-        # Drop all visual selections; the dataset still independently rechecks IDs.
-        self._batch_selection.clear()
-        for view in self.views.values():
-            view[4].configure(text='Approve selected (0)', state='disabled')
-        for checkbox in self._batch_checkboxes:
-            try:
-                checkbox.deselect()
-                checkbox.configure(state='disabled')
-            except Exception:
-                pass
         if self.task.busy:
             self._refresh_again = True
             return
@@ -177,9 +161,6 @@ class UniformWorkspace(ctk.CTkFrame):
             candidate = service or CandidateService(dataset, candidates_root=ROOT / 'data' / 'uniform_candidates')
             snapshot = dataset.snapshot()
             records = [r for r in snapshot['records'] if r['category'] == category]
-            id_counts = {}
-            for item in snapshot['records']:
-                id_counts[item.get('image_id')] = id_counts.get(item.get('image_id'), 0) + 1
             max_page = max(0, (len(records) - 1) // PAGE_SIZE)
             actual = min(page, max_page)
             rows = []
@@ -198,38 +179,25 @@ class UniformWorkspace(ctk.CTkFrame):
             for name in ('uniform_cls.pt', 'uniform_embed_ref.npz', 'uniform_color_ref.json'):
                 path = ROOT / 'models' / name
                 models.append(f'{name}: SHA256 {hashlib.sha256(path.read_bytes()).hexdigest()[:12]}' if path.is_file() else f'{name}: not present')
-            return snapshot, records, rows, actual, models, candidate, id_counts
+            return snapshot, records, rows, actual, models, candidate
         def loaded(value):
-            snapshot, records, rows, actual, models, candidate, id_counts = value
+            snapshot, records, rows, actual, models, candidate = value
             self.candidate_service = candidate
             if category != self.category() or page != self.page:
                 self._refresh_again = False
                 self.refresh()
                 return
             self.page = actual
-            gallery, counts, page_label, batch_label, approve_button = self.views[category]
+            gallery, counts, page_label = self.views[category]
             for widget in gallery.winfo_children():
                 widget.destroy()
-            self._batch_checkboxes.clear()
             self._images.clear()
-            scope = (category, actual)
-            if self._batch_scope != scope:
-                self._batch_selection.clear()
-                self._batch_scope = scope
             totals = {s: sum(r['status'] == s for r in records) for s in ('approved', 'pending_review', 'excluded')}
             instruction = ('Add clear examples of clothing outside the Campus Uniform and Organizational Shirt categories.\n'
                            if category == 'other_clothing' else '')
             counts.configure(text=instruction + f"{len(records)} unique images • {totals['approved']} approved • {totals['pending_review']} pending review • {totals['excluded']} excluded\n"
+                + f"{snapshot['counts']['eligible_by_category'].get(category, 0)} training-eligible • "
                 + f"{sum(max(0, len(r.get('sources', []))-1) for r in records)} exact duplicate occurrences • {sum(bool(r.get('duplicate_of')) for r in records)} images flagged as near-duplicates")
-            batch_label.configure(text=(f"Selection is limited to {CATEGORIES[category]}, page {actual + 1}; changing category, page or refreshing clears it."
-                                        if self._batch_mode and category in GARMENTS else ""))
-            if self._batch_mode and category in GARMENTS:
-                if not approve_button.winfo_ismapped():
-                    approve_button.pack(side='left', padx=4)
-            else:
-                approve_button.pack_forget()
-            approve_button.configure(text=f"Approve selected ({len(self._batch_selection)})",
-                                     state='normal' if self._batch_mode and self._batch_selection else 'disabled')
             page_label.configure(text=f'Page {actual + 1} • showing {len(rows)} of {len(records)}')
             for i, (record, picture, display_crop, image_error) in enumerate(rows):
                 card = ctk.CTkFrame(gallery, fg_color=COLOR_SURFACE)
@@ -241,18 +209,8 @@ class UniformWorkspace(ctk.CTkFrame):
                 if not display_crop and not image_error:
                     ctk.CTkLabel(card, text='No saved or proposed torso crop', wraplength=200,
                                  text_color=COLOR_TEXT_MUTED).pack(padx=6)
-                reason = dataset._batch_block_reason(record, display_crop, id_count=id_counts.get(record.get('image_id'), 0))
                 if image_error:
-                    reason = image_error
-                if self._batch_mode and record.get('status') == 'pending_review' and reason is None and display_crop and not image_error:
-                    selected = record['image_id'] in self._batch_selection
-                    check = ctk.CTkCheckBox(card, text='Select for approval', command=lambda r=record, c=category, p=actual, box=list(display_crop): self._toggle_selected(c, p, r, box))
-                    check.pack(padx=6, pady=3)
-                    self._batch_checkboxes.append(check)
-                    if selected:
-                        check.select()
-                elif self._batch_mode and reason:
-                    ctk.CTkLabel(card, text=reason, wraplength=200, text_color='#e89a73').pack(padx=6)
+                    ctk.CTkLabel(card, text=image_error, wraplength=200, text_color='#e89a73').pack(padx=6)
                 ctk.CTkButton(card, text='Review original & crop', command=lambda r=record: self.open_review(r)).pack(padx=6, pady=6)
             if not rows:
                 ctk.CTkLabel(gallery, text='No examples yet. Import photos to begin review.', text_color=COLOR_TEXT_MUTED).grid(row=0, column=0, columnspan=3, pady=25)
@@ -320,71 +278,115 @@ class UniformWorkspace(ctk.CTkFrame):
             self.candidate_launch_pending = False
 
     def move_page(self, delta):
-        self._batch_selection.clear()
         self.page = max(0, self.page + delta)
         self.refresh()
 
-    def toggle_batch(self, category):
-        if category != self.category() or category not in GARMENTS:
+    def confirm_approve_all(self):
+        if self.task.busy:
+            self.status.configure(text='An operation is already running. Please wait for it to finish.')
             return
-        self._batch_mode = not self._batch_mode if self._batch_scope and self._batch_scope[0] == category else True
-        self._batch_selection.clear()
-        self._batch_scope = (category, self.page)
-        self.refresh()
+        if self._review_write_pending.is_set() or (self._review is not None and self._review.winfo_exists()):
+            self.status.configure(text='Finish or close the current photo review before approving all pending photos.')
+            return
+        if getattr(self, '_approval_dialog', None) is not None and self._approval_dialog.winfo_exists():
+            self._approval_dialog.lift()
+            return
+        dialog = ctk.CTkToplevel(self)
+        self._approval_dialog = dialog
+        dialog.title('Approve all pending photos')
+        dialog.geometry('540x280')
+        dialog.transient(self.winfo_toplevel())
+        dialog.grab_set()
+        ctk.CTkLabel(dialog, text=(
+            'Approve all pending photos?\n\n'
+            'This action will approve all pending unique photos across Campus Uniform, Organizational Shirt, and Wrong Uniform.\n\n'
+            'The operation includes photos with unresolved review warnings. Existing quality and provenance warnings will be preserved. '
+            'Some approved photos may still require corrections before they become eligible for model training.\n\n'
+            'Do you want to continue?'), wraplength=500, justify='left').pack(fill='both', expand=True, padx=18, pady=16)
+        actions = ctk.CTkFrame(dialog, fg_color='transparent')
+        actions.pack(fill='x', padx=14, pady=10)
+        ctk.CTkButton(actions, text='Cancel', command=dialog.destroy).pack(side='right', padx=5)
+        ctk.CTkButton(actions, text='Approve All', command=lambda: self._approve_all(dialog)).pack(side='right', padx=5)
 
-    def _toggle_selected(self, category, page, record, crop):
-        if (self.task.busy or not self._batch_mode or category != self.category()
-                or (category, page) != self._batch_scope or page != self.page):
+    def _approve_all(self, dialog):
+        if self.task.busy or self._review_write_pending.is_set() or (self._review is not None and self._review.winfo_exists()):
             return
-        iid = record['image_id']
-        if iid in self._batch_selection:
-            del self._batch_selection[iid]
-        else:
-            self._batch_selection[iid] = {
-                'image_id': iid, 'category': record.get('category'), 'crop': list(crop),
-                'fingerprint': self.dataset._batch_fingerprint(record),
-                'expected': self.dataset.batch_review_expectation(record),
-            }
-        _, _, _, _, button = self.views[category]
-        button.configure(text=f"Approve selected ({len(self._batch_selection)})",
-                         state='normal' if self._batch_selection else 'disabled')
-
-    def approve_selected(self, category):
-        if (self.task.busy or category != self.category() or (category, self.page) != self._batch_scope
-                or not self._batch_selection
-                or any(item.get('category') != category for item in self._batch_selection.values())):
-            return
-        selected = [dict(value) for value in self._batch_selection.values()]
-        self._batch_selection.clear()
-        _, _, _, label, button = self.views[category]
-        button.configure(text='Approving selected…', state='disabled')
-        for checkbox in self._batch_checkboxes:
-            checkbox.configure(state='disabled')
-        label.configure(text=f"Rechecking and saving {len(selected)} selected image(s)…")
-        dataset = self.dataset
-        def done(result):
-            details = [f"{r['image_id'][:10]}: {r['status']} — {r['reason']}" for r in result['results']]
-            self._status_override = (f"Batch review: {result['approved']} approved, {result['skipped']} skipped, "
-                                     f"{result['failed']} failed. " + ' '.join(details))
+        dialog.destroy()
+        self.approve_all_button.configure(state='disabled')
+        self._status_override = None
+        self.status.configure(text='Approving all pending unique photos across the three training categories…')
+        def operation():
+            from core.uniform_dataset import BulkApprovalError
+            try:
+                return {"result": self.dataset.approve_all_pending()}
+            except BulkApprovalError as exc:
+                return {"error": str(exc), "result": exc.result}
+            except Exception as exc:
+                return {"error": str(exc), "result": None}
+        def done(value):
+            if value.get('error'):
+                failed(value['error'], value.get('result'))
+                return
+            result = value['result']
+            self._status_override = (f"Approve all complete: {result['approved']} approved of {result['total_pending']} pending; "
+                f"{result['already_approved']} already approved; {result['failed']} failed; "
+                f"{result['not_training_eligible']} not-training-eligible among all approved garment photos; "
+                f"{result['remaining_pending']} pending remain.")
             self.status.configure(text=self._status_override)
-            self._batch_mode = True
+            self.approve_all_button.configure(state='normal')
+            self.refresh()
             if self._candidate_refresh_after is None:
                 self._refresh_candidate_counts()
-        self.run(lambda: dataset.batch_review(selected), 'Approving selected garment photos…', done)
+        def failed(message, result=None):
+            if self.task.busy:
+                self._status_override = 'Still working. Please wait; retry is available when this operation finishes.'
+                self.status.configure(text=self._status_override)
+                return
+            if result is None:
+                self._status_override = f'Approve all could not determine catalog counts: {message} No success was reported.'
+            else:
+                self._status_override = (f"Approve all failed: {message} Total pending {result['total_pending']}; approved 0; "
+                    f"already approved {result['already_approved']}; failed {result['failed']}; "
+                    f"not-training-eligible among all approved garment photos {result['not_training_eligible']}; "
+                    f"remaining pending {result['remaining_pending']}. Retry is available.")
+            self.status.configure(text=self._status_override)
+            self.approve_all_button.configure(state='normal')
+            self.refresh()
+            if self._candidate_refresh_after is None:
+                self._refresh_candidate_counts()
+        self.task.run(operation, done, failed)
+
+    def _bulk_is_busy(self):
+        return self.task.busy or self._review_write_pending.is_set()
+
+    def start_capture(self, category):
+        if self._bulk_is_busy():
+            self.status.configure(text='Wait for the current approval or review save before capturing photos.')
+            return
+        self.capture(category)
 
     def upload(self, category):
+        if self._bulk_is_busy():
+            self.status.configure(text='Wait for the current operation to finish before importing photos.')
+            return
         dataset = self.dataset
         paths = filedialog.askopenfilenames(parent=self, title=f'Upload {CATEGORIES[category]} photos', filetypes=[('Images', '*.jpg *.jpeg *.png *.bmp *.webp *.tif *.tiff')])
         if paths:
             self.run(lambda: dataset.import_paths(paths, category), 'Validating and importing photos…')
 
     def import_folder(self, category):
+        if self._bulk_is_busy():
+            self.status.configure(text='Wait for the current operation to finish before importing photos.')
+            return
         dataset = self.dataset
         path = filedialog.askdirectory(parent=self, title='Import image folder')
         if path:
             self.run(lambda: dataset.import_folder(path, category), 'Validating folder and preserving originals…')
 
     def import_zip(self, category):
+        if self._bulk_is_busy():
+            self.status.configure(text='Wait for the current operation to finish before importing photos.')
+            return
         dataset = self.dataset
         path = filedialog.askopenfilename(parent=self, title='Import image ZIP', filetypes=[('ZIP archive', '*.zip')])
         if path:
@@ -400,6 +402,9 @@ class UniformWorkspace(ctk.CTkFrame):
                         'Saving captured originals for review…', done, error)
 
     def open_review(self, record):
+        if self.task.busy or self._review_write_pending.is_set():
+            self.status.configure(text='Wait for the current dataset operation to finish before opening a photo review.')
+            return
         if self._review is not None and self._review.winfo_exists():
             self._review.lift()
             return
@@ -605,11 +610,17 @@ class ReviewWindow(ctk.CTkToplevel):
         self.task.run(load, loaded, lambda e: self.message.configure(text=e))
 
     def propose(self):
+        if self.task.busy:
+            self.message.configure(text='An operation is still running. Please wait.')
+            return
         dataset, image_id = self.dataset, self.record['image_id']
         def operation():
-            box = dataset.propose_crop(image_id)
-            record = next(r for r in dataset.snapshot()['records'] if r['image_id'] == image_id)
-            return box, record
+            try:
+                box = dataset.propose_crop(image_id)
+                record = next(r for r in dataset.snapshot()['records'] if r['image_id'] == image_id)
+                return box, record
+            finally:
+                self.master._review_write_pending.clear()
         def done(value):
             box, record = value
             self.record = record
@@ -623,9 +634,14 @@ class ReviewWindow(ctk.CTkToplevel):
                 self.preview()
             else:
                 self.message.configure(text='No reliable torso proposal. Correct the crop manually.')
-        self.task.run(operation, done, lambda e: self.message.configure(text=e))
+        self.master._review_write_pending.set()
+        if not self.task.run(operation, done, lambda e: self.message.configure(text=e)):
+            self.master._review_write_pending.clear()
 
     def save(self, status):
+        if self.task.busy:
+            self.message.configure(text='An operation is still running. Please wait.')
+            return
         try:
             if status == 'approved' and not self.confirm.get():
                 raise ValueError('Confirm your review before approval.')
@@ -644,4 +660,11 @@ class ReviewWindow(ctk.CTkToplevel):
         def done(value):
             self.changed()
             self.destroy()
-        self.task.run(lambda: dataset.review(image_id, **args), done, lambda e: self.message.configure(text=e))
+        def operation():
+            try:
+                return dataset.review(image_id, **args)
+            finally:
+                self.master._review_write_pending.clear()
+        self.master._review_write_pending.set()
+        if not self.task.run(operation, done, lambda e: self.message.configure(text=e)):
+            self.master._review_write_pending.clear()

@@ -109,6 +109,26 @@ def _valid_crop(record: dict) -> bool:
             and x2 <= width and y2 <= height and x2 - x1 >= 16 and y2 - y1 >= 16)
 
 
+def training_eligibility_reason(record: dict) -> str | None:
+    """Metadata eligibility shared by readiness counts and candidate freezing.
+
+    Candidate freezing still verifies source paths, hashes and decoded bytes.
+    """
+    category = record.get("category")
+    if record.get("status") != "approved": return "not approved"
+    if category not in CATEGORY_TO_INDEX: return "invalid training category"
+    if _flags(record) & BLOCKING_FLAGS: return "unresolved training-blocking flags"
+    if not _valid_crop(record): return "missing or invalid torso crop"
+    if record.get("duplicate_of"): return "near duplicate requires review"
+    if (record.get("logo_annotation") or {}).get("source_kind") == "reference_artwork":
+        return "reference artwork is not a photographed garment"
+    return None
+
+
+def is_training_eligible(record: dict) -> bool:
+    return training_eligibility_reason(record) is None
+
+
 def candidate_summary(dataset: Any, *, min_per_class: int = 10) -> dict:
     """Summarize records usable for experiments, without changing the catalog."""
     snap = _snapshot(dataset)
@@ -123,13 +143,12 @@ def candidate_summary(dataset: Any, *, min_per_class: int = 10) -> dict:
     reasons = []
     for record in snap["records"]:
         category = record.get("category")
-        if record.get("status") == "approved" and record.get("category") in CATEGORY_TO_INDEX and (
-                _flags(record) & BLOCKING_FLAGS or not _valid_crop(record)):
+        if record.get("status") == "approved" and record.get("category") in CATEGORY_TO_INDEX and not is_training_eligible(record):
             quality_blocked += 1
         if record.get("status") != "approved" or category not in CATEGORY_TO_INDEX:
             continue
         approved[category] += 1
-        if _flags(record) & BLOCKING_FLAGS or not _valid_crop(record):
+        if not is_training_eligible(record):
             continue
         included[category] += 1
         known, unknown = _record_groups(record)
@@ -143,7 +162,7 @@ def candidate_summary(dataset: Any, *, min_per_class: int = 10) -> dict:
         reasons.extend(f"{CATEGORIES[category]} has {count} eligible approved examples; requires {min_per_class}."
                        for category, count in missing.items())
     if quality_blocked:
-        reasons.append(f"{quality_blocked} approved record(s) have unresolved flags or invalid crops and are excluded.")
+        reasons.append(f"{quality_blocked} approved record(s) have unresolved flags, invalid crops, duplicate links, or reference-artwork provenance and are excluded.")
     if pending:
         reasons.append(f"{pending} pending-review record(s) are excluded.")
     if excluded:
@@ -320,8 +339,7 @@ class CandidateService:
         if not summary["eligible"]:
             raise ValueError("Candidate dataset is not eligible: " + " ".join(summary["reasons"]))
         if config["synthetic_smoke"]:
-            included = [r for r in snap["records"] if r.get("status") == "approved" and
-                        r.get("category") in CATEGORY_TO_INDEX and not (_flags(r) & BLOCKING_FLAGS) and _valid_crop(r)]
+            included = [r for r in snap["records"] if is_training_eligible(r)]
             if not included or any(not any(s.get("kind") == "synthetic_smoke" for s in r.get("sources", []))
                                    for r in included):
                 raise ValueError("synthetic_smoke is allowed only for records marked synthetic_smoke")
@@ -348,8 +366,7 @@ class CandidateService:
             return {"cancelled_during_freeze": True}
         (run_dir / "prepared").mkdir(parents=True, exist_ok=True)
         root = dataset.root.resolve()
-        eligible = [r for r in snap["records"] if r.get("status") == "approved"
-                    and r.get("category") in CATEGORY_TO_INDEX and not (_flags(r) & BLOCKING_FLAGS) and _valid_crop(r)]
+        eligible = [r for r in snap["records"] if is_training_eligible(r)]
         entries = []
         from PIL import Image
         import cv2

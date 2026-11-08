@@ -95,130 +95,108 @@ class UniformDatasetTests(unittest.TestCase):
         self.assertEqual(record["status"], "pending_review")
         self.assertIn("label_conflict", record["flags"])
 
-    def test_batch_review_checks_display_revision_and_preserves_logo_and_provenance(self):
-        path = self.image_file(data=png_bytes())
-        iid = self.ds.import_paths([path], "campus_uniform", capture_group="batch-fixture")[0]
-        self.ds.review(iid, category="campus_uniform", crop=[10, 10, 90, 70], status="pending_review",
-                       flags=[], notes="keep these notes", logo_visibility="visible", logo_box=[20, 20, 40, 40],
-                       logo_reviewed=True, logo_source_kind="photographed_print", logo_association_confirmed=True)
-        self.ds._store_crop_proposal(iid, {"box": [10, 10, 90, 70], "source": "detector", "association_uncertain": False})
-        before = self.ds.snapshot()["records"][0]
-        selection = {"image_id": iid, "category": before["category"], "crop": before["crop"],
-                     "fingerprint": self.ds._batch_fingerprint(before)}
-        result = self.ds.batch_review([selection, selection])
-        self.assertEqual((result["approved"], result["skipped"], result["failed"]), (1, 1, 0))
-        row = self.ds.snapshot()["records"][0]
-        self.assertEqual(row["status"], "approved")
-        self.assertEqual(row["notes"], "keep these notes")
-        self.assertEqual(row["capture_group"], "batch-fixture")
-        self.assertEqual(row.get("logo_annotation"), before.get("logo_annotation"))
-        self.assertEqual(row["crop_proposal_history"], before["crop_proposal_history"])
-        self.assertEqual(len(row["review_history"]), len(before["review_history"]) + 1)
-        self.assertEqual(row["review_history"][-1]["crop"], before["crop"])
-
-    def test_batch_review_skips_stale_flags_category_and_status(self):
+    def test_approve_all_pending_is_global_atomic_audited_and_idempotent(self):
         ids = []
-        for n in range(4):
-            path = self.image_file(f"batch-{n}.png", png_bytes(color=(20+n*40, 70, 120)))
-            iid = self.ds.import_paths([path], "campus_uniform")[0]
-            self.ds.review(iid, category="campus_uniform", crop=[10, 10, 90, 70], status="pending_review", flags=[])
-            ids.append(iid)
-        rows = {r["image_id"]: r for r in self.ds.snapshot()["records"]}
-        selections = [{"image_id": iid, "category": "campus_uniform", "crop": rows[iid]["crop"],
-                       "fingerprint": self.ds._batch_fingerprint(rows[iid]),
-                       "expected": self.ds.batch_review_expectation(rows[iid])} for iid in ids]
-        self.ds.review(ids[0], category="campus_uniform", crop=[10, 10, 90, 70], status="pending_review", flags=["obstruction"])
-        self.ds.review(ids[1], category="organizational_shirt", crop=[10, 10, 90, 70], status="pending_review", flags=[])
-        self.ds.review(ids[2], category="campus_uniform", crop=[10, 10, 90, 70], status="approved", flags=[])
-        self.ds.review(ids[3], category="campus_uniform", crop=[11, 10, 90, 70], status="pending_review", flags=[])
-        result = self.ds.batch_review(selections)
-        self.assertEqual(result["approved"], 0)
-        self.assertEqual(result["skipped"], 4)
-        self.assertEqual({r["image_id"]: r["status"] for r in result["results"]}, {iid: "skipped" for iid in ids})
-        self.assertTrue(any('training-blocking flags' in r['reason'] for r in result['results']))
-        self.assertTrue(any('category' in r['reason'] for r in result['results']))
-        self.assertTrue(any('review status' in r['reason'] for r in result['results']))
-        self.assertTrue(any('crop' in r['reason'] for r in result['results']))
-
-    def test_batch_partial_save_failure_is_retryable_and_repeated_review_is_skipped(self):
-        ids = []
-        for n in range(2):
-            pixels = np.random.default_rng(901 + n).integers(0, 256, (100, 120, 3), dtype=np.uint8)
+        originals = {}
+        for index, category in enumerate(("campus_uniform", "organizational_shirt", "other_clothing")):
+            pixels = np.random.default_rng(100 + index).integers(0, 256, (160, 180, 3), dtype=np.uint8)
             stream = io.BytesIO(); Image.fromarray(pixels).save(stream, format="PNG")
-            iid = self.ds.import_paths([self.image_file(f"retry-{n}.png", stream.getvalue())], "campus_uniform")[0]
-            self.ds.review(iid, category="campus_uniform", crop=[5, 5, 100, 90], status="pending_review", flags=[])
+            path = self.image_file(f"bulk-{index}.png", stream.getvalue())
+            iid = self.ds.import_paths([path], category)[0]
+            originals[iid] = stream.getvalue()
+            self.ds.review(iid, category=category, crop=[10, 10, 100, 120], status="pending_review",
+                           flags=["provenance_association_uncertain"] if index == 0 else [], notes=f"notes-{index}")
             ids.append(iid)
-        records = {r["image_id"]: r for r in self.ds.snapshot()["records"]}
-        picks = [{"image_id": iid, "category": "campus_uniform", "crop": records[iid]["crop"],
-                  "fingerprint": self.ds._batch_fingerprint(records[iid])} for iid in ids]
-        original_save = self.ds._save
-        failed = False
-        def fail_once(catalog):
-            nonlocal failed
-            if not failed:
-                failed = True
-                raise OSError("fixture disk failure")
-            original_save(catalog)
-        with patch.object(self.ds, "_save", side_effect=fail_once):
-            first = self.ds.batch_review(picks)
-        self.assertEqual((first["approved"], first["failed"]), (1, 1))
-        failed_id = next(r["image_id"] for r in first["results"] if r["status"] == "failed")
-        current = next(r for r in self.ds.snapshot()["records"] if r["image_id"] == failed_id)
-        retry = {"image_id": failed_id, "category": current["category"], "crop": current["crop"],
-                 "fingerprint": self.ds._batch_fingerprint(current)}
-        second = self.ds.batch_review([retry])
-        self.assertEqual(second["approved"], 1)
-        repeated = self.ds.batch_review([retry])
-        self.assertEqual(repeated["skipped"], 1)
-        rows = {r["image_id"]: r for r in self.ds.snapshot()["records"]}
-        self.assertTrue(all(rows[iid]["status"] == "approved" for iid in ids))
-        self.assertTrue(all(len(rows[iid]["review_history"]) == 2 for iid in ids))
+        # An exact duplicate occurrence updates sources of one record, never adds a sample.
+        duplicate = self.image_file("second-source.png", path.read_bytes())
+        self.ds.import_paths([duplicate], "other_clothing")
+        snap = self.ds.snapshot()
+        self.assertEqual(snap["counts"]["total"], 3)
+        self.assertEqual(snap["counts"]["exact_duplicate_occurrences"], 1)
+        before = {r["image_id"]: dict(r) for r in snap["records"]}
+        result = self.ds.approve_all_pending()
+        self.assertEqual((result["total_pending"], result["approved"], result["failed"], result["remaining_pending"]), (3, 3, 0, 0))
+        self.assertEqual(result["not_training_eligible"], 1)
+        after = {r["image_id"]: r for r in self.ds.snapshot()["records"]}
+        for iid in ids:
+            self.assertEqual(after[iid]["status"], "approved")
+            self.assertEqual(after[iid]["original_path"], before[iid]["original_path"])
+            self.assertEqual((self.ds.root / after[iid]["original_path"]).read_bytes(), originals[iid])
+            for key in ("sha256", "sources", "crop", "flags", "notes", "crop_proposal_history", "logo_annotation", "duplicate_of"):
+                self.assertEqual(after[iid].get(key), before[iid].get(key))
+            audit = after[iid]["review_history"][-1]
+            self.assertEqual(audit["action"], "bulk_administrative_approval")
+            self.assertEqual(audit["flags"], before[iid]["flags"])
+        history_lengths = {iid: len(after[iid]["review_history"]) for iid in ids}
+        noop = self.ds.approve_all_pending()
+        self.assertEqual(noop["total_pending"], 0)
+        self.assertEqual(noop["already_approved"], 3)
+        self.assertEqual(noop["not_training_eligible"], 1)
+        self.assertEqual({r["image_id"]: len(r["review_history"]) for r in self.ds.snapshot()["records"]}, history_lengths)
 
-    def test_batch_can_approve_current_valid_proposal_and_reject_invalid_or_ambiguous_ids(self):
-        iid = self.ds.import_paths([self.image_file(data=png_bytes())], "campus_uniform")[0]
-        self.ds.review(iid, category="campus_uniform", crop=[10, 10, 90, 70], status="pending_review", flags=[])
+    def test_approve_all_leaves_excluded_and_legacy_alone_and_save_failure_is_atomic(self):
+        rows = []
+        for index, (category, status) in enumerate((('campus_uniform','pending_review'), ('organizational_shirt','pending_review'), ('other_clothing','excluded'), ('unassigned','pending_review'))):
+            pixels = np.random.default_rng(300 + index).integers(0,256,(100,120,3),dtype=np.uint8)
+            data=io.BytesIO(); Image.fromarray(pixels).save(data,format='PNG')
+            iid=self.ds.import_paths([self.image_file(f'atomic-{index}.png',data.getvalue())],category)[0]
+            if status != 'pending_review' or category != 'unassigned':
+                self.ds.review(iid,category=category,crop=[2,2,100,90],status=status,flags=['obstruction'] if index==0 else [])
+            rows.append(iid)
+        before=self.ds.snapshot()['records']
+        original=self.ds._save
+        with patch.object(self.ds,'_save',side_effect=OSError('fixture disk full')):
+            with self.assertRaisesRegex(RuntimeError,'no photos were approved') as caught:
+                self.ds.approve_all_pending()
+        self.assertEqual(caught.exception.result, {
+            'total_pending': 2, 'approved': 0, 'already_approved': 0, 'failed': 2,
+            'not_training_eligible': 0, 'remaining_pending': 2})
+        self.assertEqual(self.ds.snapshot()['records'],before)
+        result=self.ds.approve_all_pending()
+        self.assertEqual(result['approved'],2)
+        current={r['image_id']:r for r in self.ds.snapshot()['records']}
+        self.assertEqual(current[rows[2]]['status'],'excluded')
+        self.assertEqual(current[rows[3]]['status'],'pending_review')
+        self.assertEqual(current[rows[0]]['flags'],['obstruction'])
+
+    def test_bulk_preserves_full_metadata_missing_crop_and_nonpending_records(self):
+        ids = []
+        for index, category in enumerate(('campus_uniform', 'campus_uniform', 'unassigned',
+                                          'organizational_shirt', 'other_clothing')):
+            pixels = np.random.default_rng(950 + index).integers(0, 256, (160, 180, 3), dtype=np.uint8)
+            stream = io.BytesIO(); Image.fromarray(pixels).save(stream, format='PNG')
+            ids.append(self.ds.import_paths([self.image_file(f'metadata-{index}.png', stream.getvalue())],
+                                            category, capture_group='preserved-session')[0])
+        self.ds.review(ids[0], category='campus_uniform', crop=[5, 5, 150, 150], status='approved', flags=[])
+        self.ds.review(ids[1], category='campus_uniform', crop=[5, 5, 150, 150], status='excluded', flags=[])
+        self.ds.review(ids[4], category='other_clothing', crop=[5, 5, 150, 150], status='pending_review',
+                       flags=['near_duplicate_review', 'label_conflict'], notes='Keep this note',
+                       logo_box=[20, 20, 40, 40], logo_visibility='visible',
+                       logo_source_kind='photographed_print', logo_association_confirmed=True, logo_reviewed=True)
+        self.ds._store_crop_proposal(ids[4], {'box': [6, 6, 140, 140], 'source': 'detector'})
         with self.ds._locked():
             catalog = self.ds._load()
-            row = catalog["records"][0]
-            row["crop"] = None
-            row["crop_source"] = None
+            next(r for r in catalog['records'] if r['image_id'] == ids[4])['duplicate_of'] = [ids[0]]
             self.ds._save(catalog)
-        self.ds._store_crop_proposal(iid, {"box": [10, 10, 90, 70], "source": "detector", "association_uncertain": False})
-        display = self.ds.batch_review_snapshot([iid])[iid]
-        self.assertEqual(display["crop"], [10, 10, 90, 70])
-        pick = {"image_id": iid, "category": "campus_uniform", "crop": display["crop"],
-                "fingerprint": display["fingerprint"], "expected": self.ds.batch_review_expectation(display["record"]),
-                "crop_source": "detector"}
-        result = self.ds.batch_review([pick])
-        self.assertEqual(result["approved"], 1)
-        row = self.ds.snapshot()["records"][0]
-        self.assertEqual(row["crop"], [10, 10, 90, 70])
-        self.assertEqual(row["crop_source"], "detector")
-
-        noisy = io.BytesIO(); Image.fromarray(np.random.default_rng(451).integers(0, 256, (140, 160, 3), dtype=np.uint8)).save(noisy, format="PNG")
-        blocked_id = self.ds.import_paths([self.image_file("blocked.png", noisy.getvalue())], "campus_uniform")[0]
-        self.ds.review(blocked_id, category="campus_uniform", crop=[10, 10, 90, 70], status="pending_review", flags=[])
-        with self.ds._locked():
-            catalog = self.ds._load()
-            blocked_record = next(r for r in catalog["records"] if r["image_id"] == blocked_id)
-            blocked_record["crop"] = None
-            blocked_record["crop_source"] = None
-            self.ds._save(catalog)
-        self.ds._store_crop_proposal(blocked_id, {"box": None, "source": "detector", "reason": "no person"})
-        blocked = self.ds.batch_review_snapshot([blocked_id])[blocked_id]
-        self.assertIn("invalid", blocked["reason"])
-        bad = {"image_id": blocked_id, "category": "campus_uniform", "crop": [0, 0, 5, 5],
-               "fingerprint": blocked["fingerprint"], "expected": self.ds.batch_review_expectation(blocked["record"])}
-        self.assertEqual(self.ds.batch_review([bad])["skipped"], 1)
-
-        with self.ds._locked():
-            catalog = self.ds._load()
-            catalog["records"].append(dict(catalog["records"][1]))
-            self.ds._save(catalog)
-        dup = self.ds.batch_review_snapshot([blocked_id])
-        self.assertEqual(dup, {})
-        pick_dup = {**bad, "fingerprint": self.ds._batch_fingerprint(catalog["records"][1])}
-        self.assertIn("ambiguous", self.ds.batch_review([pick_dup])["results"][0]["reason"])
+        before = {r['image_id']: r for r in self.ds.snapshot()['records']}
+        original_catalog = self.ds.index_path.read_bytes()
+        with patch('core.uniform_dataset.os.replace', side_effect=OSError('atomic replace failed')):
+            with self.assertRaisesRegex(RuntimeError, 'no photos were approved'):
+                self.ds.approve_all_pending()
+        self.assertEqual(self.ds.index_path.read_bytes(), original_catalog)
+        self.assertEqual(self.ds.approve_all_pending()['approved'], 2)
+        after = {r['image_id']: r for r in UniformDataset(self.ds.root).snapshot()['records']}
+        for iid in ids[:3]:
+            self.assertEqual(after[iid], before[iid])
+        for iid in ids[3:]:
+            self.assertEqual(after[iid]['status'], 'approved')
+            self.assertEqual(after[iid]['review_history'][:-1], before[iid]['review_history'])
+            self.assertEqual({k: v for k, v in after[iid].items() if k not in ('status', 'review_history')},
+                             {k: v for k, v in before[iid].items() if k not in ('status', 'review_history')})
+        self.assertIsNone(after[ids[3]]['crop'])
+        self.assertEqual(self.ds.snapshot()['counts']['eligible_by_category']['other_clothing'], 0)
+        with patch.object(self.ds, '_save', side_effect=AssertionError('no-op must not write')):
+            self.assertEqual(self.ds.approve_all_pending()['approved'], 0)
 
     def test_zip_preflight_rejects_traversal_before_import(self):
         archive_path = Path(self.temp.name) / "unsafe.zip"
@@ -353,7 +331,8 @@ class UniformDatasetTests(unittest.TestCase):
             other = self.ds.import_paths([path], category)[0]
             self.ds.review(other, category=category, crop=[0, 0, 100, 80], status='approved', flags=[])
         ready = self.ds.snapshot()['readiness']
-        self.assertTrue(ready['experimental_training_eligible'])
+        self.assertFalse(ready['experimental_training_eligible'])  # The existing 10-example minimum still applies.
+        self.assertTrue(any('Fewer than 10' in reason for reason in ready['experimental_training_reasons']))
         self.assertFalse(ready['independent_evaluation_ready'])
         self.assertFalse(ready['model_activation_allowed'])
 

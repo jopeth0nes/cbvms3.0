@@ -28,7 +28,7 @@ from core.trainer import _letterbox
 class CandidateSummaryTests(unittest.TestCase):
     def record(self, category, status="approved", *, flags=None, crop=(0, 0, 100, 100), group=None):
         return {"category": category, "status": status, "flags": flags or [],
-                "crop": list(crop), "width": 100, "height": 100,
+                "crop": list(crop) if crop is not None else None, "width": 100, "height": 100,
                 "capture_group": group, "capture_groups": [group] if group else [],
                 "has_unknown_provenance": not bool(group)}
 
@@ -65,6 +65,17 @@ class CandidateSummaryTests(unittest.TestCase):
         self.assertFalse(summary["experimental_training_eligible"])
         self.assertFalse(summary["evaluation_ready"])
         self.assertTrue(any("Organizational Shirt" in reason for reason in summary["readiness_reasons"]))
+
+    def test_admin_approved_warnings_missing_crops_duplicates_and_artwork_stay_ineligible(self):
+        records = [self.record('campus_uniform', flags=['possible_blur']),
+                   self.record('campus_uniform', crop=None),
+                   {**self.record('campus_uniform'), 'duplicate_of':['other-id']},
+                   {**self.record('campus_uniform'), 'logo_annotation': {'source_kind':'reference_artwork'}},
+                   self.record('campus_uniform')]
+        summary = candidate_summary({'records':records}, min_per_class=1)
+        self.assertEqual(summary['approved_by_category']['campus_uniform'],5)
+        self.assertEqual(summary['included_by_category']['campus_uniform'],1)
+        self.assertEqual(summary['quality_blocked'],4)
 
 
 class CandidateFreezeTests(unittest.TestCase):
