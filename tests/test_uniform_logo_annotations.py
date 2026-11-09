@@ -25,7 +25,7 @@ class UniformLogoAnnotationTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name) / "catalog"
-        self.ds = UniformDataset(self.root)
+        self.ds = UniformDataset(self.root, auto_process=False)
         self.data = raster_bytes()
         self.path = Path(self.tmp.name) / "source.png"
         self.path.write_bytes(self.data)

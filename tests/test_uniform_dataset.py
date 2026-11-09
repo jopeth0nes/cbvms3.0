@@ -23,7 +23,7 @@ class UniformDatasetTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name) / "catalog"
-        self.ds = UniformDataset(self.root)
+        self.ds = UniformDataset(self.root, auto_process=False)
 
     def tearDown(self):
         self.temp.cleanup()
@@ -79,10 +79,7 @@ class UniformDatasetTests(unittest.TestCase):
         snap = self.ds.snapshot()
         row = next(r for r in snap["records"] if r["image_id"] == a)
         self.assertEqual(row["capture_groups"], ["session-A", "session-B"])
-        proposed = snap["proposed_splits"]
-        split_for = {iid: split for split in ("train", "validation", "evaluation") for iid in proposed[split]}
-        self.assertIn(a, split_for)
-        self.assertEqual(sum(a in group for group in proposed["grouping"]), 1)
+        self.assertIsNone(snap['proposed_splits'])  # Actual split is frozen by CandidateService.
 
     def test_conflicting_exact_reimport_invalidates_approval_but_same_source_does_not(self):
         path = self.image_file(data=png_bytes())
@@ -116,7 +113,7 @@ class UniformDatasetTests(unittest.TestCase):
         before = {r["image_id"]: dict(r) for r in snap["records"]}
         result = self.ds.approve_all_pending()
         self.assertEqual((result["total_pending"], result["approved"], result["failed"], result["remaining_pending"]), (3, 3, 0, 0))
-        self.assertEqual(result["not_training_eligible"], 1)
+        self.assertEqual(result["not_training_eligible"], 3)
         after = {r["image_id"]: r for r in self.ds.snapshot()["records"]}
         for iid in ids:
             self.assertEqual(after[iid]["status"], "approved")
@@ -131,7 +128,7 @@ class UniformDatasetTests(unittest.TestCase):
         noop = self.ds.approve_all_pending()
         self.assertEqual(noop["total_pending"], 0)
         self.assertEqual(noop["already_approved"], 3)
-        self.assertEqual(noop["not_training_eligible"], 1)
+        self.assertEqual(noop["not_training_eligible"], 3)
         self.assertEqual({r["image_id"]: len(r["review_history"]) for r in self.ds.snapshot()["records"]}, history_lengths)
 
     def test_approve_all_leaves_excluded_and_legacy_alone_and_save_failure_is_atomic(self):
@@ -287,14 +284,10 @@ class UniformDatasetTests(unittest.TestCase):
                                  "campus_uniform", capture_group=session)
             iid = self.ds.snapshot()["records"][-1]["image_id"]
             self.ds.review(iid, category="campus_uniform", crop=[0, 0, 100, 80], status="approved")
-        proposed = self.ds.snapshot()["proposed_splits"]
-        self.assertIsNotNone(proposed)
-        split_for = {iid: split for split in ("train", "validation", "evaluation") for iid in proposed[split]}
-        for group in proposed["grouping"]:
-            self.assertEqual(len({split_for[iid] for iid in group}), 1)
-        self.assertFalse(self.ds.snapshot()["readiness"]["independent_evaluation_ready"])
+        self.assertIsNone(self.ds.snapshot()['proposed_splits'])
+        self.assertFalse(self.ds.snapshot()['readiness']['independent_evaluation_ready'])
 
-    def test_proposed_splits_include_only_approved_rows(self):
+    def test_administrative_approval_does_not_create_splits(self):
         ids = []
         for session, seed in (("a", 12), ("b", 34), ("c", 56), ("pending", 78)):
             stream = io.BytesIO()
@@ -305,9 +298,8 @@ class UniformDatasetTests(unittest.TestCase):
             if session != "pending":
                 self.ds.review(iid, category="campus_uniform", crop=[0, 0, 100, 80], status="approved")
         snap = self.ds.snapshot()
-        split_ids = {iid for key in ("train", "validation", "evaluation") for iid in snap["proposed_splits"][key]}
-        self.assertEqual(split_ids, set(ids[:3]))
-        self.assertEqual(snap["counts"]["approved_by_category"]["campus_uniform"], 3)
+        self.assertIsNone(snap['proposed_splits'])
+        self.assertEqual(snap['counts']['eligible_by_category']['campus_uniform'], 0)
 
     def test_eligibility_excludes_ambiguous_approved_records_and_title_case_labels(self):
         self.assertEqual(CATEGORIES["campus_uniform"], "Campus Uniform")
@@ -325,7 +317,7 @@ class UniformDatasetTests(unittest.TestCase):
         self.ds.review(iid, category="campus_uniform", crop=[0, 0, 100, 80], status="approved", flags=[])
         snap = self.ds.snapshot()
         self.assertFalse(snap["experimental_training_eligible"])
-        self.assertEqual(snap['counts']['eligible_by_category']['campus_uniform'], 1)
+        self.assertEqual(snap['counts']['eligible_by_category']['campus_uniform'], 0)  # A correction queues quality processing.
         for i, category in enumerate(('organizational_shirt', 'other_clothing')):
             path = self.image_file(category+'.png', png_bytes(color=(100+i, 20, 50)))
             other = self.ds.import_paths([path], category)[0]
@@ -336,25 +328,18 @@ class UniformDatasetTests(unittest.TestCase):
         self.assertFalse(ready['independent_evaluation_ready'])
         self.assertFalse(ready['model_activation_allowed'])
 
-    def test_crop_proposal_persists_detector_origin_without_approval(self):
-        iid = self.ds.import_paths([self.image_file(data=png_bytes(size=(120, 100)))], "campus_uniform")[0]
+    def test_multiple_person_proposal_is_never_selected_implicitly(self):
+        iid = self.ds.import_paths([self.image_file()], "campus_uniform")[0]
         detector = unittest.mock.Mock()
-        detector.detect_persons.return_value = [[-5, -3, 200, 110], [10, 10, 50, 90]]
-        detector.use_pose = False
-        detector.get_torso_box.return_value = [-5, 19, 200, 68]
+        detector.detect_persons.return_value = [[0, 0, 100, 100], [10, 10, 50, 90]]
         with patch("core.person_detector.PersonDetector", return_value=detector):
-            crop = self.ds.propose_crop(iid)
-        self.assertEqual(crop, [0, 19, 120, 68])
-        record = self.ds.snapshot()["records"][0]
-        self.assertEqual(record["status"], "pending_review")
-        self.assertEqual(record["crop_proposal"]["source"], "detector")
-        self.assertIn("person_association_uncertain", record["flags"])
-        self.assertIn("multiple_people", record["flags"])
-        self.ds.review(iid, category="campus_uniform", crop=crop, status="approved", crop_source="detector",
-                       flags=[])
-        reviewed = self.ds.snapshot()["records"][0]
-        self.assertEqual(reviewed["status"], "approved")
-        self.assertEqual(reviewed["review_history"][-1]["crop_source"], "detector")
+            with self.assertRaisesRegex(ValueError, 'Multiple people'):
+                self.ds.propose_crop(iid)
+        record = self.ds.snapshot()['records'][0]
+        self.assertIsNone(record['crop_proposal']['box'])
+        self.assertIn('multiple_people', record['flags'])
+        detector.get_torso_box.assert_not_called()
+        detector.pose_torso_box.assert_not_called()
 
     def test_no_person_proposal_raises_useful_error_and_is_recorded(self):
         iid = self.ds.import_paths([self.image_file()], "campus_uniform")[0]
@@ -494,3 +479,168 @@ class UniformDatasetTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AutomaticProcessingTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.ds = UniformDataset(Path(self.temp.name) / 'dataset', auto_process=False)
+        self.detector = unittest.mock.Mock(use_pose=True)
+        self.detector.detect_persons.return_value = [[0, 0, 200, 200]]
+        self.detector.pose_torso_box.return_value = [20, 20, 180, 180]
+
+    def add(self, category='campus_uniform', seed=10, kind='file'):
+        pixels = np.random.default_rng(seed).integers(0, 256, (200, 200, 3), dtype=np.uint8)
+        data = io.BytesIO(); Image.fromarray(pixels).save(data, format='PNG')
+        return self.ds._import_bytes(data.getvalue(), f'fixture-{seed}.png', kind, category, None)
+
+    def row(self, iid):
+        return next(r for r in self.ds.snapshot()['records'] if r['image_id'] == iid)
+
+    def test_import_routes_schedule_processing_with_selected_category(self):
+        self.ds.auto_process = True
+        with patch('core.uniform_processing.schedule') as schedule:
+            for i, category in enumerate(('campus_uniform', 'organizational_shirt', 'other_clothing')):
+                iid = self.add(category, seed=i)
+                self.assertEqual(self.row(iid)['category'], category)
+                self.assertEqual(self.row(iid)['processing_state'], 'queued')
+            self.assertEqual(schedule.call_count, 3)
+
+    def test_all_import_methods_queue_processing(self):
+        pixels = np.random.default_rng(91).integers(0, 256, (200, 200, 3), dtype=np.uint8)
+        folder = Path(self.temp.name) / 'imports'; folder.mkdir()
+        photo = folder / 'one.png'; Image.fromarray(pixels).save(photo)
+        archive = Path(self.temp.name) / 'photos.zip'
+        with zipfile.ZipFile(archive, 'w') as z: z.write(photo, 'one.png')
+        self.ds.auto_process = True
+        with patch('core.uniform_processing.schedule') as schedule:
+            self.ds.import_paths([photo], 'campus_uniform')
+            self.ds.import_folder(folder, 'campus_uniform')
+            self.ds.import_zip(archive, 'campus_uniform')
+            self.ds.import_capture(pixels, 'other_clothing', 'capture-session')
+            self.assertEqual(schedule.call_count, 4)
+
+    def test_single_person_all_categories_become_ready_without_approval(self):
+        from core.uniform_candidate import is_training_eligible
+        ids = [self.add(category, seed=i) for i, category in enumerate(
+            ('campus_uniform', 'organizational_shirt', 'other_clothing'))]
+        before = {iid: self.row(iid) for iid in ids}
+        report = self.ds.process_pending(detector=self.detector)
+        self.assertEqual(report['training_ready'], 3)
+        for iid in ids:
+            row = self.row(iid)
+            self.assertTrue(is_training_eligible(row))
+            self.assertEqual(row['status'], 'pending_review')
+            self.assertEqual(row['review_history'], [])
+            self.assertEqual(row['crop'], [20, 20, 180, 180])
+            self.assertIn('provenance_association_uncertain', row['flags'])
+            self.assertEqual(row['provenance_group'], 'unknown-provenance')
+            self.assertTrue((self.ds.root / row['crop_path']).is_file())
+            self.assertEqual(row['sha256'], before[iid]['sha256'])
+        self.detector.pose_torso_box.assert_called_with(unittest.mock.ANY, [0, 0, 200, 200], require_full_torso=True)
+        self.assertFalse(self.ds.snapshot()['experimental_training_eligible'])  # Still requires ten/class.
+
+    def test_ambiguous_missing_or_invalid_pose_is_quarantined(self):
+        iid = self.add()
+        for people, crop, reason in (([[0,0,200,200], [10,10,100,100]], [20,20,180,180], 'multiple_people_association_uncertain'),
+                                     ([], None, 'no_reliable_person'),
+                                     ([[0,0,200,200]], [-1,20,180,180], 'no_reliable_torso'),
+                                     ([[0,0,200,200]], None, 'no_reliable_torso')):
+            with self.subTest(reason=reason):
+                self.detector.detect_persons.return_value = people
+                self.detector.pose_torso_box.return_value = crop
+                self.ds.process_pending(detector=self.detector, retry=True)
+                self.assertEqual(self.row(iid)['processing_state'], 'quarantined')
+                self.assertIn(reason, self.row(iid)['eligibility_reasons'])
+                self.assertIsNone(self.row(iid)['crop'])
+
+    def test_manual_crop_history_legacy_and_exclusion_survive_resumable_migration(self):
+        ids = [self.add(seed=i) for i in range(3)]
+        legacy = self.add('unassigned', 40)
+        excluded = self.add('other_clothing', 50)
+        self.ds.review(ids[0], category='campus_uniform', crop=[10,10,180,190], status='pending_review')
+        self.ds.review(excluded, category='other_clothing', crop=[10,10,180,190], status='excluded')
+        history = self.row(ids[0])['review_history']
+        legacy_before = self.row(legacy)
+        first = self.ds.process_pending(detector=self.detector, limit=1)
+        self.assertTrue(first['interrupted'])
+        second = self.ds.process_pending(detector=self.detector)
+        self.assertEqual(second['training_ready'], 2)
+        self.assertEqual(self.row(ids[0])['crop'], [10,10,180,190])
+        self.assertEqual(self.row(ids[0])['review_history'], history)
+        self.assertEqual(self.row(legacy), legacy_before)
+        self.assertEqual(self.row(excluded)['status'], 'excluded')
+        self.assertFalse(self.row(excluded)['training_eligible'])
+        before = self.ds.snapshot()['records']
+        again = self.ds.process_pending(detector=self.detector)
+        self.assertEqual(again['processed'], 0)
+        self.assertEqual(before, self.ds.snapshot()['records'])
+
+    def test_interrupted_processing_retried_and_manual_edit_discards_stale_result(self):
+        iid = self.add()
+        catalog = self.ds._load(); catalog['records'][0]['processing_state'] = 'processing'; self.ds._save(catalog)
+        self.ds.process_pending(detector=self.detector)
+        self.assertTrue(self.row(iid)['training_eligible'])
+        def change(*args, **kwargs):
+            self.ds.review(iid, category='other_clothing', crop=[10,10,180,190], status='pending_review')
+            return [20,20,180,180]
+        self.detector.pose_torso_box.side_effect = change
+        self.ds.process_pending(detector=self.detector, retry=True)
+        self.assertEqual(self.row(iid)['category'], 'other_clothing')
+        self.assertEqual(self.row(iid)['crop'], [10,10,180,190])
+        self.assertFalse(self.row(iid)['training_eligible'])
+        self.ds.process_pending(detector=self.detector)
+        self.assertTrue(self.row(iid)['training_eligible'])
+
+    def test_conflicting_exact_duplicate_quarantines_without_relabel_or_restoring_excluded(self):
+        iid = self.add()
+        self.ds.process_pending(detector=self.detector)
+        self.assertEqual(self.add('other_clothing'), iid)
+        self.assertEqual(len(self.ds.snapshot()['records']), 1)
+        self.ds.process_pending(detector=self.detector)
+        self.assertEqual(self.row(iid)['category'], 'campus_uniform')
+        self.assertIn('label_conflict', self.row(iid)['eligibility_reasons'])
+        self.ds.review(iid, category='campus_uniform', crop=[20,20,180,180], status='excluded')
+        self.add('organizational_shirt')
+        self.ds.process_pending(detector=self.detector)
+        self.assertEqual(self.row(iid)['status'], 'excluded')
+        self.assertFalse(self.row(iid)['training_eligible'])
+
+    def test_artwork_quality_and_integrity_fail_closed(self):
+        iid = self.add()
+        cat = self.ds._load(); cat['records'][0]['logo_annotation'] = {'source_kind':'reference_artwork'}; self.ds._save(cat)
+        self.ds.process_pending(detector=self.detector)
+        self.assertIn('reference_artwork', self.row(iid)['eligibility_reasons'])
+        self.detector.detect_persons.assert_not_called()
+        bad = self.add(seed=22)
+        (self.ds.root / self.row(bad)['original_path']).write_bytes(b'corrupted')
+        self.ds.process_pending(detector=self.detector)
+        self.assertEqual(self.row(bad)['processing_state'], 'failed')
+        data = io.BytesIO(); Image.new('RGB', (200,200), 'white').save(data, format='PNG')
+        blank = self.ds._import_bytes(data.getvalue(), 'blank', 'file', 'campus_uniform', None)
+        self.ds.process_pending(detector=self.detector)
+        self.assertIn('empty_or_unusable_crop', self.row(blank)['eligibility_reasons'])
+
+    def test_near_duplicates_grouped_but_useful_views_are_retained(self):
+        a, b = self.add(seed=1), self.add(seed=2)
+        cat = self.ds._load()
+        for row in cat['records']:
+            row['duplicate_of'] = [b if row['image_id'] == a else a]
+            row['flags'].append('near_duplicate_review')
+        self.ds._save(cat)
+        self.ds.process_pending(detector=self.detector)
+        self.assertTrue(self.row(a)['training_eligible'])
+        self.assertTrue(self.row(b)['training_eligible'])
+        self.assertEqual(self.row(a)['duplicate_group'], self.row(b)['duplicate_group'])
+        self.assertEqual(self.row(a)['sample_weight'], .5)
+
+    def test_real_background_process_recalculates_correction_without_tk_or_approval(self):
+        iid = self.add()
+        self.ds.review(iid, category='campus_uniform', crop=[20,20,180,180], status='pending_review')
+        self.ds.auto_process = True
+        thread = self.ds.schedule_processing()
+        thread.join(30)
+        self.assertFalse(thread.is_alive(), 'background processor did not finish')
+        self.assertTrue(self.row(iid)['training_eligible'])
+        self.assertEqual(self.row(iid)['status'], 'pending_review')

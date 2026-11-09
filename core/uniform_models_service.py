@@ -30,7 +30,8 @@ class UniformModelsService:
                     'id':digest(safe_file(path,'candidate.pt')) if (path/'candidate.pt').is_file() else None,
                     'synthetic':bool(config.get('synthetic_smoke')),
                     'dataset_version':config.get('dataset_manifest_sha256'),
-                    'preprocessing':config.get('model_preprocess')})
+                    'preprocessing':config.get('model_preprocess'),
+                    'training_pipeline_version':config.get('training_pipeline_version')})
             except (ValueError,OSError) as exc:
                 candidates.append({'run_id':path.name,'status':'invalid','error':str(exc)})
         try:
@@ -111,12 +112,12 @@ class UniformModelsService:
                     raise ValueError('Evaluation overlaps a model training inventory')
                 if cancelled is not None and cancelled.is_set():
                     raise RuntimeError('Evaluation cancelled before model loading')
-                baseline_predict = DeploymentPredictor(base)
+                baseline_predict = DeploymentPredictor(base, backend="cpu")
                 candidate_predict = CandidatePredictor(path,rule)
                 def stop():
                     return ((cancelled is not None and cancelled.is_set()) or not self.registry.matches(token))
                 return self.evaluator.evaluate(set_id,base_desc,candidate_desc,baseline_predict,candidate_predict,
-                                               cancelled=stop,progress=progress)
+                                               cancelled=stop,progress=progress,benchmark_cpu=True)
         finally:
             self._operation.release()
 

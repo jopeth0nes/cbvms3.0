@@ -1,4 +1,4 @@
-"""Uniform review and isolated candidates. Slow work uses BackgroundTask."""
+"""Automatic uniform dataset processing and isolated candidates. Slow work uses BackgroundTask."""
 from pathlib import Path
 import hashlib
 import threading
@@ -44,13 +44,11 @@ class UniformWorkspace(ctk.CTkFrame):
         self._status_override = None
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(2, weight=1)
-        self.status = ctk.CTkLabel(self, text='Loading review dataset…', anchor='w', wraplength=950)
+        self.status = ctk.CTkLabel(self, text='Loading dataset processing status…', anchor='w', wraplength=950)
         self.status.grid(row=0, column=0, sticky='ew', padx=12, pady=6)
         header_actions = ctk.CTkFrame(self, fg_color='transparent')
         header_actions.grid(row=1, column=0, sticky='w', padx=8, pady=4)
         ctk.CTkButton(header_actions, text=TRAIN_ACTION, command=self.open_candidates).pack(side='left', padx=4)
-        self.approve_all_button = ctk.CTkButton(header_actions, text='Approve All Pending Photos', command=self.confirm_approve_all)
-        self.approve_all_button.pack(side='left', padx=4)
         self.tabs = ctk.CTkTabview(self, command=self._tab_changed)
         self.tabs.grid(row=2, column=0, sticky='nsew')
         self.views = {}
@@ -68,7 +66,7 @@ class UniformWorkspace(ctk.CTkFrame):
                 ctk.CTkButton(actions, text='Open Evaluation & Models', command=self.open_models).pack(side='left', padx=4)
                 text = 'Legacy review required • Correct/Wrong labels are not garment categories'
             else:
-                ctk.CTkLabel(tab, text=CATEGORIES[category] + ' • review gallery', font=heading_font()).grid(row=0, column=0, sticky='w', padx=8)
+                ctk.CTkLabel(tab, text=CATEGORIES[category] + ' • automatic processing', font=heading_font()).grid(row=0, column=0, sticky='w', padx=8)
                 actions = ctk.CTkFrame(tab, fg_color='transparent')
                 actions.grid(row=1, column=0, sticky='ew')
                 for title, action in (
@@ -79,7 +77,7 @@ class UniformWorkspace(ctk.CTkFrame):
                     ctk.CTkButton(actions, text=title, command=action, width=145).pack(side='left', padx=4, pady=6)
                 text = ('Add clear examples of clothing outside the Campus Uniform and Organizational Shirt categories.'
                         if category == 'other_clothing' else
-                        'Bulk approval accepts pending photos; crop quality, warnings, and provenance still affect training eligibility.')
+                        'Photos are labeled with this category and processed automatically. Quarantined photos show the reason.')
             counts = ctk.CTkLabel(tab, text=text, anchor='w', wraplength=900)
             counts.grid(row=2, column=0, sticky='ew', padx=8, pady=4)
             gallery = ScrollableFrame(tab, fg_color=COLOR_BG)
@@ -93,7 +91,25 @@ class UniformWorkspace(ctk.CTkFrame):
             page.pack(side='left', padx=12)
             ctk.CTkButton(footer, text='Next', width=95, command=lambda: self.move_page(1)).pack(side='left', padx=4)
             self.views[category] = (gallery, counts, page)
+        self.dataset.schedule_processing()
+        self._processing_poll = self.after(1500, self._poll_processing)
         self.refresh()
+
+    def _poll_processing(self):
+        self._processing_poll = None
+        if not self.task.busy:
+            def signature():
+                try:
+                    stat = self.dataset.index_path.stat()
+                    return stat.st_mtime_ns, stat.st_size
+                except FileNotFoundError:
+                    return None
+            def changed(value):
+                if value != getattr(self, '_catalog_signature', None):
+                    self._catalog_signature = value
+                    self.refresh()
+            self.task.run(signature, changed, self._error)
+        self._processing_poll = self.after(1500, self._poll_processing)
 
     def _refresh_candidate_counts(self):
         self._candidate_refresh_after = None
@@ -106,6 +122,9 @@ class UniformWorkspace(ctk.CTkFrame):
             window.refresh()
 
     def destroy(self):
+        if getattr(self, "_processing_poll", None) is not None:
+            self.after_cancel(self._processing_poll)
+            self._processing_poll = None
         if self._candidate_refresh_after is not None:
             self.after_cancel(self._candidate_refresh_after)
             self._candidate_refresh_after = None
@@ -124,7 +143,7 @@ class UniformWorkspace(ctk.CTkFrame):
         self._tab_changed()
 
     def _error(self, error):
-        self._status_override = str(error) + ' Any examples already saved remain available for review.'
+        self._status_override = str(error) + ' Any examples already saved remain available for processing.'
         self.status.configure(text=self._status_override)
 
     def run(self, operation, message, done=None, error=None):
@@ -137,7 +156,7 @@ class UniformWorkspace(ctk.CTkFrame):
             if hasattr(value, 'message') and callable(value.message):
                 self._status_override = value.message() + ' The active model is unchanged.'
             else:
-                self._status_override = 'Saved to the review dataset. The active model is unchanged.'
+                self._status_override = 'Saved for automatic dataset processing. The active model is unchanged.'
             self.status.configure(text=self._status_override)
             if done:
                 done(value)
@@ -192,12 +211,14 @@ class UniformWorkspace(ctk.CTkFrame):
             for widget in gallery.winfo_children():
                 widget.destroy()
             self._images.clear()
-            totals = {s: sum(r['status'] == s for r in records) for s in ('approved', 'pending_review', 'excluded')}
+            totals = {s: sum(r.get('processing_state', 'queued') == s for r in records)
+                      for s in ('queued', 'processing', 'training_ready', 'quarantined', 'failed')}
             instruction = ('Add clear examples of clothing outside the Campus Uniform and Organizational Shirt categories.\n'
                            if category == 'other_clothing' else '')
-            counts.configure(text=instruction + f"{len(records)} unique images • {totals['approved']} approved • {totals['pending_review']} pending review • {totals['excluded']} excluded\n"
-                + f"{snapshot['counts']['eligible_by_category'].get(category, 0)} training-eligible • "
-                + f"{sum(max(0, len(r.get('sources', []))-1) for r in records)} exact duplicate occurrences • {sum(bool(r.get('duplicate_of')) for r in records)} images flagged as near-duplicates")
+            counts.configure(text=instruction + f"{len(records)} unique images • {totals['training_ready']} training-ready • "
+                + f"{totals['queued'] + totals['processing']} queued/processing • {totals['quarantined']} quarantined • {totals['failed']} failed\n"
+                + f"{totals['training_ready'] + totals['quarantined']} processed • "
+                + f"{snapshot['counts']['exact_duplicate_occurrences']} exact duplicates • {snapshot['counts'].get('near_duplicate_groups', 0)} near-duplicate groups (dataset)")
             page_label.configure(text=f'Page {actual + 1} • showing {len(rows)} of {len(records)}')
             for i, (record, picture, display_crop, image_error) in enumerate(rows):
                 card = ctk.CTkFrame(gallery, fg_color=COLOR_SURFACE)
@@ -205,15 +226,17 @@ class UniformWorkspace(ctk.CTkFrame):
                 img = ctk.CTkImage(light_image=picture, dark_image=picture, size=picture.size)
                 self._images.append(img)
                 ctk.CTkLabel(card, text='', image=img).pack(pady=6)
-                ctk.CTkLabel(card, text=f"{CATEGORIES.get(record.get('category'), record.get('category'))}\n{record['status'].replace('_', ' ')} • {record['width']} × {record['height']}\n{len(record.get('sources', []))} source occurrence(s)\nPhoto {record['image_id'][:10]}", wraplength=200).pack(padx=6)
+                ctk.CTkLabel(card, text=f"{CATEGORIES.get(record.get('category'), record.get('category'))}\n{record.get('processing_state', 'unassigned' if record.get('category') == 'unassigned' else 'queued').replace('_', ' ')} • {record['width']} × {record['height']}\n{len(record.get('sources', []))} source occurrence(s)\nPhoto {record['image_id'][:10]}", wraplength=200).pack(padx=6)
                 if not display_crop and not image_error:
                     ctk.CTkLabel(card, text='No saved or proposed torso crop', wraplength=200,
                                  text_color=COLOR_TEXT_MUTED).pack(padx=6)
                 if image_error:
                     ctk.CTkLabel(card, text=image_error, wraplength=200, text_color='#e89a73').pack(padx=6)
-                ctk.CTkButton(card, text='Review original & crop', command=lambda r=record: self.open_review(r)).pack(padx=6, pady=6)
+                if record.get('eligibility_reasons'):
+                    ctk.CTkLabel(card, text='; '.join(record['eligibility_reasons']), wraplength=200, text_color='#e89a73').pack(padx=6)
+                ctk.CTkButton(card, text='Inspect original & crop', command=lambda r=record: self.open_review(r)).pack(padx=6, pady=6)
             if not rows:
-                ctk.CTkLabel(gallery, text='No examples yet. Import photos to begin review.', text_color=COLOR_TEXT_MUTED).grid(row=0, column=0, columnspan=3, pady=25)
+                ctk.CTkLabel(gallery, text='No examples yet. Import photos to begin automatic processing.', text_color=COLOR_TEXT_MUTED).grid(row=0, column=0, columnspan=3, pady=25)
             ready = snapshot.get('readiness', {})
             logo = snapshot.get('logo', {})
             self.readiness.configure(text='Current model artifacts (unchanged): ' + ' • '.join(models) + '\n'
@@ -228,7 +251,7 @@ class UniformWorkspace(ctk.CTkFrame):
                 + f"Dataset: {snapshot.get('counts', {}).get('total', len(snapshot['records']))} unique originals. "
                 + 'Review legacy examples below; confirm each garment category.')
             if self._status_override is None:
-                self.status.configure(text='Review dataset and isolated candidates • active model unchanged')
+                self.status.configure(text='Automatic dataset processing • active model unchanged')
             if self._refresh_again:
                 self._refresh_again = False
                 self.refresh()
@@ -281,87 +304,12 @@ class UniformWorkspace(ctk.CTkFrame):
         self.page = max(0, self.page + delta)
         self.refresh()
 
-    def confirm_approve_all(self):
-        if self.task.busy:
-            self.status.configure(text='An operation is already running. Please wait for it to finish.')
-            return
-        if self._review_write_pending.is_set() or (self._review is not None and self._review.winfo_exists()):
-            self.status.configure(text='Finish or close the current photo review before approving all pending photos.')
-            return
-        if getattr(self, '_approval_dialog', None) is not None and self._approval_dialog.winfo_exists():
-            self._approval_dialog.lift()
-            return
-        dialog = ctk.CTkToplevel(self)
-        self._approval_dialog = dialog
-        dialog.title('Approve all pending photos')
-        dialog.geometry('540x280')
-        dialog.transient(self.winfo_toplevel())
-        dialog.grab_set()
-        ctk.CTkLabel(dialog, text=(
-            'Approve all pending photos?\n\n'
-            'This action will approve all pending unique photos across Campus Uniform, Organizational Shirt, and Wrong Uniform.\n\n'
-            'The operation includes photos with unresolved review warnings. Existing quality and provenance warnings will be preserved. '
-            'Some approved photos may still require corrections before they become eligible for model training.\n\n'
-            'Do you want to continue?'), wraplength=500, justify='left').pack(fill='both', expand=True, padx=18, pady=16)
-        actions = ctk.CTkFrame(dialog, fg_color='transparent')
-        actions.pack(fill='x', padx=14, pady=10)
-        ctk.CTkButton(actions, text='Cancel', command=dialog.destroy).pack(side='right', padx=5)
-        ctk.CTkButton(actions, text='Approve All', command=lambda: self._approve_all(dialog)).pack(side='right', padx=5)
-
-    def _approve_all(self, dialog):
-        if self.task.busy or self._review_write_pending.is_set() or (self._review is not None and self._review.winfo_exists()):
-            return
-        dialog.destroy()
-        self.approve_all_button.configure(state='disabled')
-        self._status_override = None
-        self.status.configure(text='Approving all pending unique photos across the three training categories…')
-        def operation():
-            from core.uniform_dataset import BulkApprovalError
-            try:
-                return {"result": self.dataset.approve_all_pending()}
-            except BulkApprovalError as exc:
-                return {"error": str(exc), "result": exc.result}
-            except Exception as exc:
-                return {"error": str(exc), "result": None}
-        def done(value):
-            if value.get('error'):
-                failed(value['error'], value.get('result'))
-                return
-            result = value['result']
-            self._status_override = (f"Approve all complete: {result['approved']} approved of {result['total_pending']} pending; "
-                f"{result['already_approved']} already approved; {result['failed']} failed; "
-                f"{result['not_training_eligible']} not-training-eligible among all approved garment photos; "
-                f"{result['remaining_pending']} pending remain.")
-            self.status.configure(text=self._status_override)
-            self.approve_all_button.configure(state='normal')
-            self.refresh()
-            if self._candidate_refresh_after is None:
-                self._refresh_candidate_counts()
-        def failed(message, result=None):
-            if self.task.busy:
-                self._status_override = 'Still working. Please wait; retry is available when this operation finishes.'
-                self.status.configure(text=self._status_override)
-                return
-            if result is None:
-                self._status_override = f'Approve all could not determine catalog counts: {message} No success was reported.'
-            else:
-                self._status_override = (f"Approve all failed: {message} Total pending {result['total_pending']}; approved 0; "
-                    f"already approved {result['already_approved']}; failed {result['failed']}; "
-                    f"not-training-eligible among all approved garment photos {result['not_training_eligible']}; "
-                    f"remaining pending {result['remaining_pending']}. Retry is available.")
-            self.status.configure(text=self._status_override)
-            self.approve_all_button.configure(state='normal')
-            self.refresh()
-            if self._candidate_refresh_after is None:
-                self._refresh_candidate_counts()
-        self.task.run(operation, done, failed)
-
     def _bulk_is_busy(self):
         return self.task.busy or self._review_write_pending.is_set()
 
     def start_capture(self, category):
         if self._bulk_is_busy():
-            self.status.configure(text='Wait for the current approval or review save before capturing photos.')
+            self.status.configure(text='Wait for the current dataset save before capturing photos.')
             return
         self.capture(category)
 
@@ -399,7 +347,7 @@ class UniformWorkspace(ctk.CTkFrame):
     def import_frames(self, frames, category, capture_group, done, error=None):
         dataset = self.dataset
         return self.run(lambda: [dataset.import_capture(f, category, capture_group) for f in frames],
-                        'Saving captured originals for review…', done, error)
+                        'Saving captured originals for automatic processing…', done, error)
 
     def open_review(self, record):
         if self.task.busy or self._review_write_pending.is_set():
@@ -414,7 +362,7 @@ class UniformWorkspace(ctk.CTkFrame):
 class ReviewWindow(ctk.CTkToplevel):
     def __init__(self, master, dataset, record, changed):
         super().__init__(master)
-        self.title('Review uniform example')
+        self.title('Inspect uniform example')
         self.geometry('880x760')
         self.minsize(880, 500)
         self.transient(master.winfo_toplevel())
@@ -491,7 +439,7 @@ class ReviewWindow(ctk.CTkToplevel):
         for widget in (self.category, self.visibility, self.logo_source):
             widget.configure(command=self.invalidate_logo_review)
         self.flags = {}
-        for flag, label in [('possible_blur', 'Possible blur'), ('obstruction', 'Garment obstructed'), ('low_resolution', 'Insufficient resolution'), ('incorrect_association', 'Wrong person / garment association'), ('provenance_association_uncertain', 'Association still needs review'), ('label_conflict', 'Conflicting labels still unresolved'), ('multiple_people', 'Multiple people: association unresolved'), ('person_association_uncertain', 'Detected person association needs review')]:
+        for flag, label in [('possible_blur', 'Possible blur'), ('obstruction', 'Garment obstructed'), ('low_resolution', 'Insufficient resolution'), ('incorrect_association', 'Wrong person / garment association'), ('provenance_association_uncertain', 'Unknown provenance / association warning (advisory)'), ('label_conflict', 'Conflicting labels still unresolved'), ('multiple_people', 'Multiple people: association unresolved'), ('person_association_uncertain', 'Detected person association needs review')]:
             check = ctk.CTkCheckBox(body, text=label)
             check.pack(anchor='w', padx=10, pady=3)
             if flag in record.get('flags', []):
@@ -501,11 +449,9 @@ class ReviewWindow(ctk.CTkToplevel):
         self.notes = ctk.CTkEntry(body)
         self.notes.insert(0, record.get('notes', ''))
         self.notes.pack(fill='x', padx=10, pady=4)
-        self.confirm = ctk.CTkCheckBox(body, text='I checked the category, crop, association and quality warnings.')
-        self.confirm.pack(anchor='w', padx=10, pady=8)
         actions = ctk.CTkFrame(body)
         actions.pack(fill='x', padx=10, pady=10)
-        for title, status in [('Save pending review', 'pending_review'), ('Approve example', 'approved'), ('Exclude example', 'excluded')]:
+        for title, status in [('Save correction & reprocess', 'pending_review'), ('Exclude example', 'excluded')]:
             ctk.CTkButton(actions, text=title, command=lambda s=status: self.save(s)).pack(side='left', padx=4, pady=6)
         self.preview()
 
@@ -566,7 +512,6 @@ class ReviewWindow(ctk.CTkToplevel):
             self.logo_box.insert(0, ', '.join(map(str, box)))
             self.draw_box()
         else:
-            self.confirm.deselect()
             self.set_crop(box)
 
     def preview(self):
@@ -598,7 +543,7 @@ class ReviewWindow(ctk.CTkToplevel):
             if logo:
                 self._logo_photo = ctk.CTkImage(light_image=logo, dark_image=logo, size=logo.size)
                 self.logo_preview.configure(image=self._logo_photo, compound='top',
-                    text=f'Logo region: {logo_size[0]} × {logo_size[1]} original pixels · preview only, not yet approved')
+                    text=f'Logo region: {logo_size[0]} × {logo_size[1]} original pixels · preview only')
             else:
                 self.logo_preview.configure(image=None, text='No photographed-logo box selected.')
                 self._logo_photo = None
@@ -630,7 +575,6 @@ class ReviewWindow(ctk.CTkToplevel):
             if box:
                 self._proposal_box = list(box)
                 self.set_crop(box)
-                self.confirm.deselect()
                 self.preview()
             else:
                 self.message.configure(text='No reliable torso proposal. Correct the crop manually.')
@@ -643,14 +587,12 @@ class ReviewWindow(ctk.CTkToplevel):
             self.message.configure(text='An operation is still running. Please wait.')
             return
         try:
-            if status == 'approved' and not self.confirm.get():
-                raise ValueError('Confirm your review before approval.')
             box = self.crop()
             logo = self.logo_coords()
             category = next(c for c, title in CATEGORIES.items() if title == self.category.get())
             flags = [f for f in self.record.get('flags', []) if f not in self.flags]
             flags += [f for f, check in self.flags.items() if check.get()]
-            args = dict(category=category, crop=box, crop_source='detector' if box == self._proposal_box else 'manual', status=status,
+            args = dict(category=category, crop=box, crop_source='manual', status=status,
                 logo_visibility=self.visibility.get(), logo_box=logo, logo_reviewed=bool(self.logo_confirm.get()),
                 logo_source_kind=self.logo_source.get(), logo_association_confirmed=bool(self.logo_association.get()),
                 flags=flags, notes=self.notes.get())

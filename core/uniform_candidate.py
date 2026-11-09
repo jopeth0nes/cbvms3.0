@@ -26,11 +26,12 @@ from core.uniform_dataset import CATEGORIES, PREPROCESS_VERSION as DATASET_PREPR
 MAPPING_VERSION = "uniform-garments-v1"
 CLASS_MAP = {0: "campus_uniform", 1: "organizational_shirt", 2: "other_clothing"}
 CATEGORY_TO_INDEX = {value: key for key, value in CLASS_MAP.items()}
-DEFAULT_CONFIG = {"epochs": 5, "batch": 4, "threads": 2, "min_per_class": 10, "synthetic_smoke": False}
+DEFAULT_CONFIG = {"epochs": 5, "batch": 4, "threads": 2, "min_per_class": 10,
+                  "synthetic_smoke": False, "allow_accelerator": False}
 BLOCKING_FLAGS = {
     "obstruction", "obstructed", "low_resolution", "possible_blur", "image_quality_check_failed",
     "incorrect_association", "unable_to_assess", "multiple_people", "person_association_uncertain",
-    "provenance_association_uncertain", "label_conflict", "near_duplicate_review",
+    "label_conflict", "category_conflict", "crop_unreliable", "invalid_image",
 }
 RUN_STATES = {"preparing", "running", "cancel_requested", "completed", "cancelled", "failed", "interrupted"}
 _ROOT_LOCKS: dict[str, threading.Lock] = {}
@@ -92,11 +93,136 @@ def _flags(record: dict) -> set[str]:
 
 
 def _record_groups(record: dict) -> tuple[set[str], bool]:
-    groups = {str(value) for value in record.get("capture_groups", []) if value}
-    if record.get("capture_group"):
-        groups.add(str(record["capture_group"]))
-    unknown = bool(record.get("has_unknown_provenance", not groups))
+    groups: set[str] = set()
+    capture = record.get("capture_groups", [])
+    provenance = record.get("provenance_groups", [])
+    if isinstance(capture, (str, int)): capture = [capture]
+    if isinstance(provenance, (str, int)): provenance = [provenance]
+    capture = set(capture or [])
+    provenance = set(provenance or [])
+    if record.get("capture_group"): capture.add(record["capture_group"])
+    if record.get("provenance_group"): provenance.add(record["provenance_group"])
+    groups.update(f"capture:{item}" for item in capture if item)
+    groups.update(f"provenance:{item}" for item in provenance if item)
+    duplicates = set()
+    for key in ("near_duplicate_group", "duplicate_group", "near_duplicate_groups"):
+        value = record.get(key, [])
+        if isinstance(value, (str, int)): value = [value]
+        duplicates.update(value or [])
+    duplicate_of = record.get("duplicate_of", [])
+    if isinstance(duplicate_of, (str, int)):
+        duplicate_of = [duplicate_of]
+    duplicates.update(duplicate_of or [])
+    groups.update(f"near-duplicate:{item}" for item in duplicates if item)
+    if record.get("image_id"):
+        groups.add(f"related-image:{record['image_id']}")
+        groups.update(f"related-image:{item}" for item in duplicate_of or [] if item)
+    unknown = bool(record.get("has_unknown_provenance", not (capture or provenance)))
+    if unknown:
+        groups.add("provenance:unknown-shared")
     return groups, unknown
+
+
+def _related_group_roots(records: list[dict], *, near_duplicates_only: bool = False) -> dict[str, str]:
+    """Build transitive identifiers across all catalog rows, including ineligible bridges."""
+    parent: dict[str, str] = {}
+    def find(value):
+        parent.setdefault(value, value)
+        if parent[value] != value: parent[value] = find(parent[value])
+        return parent[value]
+    def union(left, right):
+        a, b = find(left), find(right)
+        if a != b: parent[b] = a
+    row_tokens = []
+    for record in records:
+        if near_duplicates_only:
+            tokens = set()
+            image_id = record.get("image_id")
+            if image_id: tokens.add(f"image:{image_id}")
+            duplicate_of = record.get("duplicate_of", [])
+            if isinstance(duplicate_of, (str, int)): duplicate_of = [duplicate_of]
+            tokens.update(f"image:{value}" for value in duplicate_of or [] if value)
+            for key in ("near_duplicate_group", "near_duplicate_groups", "duplicate_group"):
+                values = record.get(key, [])
+                if isinstance(values, (str, int)): values = [values]
+                tokens.update(f"near-duplicate:{value}" for value in values or [] if value)
+        else:
+            tokens, _ = _record_groups(record)
+        tokens = sorted(tokens)
+        for token in tokens: find(token)
+        for token in tokens[1:]: union(tokens[0], token)
+        row_tokens.append((str(record.get("image_id", "")), tokens))
+    result = {}
+    for image_id, tokens in row_tokens:
+        if image_id:
+            result[image_id] = find(tokens[0]) if tokens else f"isolated:{image_id}"
+    return result
+
+
+def assign_group_splits(entries: list[dict], *, seed: int) -> tuple[dict[str, str], bool, str]:
+    """Assign connected capture/provenance/duplicate components atomically."""
+    parent: dict[str, str] = {}
+    def find(value):
+        parent.setdefault(value, value)
+        if parent[value] != value: parent[value] = find(parent[value])
+        return parent[value]
+    def union(left, right):
+        a, b = find(left), find(right)
+        if a != b: parent[b] = a
+    for row in entries:
+        groups = row.get("group_ids") or [f"unlinked:{row['image_id']}"]
+        row["group_ids"] = sorted(set(groups))
+        for group in row["group_ids"]: find(group)
+        for group in row["group_ids"][1:]: union(row["group_ids"][0], group)
+    components: dict[str, list[dict]] = {}
+    for row in entries:
+        groups = row.get("group_ids") or [f"unlinked:{row['image_id']}"]
+        components.setdefault(find(groups[0]), []).append(row)
+    classes = set(CATEGORY_TO_INDEX)
+    counts_by_class = {c: set() for c in classes}
+    for key, rows in components.items():
+        for row in rows:
+            row["component_group_id"] = key
+        for c in {row["category"] for row in rows}: counts_by_class[c].add(key)
+    can_eval = all(len(counts_by_class[c]) >= 3 for c in classes)
+    can_val = all(len(counts_by_class[c]) >= 2 for c in classes)
+    if not can_val:
+        return {row["image_id"]: "train" for row in entries}, False, "Insufficient independent groups for validation; independent evaluation is unavailable."
+    # Reserve independent components to populate each evaluation split by class.
+    ordered = sorted(components, key=lambda key: hashlib.sha256(f"{seed}:{key}".encode()).hexdigest())
+    totals = {c: sum(row["category"] == c for row in entries) for c in classes}
+    splits = ["train", "validation", "evaluation"] if can_eval else ["train", "validation"]
+    assigned: dict[str, str] = {}
+    counts = {split: {c: 0 for c in classes} for split in splits}
+    remaining = set(ordered)
+    for split in splits[1:]:
+        missing = set(classes)
+        while missing:
+            candidates = []
+            for key in remaining:
+                represented = {row["category"] for row in components[key]}
+                gain = len(missing & represented)
+                if gain:
+                    candidates.append((-gain, len(components[key]), ordered.index(key), key, represented))
+            if not candidates:
+                break
+            _, _, _, key, represented = min(candidates)
+            assigned[key] = split
+            remaining.remove(key)
+            for row in components[key]: counts[split][row["category"]] += 1
+            missing -= represented
+    # Place remaining components in training; held-out ratios remain capped by group count.
+    for key in ordered:
+        if key not in remaining:
+            continue
+        assigned[key] = "train"
+        for row in components[key]: counts["train"][row["category"]] += 1
+    result = {row["image_id"]: assigned[find((row.get("group_ids") or [f"unlinked:{row['image_id']}"])[0])] for row in entries}
+    complete = all(counts[s][c] > 0 for s in splits for c in classes)
+    if not complete or any(counts["train"][c] < 10 for c in classes):
+        result = {row["image_id"]: "train" for row in entries}
+        return result, False, "Independent evaluation unavailable: holdout groups would leave fewer than ten training examples per class or cannot populate each class without leakage."
+    return result, can_eval, "" if can_eval else "Independent evaluation unavailable: fewer than three independent groups per class."
 
 
 def _valid_crop(record: dict) -> bool:
@@ -115,11 +241,13 @@ def training_eligibility_reason(record: dict) -> str | None:
     Candidate freezing still verifies source paths, hashes and decoded bytes.
     """
     category = record.get("category")
-    if record.get("status") != "approved": return "not approved"
+    if record.get("status") == "excluded": return "administratively excluded"
+    if record.get("processing_state") != "training_ready" or record.get("training_eligible") is not True:
+        return "not processed as training-ready"
     if category not in CATEGORY_TO_INDEX: return "invalid training category"
-    if _flags(record) & BLOCKING_FLAGS: return "unresolved training-blocking flags"
+    resolved = {str(value) for value in record.get("resolved_warnings", [])}
+    if (_flags(record) - resolved) & BLOCKING_FLAGS: return "unresolved training-blocking flags"
     if not _valid_crop(record): return "missing or invalid torso crop"
-    if record.get("duplicate_of"): return "near duplicate requires review"
     if (record.get("logo_annotation") or {}).get("source_kind") == "reference_artwork":
         return "reference artwork is not a photographed garment"
     return None
@@ -133,41 +261,55 @@ def candidate_summary(dataset: Any, *, min_per_class: int = 10) -> dict:
     """Summarize records usable for experiments, without changing the catalog."""
     snap = _snapshot(dataset)
     included = {category: 0 for category in CATEGORY_TO_INDEX}
-    approved = {category: 0 for category in CATEGORY_TO_INDEX}
+    ready = {category: 0 for category in CATEGORY_TO_INDEX}
     groups = {category: {"known": 0, "unknown": 0} for category in CATEGORY_TO_INDEX}
     known_sets = {category: set() for category in CATEGORY_TO_INDEX}
     unknown_seen = {category: False for category in CATEGORY_TO_INDEX}
-    pending = sum(r.get("status") == "pending_review" for r in snap["records"])
+    related_roots = _related_group_roots(snap["records"])
+    pending = sum(r.get("status") != "excluded" and r.get("processing_state") in {"queued", "processing"}
+                  for r in snap["records"])
     excluded = sum(r.get("status") == "excluded" for r in snap["records"])
     quality_blocked = 0
     reasons = []
-    for record in snap["records"]:
+    seen_images: set[str] = set()
+    for index, record in enumerate(snap["records"]):
         category = record.get("category")
-        if record.get("status") == "approved" and record.get("category") in CATEGORY_TO_INDEX and not is_training_eligible(record):
+        if (record.get("status") != "excluded" and record.get("processing_state") == "training_ready"
+                and record.get("category") in CATEGORY_TO_INDEX and not is_training_eligible(record)):
             quality_blocked += 1
-        if record.get("status") != "approved" or category not in CATEGORY_TO_INDEX:
+        if category not in CATEGORY_TO_INDEX:
             continue
-        approved[category] += 1
+        if is_training_eligible(record):
+            ready[category] += 1
         if not is_training_eligible(record):
             continue
+        image_key = str(record.get("image_id") or f"snapshot-row-{index}")
+        if image_key in seen_images:
+            continue
+        seen_images.add(image_key)
         included[category] += 1
         known, unknown = _record_groups(record)
-        known_sets[category].update(known)
+        if not unknown:
+            # Count connected independent groups once, not each capture,
+            # provenance and duplicate token describing the same examples.
+            root = related_roots.get(record.get("image_id"))
+            known_sets[category].add(root or tuple(sorted(known)))
         unknown_seen[category] |= unknown
     for category in included:
         groups[category] = {"known": len(known_sets[category]), "unknown": int(unknown_seen[category])}
     missing = {category: count for category, count in included.items() if count < min_per_class}
     eligible = not missing
     if missing:
-        reasons.extend(f"{CATEGORIES[category]} has {count} eligible approved examples; requires {min_per_class}."
+        reasons.extend(f"{CATEGORIES[category]} has {count} training-ready examples; requires {min_per_class}."
                        for category, count in missing.items())
     if quality_blocked:
-        reasons.append(f"{quality_blocked} approved record(s) have unresolved flags, invalid crops, duplicate links, or reference-artwork provenance and are excluded.")
+        reasons.append(f"{quality_blocked} training-ready record(s) have unresolved blocking issues, invalid crops, or reference-artwork provenance and are excluded.")
     if pending:
-        reasons.append(f"{pending} pending-review record(s) are excluded.")
+        reasons.append(f"{pending} queued or processing record(s) are not yet eligible.")
     if excluded:
         reasons.append(f"{excluded} excluded record(s) are not used.")
-    return {"mapping_version": MAPPING_VERSION, "approved_by_category": approved,
+    return {"mapping_version": MAPPING_VERSION, "training_ready_by_category": ready,
+            "approved_by_category": ready,
             "included_by_category": included,
             "groups_by_category": groups, "pending": pending, "excluded": excluded,
             "quality_blocked": quality_blocked, "eligible": eligible,
@@ -253,8 +395,8 @@ class CandidateService:
         for key, low, high in (("epochs", 1, 40), ("batch", 2, 16), ("threads", 1, 4)):
             if type(value[key]) is not int or not low <= value[key] <= high:
                 raise ValueError(f"{key} must be an integer from {low} to {high}")
-        if type(value["synthetic_smoke"]) is not bool:
-            raise ValueError("synthetic_smoke must be boolean")
+        if type(value["synthetic_smoke"]) is not bool or type(value["allow_accelerator"]) is not bool:
+            raise ValueError("synthetic_smoke and allow_accelerator must be boolean")
         min_value = 2 if value["synthetic_smoke"] else 10
         if type(value["min_per_class"]) is not int or value["min_per_class"] < min_value or value["min_per_class"] > 5000:
             raise ValueError(f"min_per_class must be from {min_value} to 5000")
@@ -366,7 +508,13 @@ class CandidateService:
             return {"cancelled_during_freeze": True}
         (run_dir / "prepared").mkdir(parents=True, exist_ok=True)
         root = dataset.root.resolve()
-        eligible = [r for r in snap["records"] if is_training_eligible(r)]
+        related_roots = _related_group_roots(snap["records"])
+        near_duplicate_roots = _related_group_roots(snap["records"], near_duplicates_only=True)
+        eligible_by_image: dict[str, dict] = {}
+        for record in snap["records"]:
+            if is_training_eligible(record):
+                eligible_by_image.setdefault(str(record.get("image_id")), record)
+        eligible = list(eligible_by_image.values())
         entries = []
         from PIL import Image
         import cv2
@@ -395,7 +543,7 @@ class CandidateService:
                 raise ValueError(f"Original SHA256 mismatch for image {record.get('image_id')}")
             crop = record.get("crop")
             if not _valid_crop(record):
-                raise ValueError(f"Approved image {record.get('image_id')} has no valid crop")
+                raise ValueError(f"Training-ready image {record.get('image_id')} has no valid crop")
             with Image.open(io.BytesIO(original_bytes)) as im:
                 im.load()
                 raster = im.convert("RGB")
@@ -403,7 +551,7 @@ class CandidateService:
                 raise ValueError(f"Original dimensions changed for image {record.get('image_id')}")
             crop_rgb = np.asarray(raster.crop(tuple(crop)), dtype=np.uint8)
             if crop_rgb.size == 0:
-                raise ValueError(f"Approved image {record.get('image_id')} has an empty crop")
+                raise ValueError(f"Training-ready image {record.get('image_id')} has an empty crop")
             crop_bgr = cv2.cvtColor(crop_rgb, cv2.COLOR_RGB2BGR)
             boxed_bgr = _letterbox(crop_bgr, 224)
             tensor = (cv2.cvtColor(boxed_bgr, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0)
@@ -419,14 +567,22 @@ class CandidateService:
                             "class_index": CATEGORY_TO_INDEX[record["category"]], "crop": crop,
                             "crop_source": record.get("crop_source"),
                             "preprocess_version": record.get("preprocess_version", snap.get("preprocess_version")),
-                            "group_ids": sorted(known), "unknown_provenance": unknown,
+                            "group_ids": sorted(known | {f"catalog-component:{related_roots.get(record['image_id'], record['image_id'])}"}),
+                            "sampling_group_id": near_duplicate_roots.get(record["image_id"], record["image_id"]),
+                            "unknown_provenance": unknown,
                             "near_duplicate_ids": sorted(record.get("duplicate_of", [])), "split": "train"})
+        split_map, evaluation_available, split_note = assign_group_splits(entries, seed=int(run_dir.name[:8], 16))
+        for entry in entries:
+            entry["split"] = split_map[entry["image_id"]]
+        split_distribution = {split: {category: sum(e["split"] == split and e["category"] == category for e in entries)
+                                      for category in CATEGORY_TO_INDEX}
+                              for split in ("train", "validation", "evaluation")}
         after = _snapshot(dataset)
         if (run_dir / "cancel.flag").exists():
             return {"cancelled_during_freeze": True}
         dataset_hash = self._snapshot_digest(snap)
         if self._snapshot_digest(after) != dataset_hash:
-            raise RuntimeError("Stage 1 catalog changed while freezing candidate inputs; retry from a fresh review")
+            raise RuntimeError("Stage 1 catalog changed while freezing candidate inputs; retry from a fresh dataset snapshot")
         class_map = {"mapping_version": MAPPING_VERSION,
                      "classes": [{"index": index, "category": category} for index, category in CLASS_MAP.items()]}
         _atomic_json(run_dir / "class_map.json", class_map)
@@ -441,23 +597,29 @@ class CandidateService:
                                              "pending": summary["pending"], "excluded": summary["excluded"],
                                              "quality_blocked": summary["quality_blocked"],
                                              "readiness_reasons": summary["reasons"]},
-                    "split_policy": "experimental_train_only_no_validation_or_evaluation",
-                    "limitations": ["Experimental train-only bundle; no validation or evaluation metrics.",
-                                    "Train loss does not establish accuracy or deployment readiness."],
+                    "split_policy": "transitive_capture_provenance_near_duplicate_grouped_deterministic",
+                    "split_distribution": split_distribution, "evaluation_available": evaluation_available,
+                    "split_note": split_note, "limitations": [split_note] if split_note else [],
                     "entries": entries}
         _atomic_json(run_dir / "dataset_manifest.json", manifest)
         manifest_hash = _sha256(run_dir / "dataset_manifest.json")
         import importlib.metadata
         config_data = {**config, "mapping_version": MAPPING_VERSION, "base_weights_sha256": base_hash,
                        "base_weights_file": "base_weights.pt", "dataset_manifest_sha256": manifest_hash,
+                       "training_pipeline_version": "uniform-auto-training-v1",
                        "synthetic_smoke": config["synthetic_smoke"], "nondeployable": True,
-                       "architecture": "yolov8n-cls", "optimizer": "AdamW", "learning_rate": 1e-3,
+                       "architecture": "yolov8n-cls", "optimizer": "AdamW",
+                       "learning_rates": {"backbone": 3e-5, "head": 3e-4},
                        "weight_decay": 1e-2, "seed": int(run_dir.name[:8], 16),
+                       "augmentation": {"brightness": 0.08, "contrast": 0.08, "scale": 0.0,
+                                        "horizontal_flip": False, "validation_test": "none"},
+                       "early_stopping_patience": 5, "minimum_improvement": 0.001,
+                       "class_balancing": "near_duplicate_group_weighted_sampling_plus_inverse_sqrt_frequency_loss",
                        "eligibility_snapshot": manifest["eligibility_snapshot"],
                        "model_preprocess": manifest["model_preprocess"],
                        "ultralytics_version": importlib.metadata.version("ultralytics"),
                        "torch_version": importlib.metadata.version("torch"),
-                       "limitations": ["Experimental train-only; no independent validation/evaluation.",
+                       "limitations": [split_note or "Group-aware independent evaluation available.",
                                        "Training loss is not an accuracy measure.",
                                        "Candidate is nondeployable and is never activated by this service."]}
         _atomic_json(run_dir / "config.json", config_data)
@@ -481,7 +643,9 @@ class CandidateService:
                                        stdout=log, stderr=subprocess.STDOUT, close_fds=True,
                                        pass_fds=(lock.file.fileno(),),
                                        env={**os.environ, "YOLO_CONFIG_DIR": str(self.candidates_root / ".ultralytics"),
-                                            "MPLCONFIGDIR": str(self.candidates_root / ".mplconfig")})
+                                            "MPLCONFIGDIR": str(self.candidates_root / ".mplconfig"),
+                                            "OMP_NUM_THREADS": "2", "MKL_NUM_THREADS": "2",
+                                            "OPENBLAS_NUM_THREADS": "2", "VECLIB_MAXIMUM_THREADS": "2"})
         except Exception:
             log.close()
             raise
@@ -541,7 +705,7 @@ class CandidateService:
             run_dir.mkdir(mode=0o700, parents=True)
             os.chmod(run_dir, 0o700)
             self._status_write(run_dir, {"run_id": run_id, "status": "preparing", "epoch": 0,
-                                         "epochs": chosen["epochs"], "message": "Freezing reviewed candidate inputs.",
+                                         "epochs": chosen["epochs"], "message": "Freezing training-ready candidate inputs.",
                                          "resumable": False, "started_at": _utc(), "process_id": os.getpid(),
                                          "run_uuid": run_id})
             (run_dir / "limitations.txt").write_text(

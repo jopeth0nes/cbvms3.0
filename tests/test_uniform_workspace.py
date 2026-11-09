@@ -23,7 +23,7 @@ class UniformWorkspaceTests(unittest.TestCase):
         # Match main.py's root transition: Tk finalizers belong on the UI thread.
         gc.collect()
         self.tmp = tempfile.TemporaryDirectory()
-        self.dataset = UniformDataset(Path(self.tmp.name)/'dataset')
+        self.dataset = UniformDataset(Path(self.tmp.name)/'dataset', auto_process=False)
         self.source = Path(self.tmp.name)/'original.png'
         image = Image.new('RGB', (400, 300), 'navy')
         image.paste('teal', (100, 60, 280, 260))
@@ -74,7 +74,7 @@ class UniformWorkspaceTests(unittest.TestCase):
         self.wait()
         self.assertEqual(self.view.category(), 'organizational_shirt')
         buttons = {w.cget('text'):w for w in self.descendants(self.view) if isinstance(w, ctk.CTkButton)}
-        self.assertIn('Train candidate with approved datasets', buttons)
+        self.assertIn('Train Model with Training-Ready Photos', buttons)
         self.assertEqual(buttons['Open Evaluation & Models'].cget('state'), 'normal')
         self.assertIn('active model unchanged', self.view.status.cget('text'))
 
@@ -83,18 +83,18 @@ class UniformWorkspaceTests(unittest.TestCase):
         self.view.open_candidates(); self.wait()
         window = self.view._candidate_window
         self.wait(window.task)
-        self.assertEqual(window.title(), 'Train candidate with approved datasets')
+        self.assertEqual(window.title(), 'Train Model with Training-Ready Photos')
         coverage = window.coverage.cget('text')
-        self.assertIn('Campus Uniform: 0 approved • 0 eligible/included', coverage)
-        self.assertIn('Organizational Shirt: 0 approved • 0 eligible/included', coverage)
-        self.assertIn('Wrong Uniform: 0 approved • 0 eligible/included', coverage)
-        self.assertIn('Wrong Uniform has 0 eligible approved examples; requires 10.', window.readiness.cget('text'))
+        self.assertIn('Campus Uniform: 0 training-ready • 0 eligible/included', coverage)
+        self.assertIn('Organizational Shirt: 0 training-ready • 0 eligible/included', coverage)
+        self.assertIn('Wrong Uniform: 0 training-ready • 0 eligible/included', coverage)
+        self.assertIn('Wrong Uniform has 0 training-ready examples; requires 10.', window.readiness.cget('text'))
         self.assertEqual(window.start_button.cget('state'), 'disabled')
         self.assertTrue(window.start_button.winfo_ismapped())
         self.assertEqual(list((Path(self.tmp.name)/'candidates').glob('*/candidate.pt')), [])
         window.destroy()
 
-    def test_upload_gallery_review_approval_and_label_correction(self):
+    def test_upload_gallery_crop_and_label_correction_without_approval(self):
         with patch('ui.uniform_workspace.filedialog.askopenfilenames', return_value=(str(self.source),)):
             self.view.upload('organizational_shirt')
         self.wait()
@@ -105,162 +105,33 @@ class UniformWorkspaceTests(unittest.TestCase):
         self.view.open_review(record)
         review = self.view._review
         self.wait(review.task)
-        review.save('approved')
-        self.assertIn('Confirm', review.message.cget('text'))
         review.set_crop([80, 40, 300, 280])
         review.category.set(CATEGORIES['campus_uniform'])
-        review.confirm.select()
-        review.save('approved')
+        review.save('pending_review')
         self.wait(review.task)
         self.wait()
         result = self.dataset.snapshot()['records'][0]
         self.assertEqual(result['crop'], [80, 40, 300, 280])
         self.assertEqual(result['category'], 'campus_uniform')
-        self.assertEqual(result['status'], 'approved')
+        self.assertEqual(result['status'], 'pending_review')
+        self.assertEqual(result['processing_state'], 'queued')
         self.assertEqual(self.source.read_bytes(), (self.dataset.root/result['original_path']).read_bytes())
 
-    def test_global_approve_all_confirmation_cancel_and_all_pages_categories(self):
-        def add(category, name, seed, status='pending_review', flags=None, crop=True):
-            data=io.BytesIO()
-            Image.fromarray(np.random.default_rng(seed).integers(0,256,(180,200,3),dtype=np.uint8)).save(data,format='PNG')
-            path=Path(self.tmp.name)/name; path.write_bytes(data.getvalue())
-            iid=self.dataset.import_paths([path],category)[0]
-            if status != 'pending_review' or flags or crop:
-                self.dataset.review(iid,category=category,crop=[20,20,180,160] if crop else [20,20,180,160],
-                                    status=status,flags=flags or [])
-                if not crop:
-                    with self.dataset._locked():
-                        catalog=self.dataset._load(); row=next(r for r in catalog['records'] if r['image_id']==iid)
-                        row['crop']=None; self.dataset._save(catalog)
-            return iid
-        ids=[]
-        for i in range(14):
-            ids.append(add('campus_uniform',f'all-campus-{i}.png',1000+i,
-                           flags=['provenance_association_uncertain'] if i==0 else [], crop=i!=1))
-        ids.append(add('organizational_shirt','all-org.png',1100))
-        ids.append(add('other_clothing','all-other.png',1101,flags=['near_duplicate_review']))
-        excluded=add('campus_uniform','all-excluded.png',1102,status='excluded')
-        legacy=add('unassigned','all-legacy.png',1103)
-        # Exact source occurrence remains one hash-addressed row.
-        record=next(r for r in self.dataset.snapshot()['records'] if r['image_id']==ids[0])
-        self.dataset.import_paths([self.dataset.root/record['original_path']], 'campus_uniform')
-        self.assertEqual(len(self.dataset.snapshot()['records']),18)
-        for category in ('campus_uniform','organizational_shirt','other_clothing'):
-            self.view.show_category(category); self.wait()
-            self.view.confirm_approve_all()
-            dialog=self.view._approval_dialog
-            buttons=[w for w in self.descendants(dialog) if isinstance(w,ctk.CTkButton)]
-            self.assertEqual({b.cget('text') for b in buttons},{'Cancel','Approve All'})
-            self.pump()
-            for button in buttons:
-                self.assertTrue(button.winfo_ismapped())
-                self.assertLessEqual(button.winfo_rooty() + button.winfo_height(),
-                                     dialog.winfo_rooty() + dialog.winfo_height())
-            next(b for b in buttons if b.cget('text')=='Cancel').invoke()
-            self.assertEqual(sum(r['status']=='pending_review' and r['category'] in GARMENTS for r in self.dataset.snapshot()['records']),16)
-        # Run confirmation from another category tab; page 2 is intentionally selected.
-        self.view.show_category('campus_uniform'); self.wait(); self.view.move_page(1); self.wait()
-        self.view.open_candidates(); self.wait(); candidate_window=self.view._candidate_window; self.wait(candidate_window.task)
-        self.view.show_category('other_clothing'); self.wait()
-        self.view.confirm_approve_all(); dialog=self.view._approval_dialog
-        next(w for w in self.descendants(dialog) if isinstance(w,ctk.CTkButton) and w.cget('text')=='Approve All').invoke()
-        self.wait()
-        rows={r['image_id']:r for r in self.dataset.snapshot()['records']}
-        self.assertTrue(all(rows[iid]['status']=='approved' for iid in ids))
-        self.assertEqual(rows[excluded]['status'],'excluded'); self.assertEqual(rows[legacy]['status'],'pending_review')
-        self.assertEqual(rows[ids[0]]['flags'],['provenance_association_uncertain'])
-        self.assertIsNone(rows[ids[1]]['crop'])
-        self.assertIn('not-training-eligible among all approved garment photos',self.view.status.cget('text'))
-        self.assertIn('16 approved',self.view.status.cget('text'))
-        self.wait(candidate_window.task)
-        self.assertIn('Campus Uniform: 14 approved • 12 eligible/included',candidate_window.coverage.cget('text'))
-        self.view.destroy()
-        reopened=UniformDataset(Path(self.tmp.name)/'dataset')
-        saved={r['image_id']:r for r in reopened.snapshot()['records']}
-        self.assertTrue(all(saved[iid]['status']=='approved' for iid in ids))
-        self.assertEqual(len(saved[ids[0]]['review_history']),2)
-
-    def test_global_approve_all_save_failure_is_atomic_responsive_and_retryable(self):
-        ids=[]
-        for i,category in enumerate(('campus_uniform','organizational_shirt','other_clothing')):
-            data=io.BytesIO(); Image.fromarray(np.random.default_rng(1200+i).integers(0,256,(160,180,3),dtype=np.uint8)).save(data,format='PNG')
-            path=Path(self.tmp.name)/f'failbulk-{i}.png'; path.write_bytes(data.getvalue())
-            ids.append(self.dataset.import_paths([path],category)[0])
-        before=self.dataset.snapshot()['records']
-        entered,release=threading.Event(),threading.Event()
-        original=self.dataset._save
-        original_run = self.view.task.run
-        callbacks = {}
-        def capture_callbacks(operation, done, error):
-            callbacks['error'] = error
-            return original_run(operation, done, error)
-        save_calls=[0]
-        def fail(catalog):
-            save_calls[0]+=1
-            entered.set(); release.wait(2); raise OSError('fixture save error')
-        with patch.object(self.dataset,'_save',side_effect=fail), patch.object(self.view.task, 'run', side_effect=capture_callbacks):
-            self.view.confirm_approve_all(); dialog=self.view._approval_dialog
-            approve=next(w for w in self.descendants(dialog) if isinstance(w,ctk.CTkButton) and w.cget('text')=='Approve All')
-            approve.invoke()
-            self.assertTrue(entered.wait(1))
-            self.assertEqual(self.view.approve_all_button.cget('state'),'disabled')
-            self.view.approve_all_button.invoke()
-            self.assertEqual(save_calls[0],1)
-            heartbeat=[]; self.root.after(1,lambda:heartbeat.append(True)); self.pump(20)
-            self.assertTrue(heartbeat)
-            self.assertIn('Approving all pending',self.view.status.cget('text'))
-            callbacks['error']('Still working. Please wait.')
-            self.assertTrue(self.view.task.busy)
-            self.assertEqual(self.view.approve_all_button.cget('state'), 'disabled')
-            self.assertIn('Still working', self.view.status.cget('text'))
-            self.assertNotIn('failed', self.view.status.cget('text'))
-            release.set(); self.wait()
-        self.assertIn('Approve all failed',self.view.status.cget('text'))
-        self.assertIn('failed 3',self.view.status.cget('text'))
-        self.assertIn('remaining pending 3',self.view.status.cget('text'))
-        self.assertEqual(self.dataset.snapshot()['records'],before)
-        with patch.object(self.dataset,'_save',wraps=original):
-            self.view.confirm_approve_all(); dialog=self.view._approval_dialog
-            next(w for w in self.descendants(dialog) if isinstance(w,ctk.CTkButton) and w.cget('text')=='Approve All').invoke()
-            self.wait()
-        self.assertIn('3 approved of 3 pending',self.view.status.cget('text'))
-        self.assertTrue(all(r['status']=='approved' for r in self.dataset.snapshot()['records']))
-
-    def test_global_button_approves_from_every_category_tab(self):
-        for index, current in enumerate(('Campus Uniform', 'Organizational Shirt', 'Wrong Uniform', 'Evaluation & Models')):
-            with self.subTest(tab=current):
-                ids = []
-                for number, category in enumerate(GARMENTS):
-                    pixels = np.random.default_rng(1500 + index * 3 + number).integers(0, 256, (180, 200, 3), dtype=np.uint8)
-                    path = Path(self.tmp.name) / f'tab-{index}-{number}.png'
-                    Image.fromarray(pixels).save(path)
-                    ids.append(self.dataset.import_paths([path], category)[0])
-                self.view.tabs._segmented_button._buttons_dict[current].invoke(); self.wait()
-                self.view.approve_all_button.invoke()
-                dialog = self.view._approval_dialog
-                next(w for w in self.descendants(dialog) if isinstance(w, ctk.CTkButton)
-                     and w.cget('text') == 'Approve All').invoke()
-                self.wait()
-                rows = {r['image_id']: r for r in self.dataset.snapshot()['records']}
-                self.assertTrue(all(rows[iid]['status'] == 'approved' for iid in ids))
-                self.assertTrue(all(len(rows[iid]['review_history']) == 1 for iid in ids))
-                self.assertIn('3 approved of 3 pending', self.view.status.cget('text'))
-
-    def test_bulk_failure_callback_does_not_read_catalog_on_ui_thread(self):
-        data=io.BytesIO(); Image.fromarray(np.random.default_rng(991).integers(0,256,(100,120,3),dtype=np.uint8)).save(data,format='PNG')
-        path=Path(self.tmp.name)/'callback-fail.png'; path.write_bytes(data.getvalue())
-        self.dataset.import_paths([path],'campus_uniform')
-        original_snapshot=self.dataset.snapshot
-        def snapshot_checked():
-            self.assertNotEqual(threading.current_thread(), threading.main_thread())
-            return original_snapshot()
-        with patch.object(self.dataset,'_save',side_effect=OSError('disk full')), \
-             patch.object(self.dataset,'snapshot',side_effect=snapshot_checked):
-            self.view.confirm_approve_all(); dialog=self.view._approval_dialog
-            next(w for w in self.descendants(dialog) if isinstance(w,ctk.CTkButton) and w.cget('text')=='Approve All').invoke()
-            self.wait()
-        self.assertIn('failed 1',self.view.status.cget('text'))
-        self.assertIn('not-training-eligible among all approved garment photos 0',self.view.status.cget('text'))
+    def test_no_approval_controls_and_processing_refreshes_automatically(self):
+        buttons = [w.cget('text').lower() for w in self.descendants(self.view)
+                   if isinstance(w, ctk.CTkButton)]
+        self.assertFalse(any('approv' in title for title in buttons))
+        iid = self.dataset.import_paths([self.source], 'campus_uniform')[0]
+        self.view.show_category('campus_uniform'); self.wait()
+        with self.dataset._locked():
+            catalog = self.dataset._load()
+            row = catalog['records'][0]
+            row.update(processing_state='quarantined', eligibility_reasons=['no_reliable_torso'])
+            self.dataset._save(catalog)
+        self.pump(1700); self.wait()
+        self.assertIn('1 quarantined', self.view.views['campus_uniform'][1].cget('text'))
+        labels = [w.cget('text') for w in self.descendants(self.view) if isinstance(w, ctk.CTkLabel)]
+        self.assertIn('no_reliable_torso', labels)
 
     def test_capture_and_import_guard_during_closed_review_write(self):
         entered,release=threading.Event(),threading.Event()
@@ -281,8 +152,6 @@ class UniformWorkspaceTests(unittest.TestCase):
             self.assertTrue(self.view._review_write_pending.is_set())
             review.destroy()
             self.assertTrue(self.view._review_write_pending.is_set())
-            self.view.confirm_approve_all()
-            self.assertIsNone(getattr(self.view,'_approval_dialog',None))
             with patch('ui.uniform_workspace.filedialog.askopenfilenames') as picker:
                 self.view.upload('campus_uniform'); picker.assert_not_called()
             self.view.start_capture('campus_uniform')

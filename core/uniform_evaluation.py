@@ -663,7 +663,7 @@ class EvaluationService:
     def evaluate(self, set_id: str, baseline: dict, candidate: dict,
                  baseline_predict: Callable[[np.ndarray], dict], candidate_predict: Callable[[np.ndarray], dict],
                  cancelled: Callable[[], bool] | None = None,
-                 progress: Callable[..., None] | None = None) -> str:
+                 progress: Callable[..., None] | None = None, *, benchmark_cpu: bool = False) -> str:
         report_id = uuid.uuid4().hex
         report = {"report_id": report_id, "set_id": set_id, "status": "evaluating",
                   "started_at": _utc(), "metrics": None, "predictions": [], "failure": None,
@@ -715,6 +715,7 @@ class EvaluationService:
                 raise ValueError("Possible training/test overlap detected; exact, capture-group, or near-duplicate evidence is present")
             examples = []
             records = dataset["records"]
+            timings = {"baseline": [], "candidate": []}
             for index, frozen in enumerate(records):
                 if self._is_cancelled(cancelled):
                     report.update(status="cancelled", finished_at=_utc(),
@@ -729,8 +730,27 @@ class EvaluationService:
                 x1, y1, x2, y2 = frozen["crop"]
                 crop_rgb = np.asarray(raster.crop((x1, y1, x2, y2)), dtype=np.uint8)
                 crop_bgr = cv2.cvtColor(crop_rgb, cv2.COLOR_RGB2BGR)
-                base_output = self._predict(baseline_predict, crop_bgr.copy(), baseline_desc)
-                candidate_output = self._predict(candidate_predict, crop_bgr.copy(), candidate_desc)
+                if benchmark_cpu:
+                    import time
+                    if index == 0:
+                        for _ in range(2):
+                            self._predict(baseline_predict, crop_bgr.copy(), baseline_desc)
+                            self._predict(candidate_predict, crop_bgr.copy(), candidate_desc)
+                    outputs = {}
+                    # Alternate order to reduce thermal/cache ordering bias. All
+                    # I/O and crop preparation is excluded equally from timings.
+                    order = ('baseline', 'candidate') if index % 2 == 0 else ('candidate', 'baseline')
+                    for key in order:
+                        predictor, descriptor = ((baseline_predict, baseline_desc) if key == 'baseline'
+                                                 else (candidate_predict, candidate_desc))
+                        sample = crop_bgr.copy()
+                        started = time.perf_counter()
+                        outputs[key] = self._predict(predictor, sample, descriptor)
+                        timings[key].append((time.perf_counter() - started) * 1000)
+                    base_output, candidate_output = outputs['baseline'], outputs['candidate']
+                else:
+                    base_output = self._predict(baseline_predict, crop_bgr.copy(), baseline_desc)
+                    candidate_output = self._predict(candidate_predict, crop_bgr.copy(), candidate_desc)
                 examples.append({"index": index, "image_sha256": frozen["sha256"], "category": frozen["category"],
                                  "capture_group": frozen["capture_group"], "camera_id": frozen["camera_id"],
                                  "lighting": frozen["lighting"], "assessability": frozen["assessability"],
@@ -826,6 +846,18 @@ class EvaluationService:
                           per_model=per_model, coverage=coverage, campus_comparison=campus_comparison,
                           policy_version=policy_version, predictions=examples,
                           message="Paired predictions completed on the same frozen reviewed crops; no model was loaded by this service.")
+            if benchmark_cpu:
+                import platform
+                def latency(values):
+                    return {'mean_ms': float(np.mean(values)), 'p50_ms': float(np.percentile(values, 50)),
+                            'p95_ms': float(np.percentile(values, 95)), 'samples': len(values),
+                            'throughput_per_second': 1000 / float(np.mean(values))}
+                report['paired_latency'] = {'same_hardware': True, 'backend': 'cpu',
+                    'machine': platform.machine(), 'platform': platform.platform(), 'warmup': 2,
+                    'scope': 'serial complete predictor including live-compatible preprocessing; excludes image IO',
+                    **{key: latency(value) for key, value in timings.items()}}
+                from core.uniform_acceptance import assess
+                report['automatic_acceptance'] = assess(report)
             self._finalize_report(report_id, report)
             return report_id
         except BaseException as exc:

@@ -7,7 +7,7 @@ from ui.background_task import BackgroundTask
 from ui.scrolling import ScrollableFrame
 from ui.components import COLOR_BG, COLOR_ACCENT, COLOR_TEXT_MUTED, heading_font
 
-TRAIN_ACTION = 'Train candidate with approved datasets'
+TRAIN_ACTION = 'Train Model with Training-Ready Photos'
 ACTIVE_STATES = {'preparing', 'running', 'cancel_requested'}
 
 
@@ -36,15 +36,15 @@ class CandidateTrainingWindow(ctk.CTkToplevel):
         body = ScrollableFrame(self, fg_color=COLOR_BG)
         body.pack(fill='both', expand=True)
         ctk.CTkLabel(body, text=TRAIN_ACTION, font=heading_font()).pack(anchor='w', padx=14, pady=10)
-        self.coverage = ctk.CTkLabel(body, text='Reading approved dataset…', justify='left', anchor='w', wraplength=850)
+        self.coverage = ctk.CTkLabel(body, text='Reading processed dataset…', justify='left', anchor='w', wraplength=850)
         self.coverage.pack(fill='x', padx=14, pady=6)
         self.readiness = ctk.CTkLabel(body, text='', justify='left', anchor='w', wraplength=850)
         self.readiness.pack(fill='x', padx=14, pady=6)
         ctk.CTkLabel(body, text=(
-            'Only reviewed crops in the three garment categories are included. Unresolved quality or association warnings are excluded. '
+            'Only training-ready crops in the three garment categories are included. Unresolved quality or association failures are excluded. '
             'Unable to assess is an uncertainty outcome, not a clothing class.\n'
             'Ten eligible examples per class is a software minimum for an experiment, not evidence of accuracy. '
-            'Unknown provenance stays together. A train-only experiment has no independent evaluation.\n'
+            'Unknown provenance stays together. Insufficient independent groups prevent independent evaluation.\n'
             'Candidates use the local YOLOv8n classifier with a versioned three-class head and live-compatible 224 px letterboxing. '
             'No automatic mirroring, architecture downloads, or active-model replacement.'),
             justify='left', anchor='w', wraplength=850, text_color=COLOR_TEXT_MUTED).pack(fill='x', padx=14, pady=8)
@@ -61,11 +61,13 @@ class CandidateTrainingWindow(ctk.CTkToplevel):
             menu.pack(side='left', padx=(0, 16))
             self.options[name] = menu
         ctk.CTkLabel(body, text=(
-            'CPU training can slow live monitoring. Pause monitoring before training if possible. '
+            'Training uses CPU by default. Stay on Training to keep Live Monitor analysis paused; returning to Live Monitor can cause resource contention. '
             'Camera ownership is unchanged. Another Training job must finish first.\n'
             'Closing this window does not stop the job. Use Cancel; reopen here to recover its status. '
             'Resume continues from the last complete epoch with the frozen dataset and original configuration.'),
             justify='left', anchor='w', wraplength=850).pack(fill='x', padx=14, pady=8)
+        self.accelerator = ctk.CTkCheckBox(body, text='Allow supported CUDA or Apple MPS acceleration (CPU fallback)')
+        self.accelerator.pack(anchor='w', padx=14, pady=6)
         self.ack = ctk.CTkCheckBox(body, text='I understand training can compete with live monitoring', command=self._buttons)
         self.ack.pack(anchor='w', padx=14, pady=6)
         actions = ctk.CTkFrame(body, fg_color='transparent')
@@ -114,7 +116,7 @@ class CandidateTrainingWindow(ctk.CTkToplevel):
                 self._schedule()
             else:
                 service, summary, run_id = self.service, self.summary, self.selected_run_id
-                self.task.run(lambda: (summary, _job_status(service, run_id)), self._loaded, self._failure)
+                self.task.run(lambda: (service.summary(), _job_status(service, run_id)), self._loaded, self._failure)
 
     def _failure(self, error):
         self.message.configure(text=str(error))
@@ -126,7 +128,7 @@ class CandidateTrainingWindow(ctk.CTkToplevel):
             self._schedule()
             return
         service, run_id = self.service, self.selected_run_id
-        # A fresh catalog summary is required each time; approvals can change elsewhere.
+        # A fresh catalog summary is required each time; processing may finish elsewhere.
         self.task.run(lambda: (service.summary(), _job_status(service, run_id), service.list_runs()), self._loaded, self._failure)
         self._buttons()
 
@@ -143,12 +145,12 @@ class CandidateTrainingWindow(ctk.CTkToplevel):
         lines = []
         for category in ('campus_uniform', 'organizational_shirt', 'other_clothing'):
             groups = self.summary.get('groups_by_category', {}).get(category, {})
-            lines.append(f"{CATEGORIES[category]}: {self.summary.get('approved_by_category', {}).get(category, 0)} approved • "
+            lines.append(f"{CATEGORIES[category]}: {self.summary.get('training_ready_by_category', self.summary.get('approved_by_category', {})).get(category, 0)} training-ready • "
                          f"{self.summary.get('included_by_category', {}).get(category, 0)} eligible/included • "
-                         f"{groups.get('known', 0)} known capture groups • {groups.get('unknown', 0)} unknown-provenance group(s)")
+                         f"{groups.get('known', 0)} known related groups • {groups.get('unknown', 0)} unknown-provenance group(s)")
         lines.append(f"Pending: {self.summary.get('pending', 0)} • Excluded: {self.summary.get('excluded', 0)} • "
-                     f"Approved but quality/association blocked: {self.summary.get('quality_blocked', 0)}")
-        self.coverage.configure(text='Current dataset eligibility (Refresh after review):\n' + '\n'.join(lines))
+                     f"Quality/association blocked: {self.summary.get('quality_blocked', 0)}")
+        self.coverage.configure(text='Current dataset eligibility (updates automatically):\n' + '\n'.join(lines))
         reasons = self.summary.get('reasons', [])
         self.readiness.configure(text=('Eligible for experimental training.' if self.summary.get('eligible') else 'Training blocked.')
                                  + ('\n' + '\n'.join(reasons) if reasons else ''))
@@ -179,11 +181,11 @@ class CandidateTrainingWindow(ctk.CTkToplevel):
         if self.task.busy or self.training_busy() or not self.summary.get('eligible') or not self.ack.get():
             return
         config = {name: int(menu.get()) for name, menu in self.options.items()}
-        config.update(min_per_class=10, synthetic_smoke=False)
+        config.update(min_per_class=10, synthetic_smoke=False, allow_accelerator=bool(self.accelerator.get()))
         service = self.service
         self.selected_run_id = None
         self.run_picker.set('Latest candidate')
-        self._operate(lambda: service.start(config), 'Freezing approved dataset and preparing candidate…')
+        self._operate(lambda: service.start(config), 'Freezing training-ready dataset and preparing candidate…')
 
     def cancel(self):
         if self.run_id and self.current.get('status') in ACTIVE_STATES:

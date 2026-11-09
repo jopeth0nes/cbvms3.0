@@ -131,3 +131,24 @@ class TorsoAssessmentTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class AutomaticTorsoPoseTests(unittest.TestCase):
+    def test_strict_ingestion_rejects_missing_hips_without_changing_live_geometry(self):
+        from unittest.mock import Mock
+        detector = PersonDetector()
+        points = np.zeros((1, 17, 3), dtype=np.float32)
+        points[0, 5] = [100, 80, .9]
+        points[0, 6] = [200, 80, .9]
+        data = Mock(); data.cpu.return_value.numpy.return_value = points
+        data.__len__ = Mock(return_value=1)
+        model = Mock(); model.predict.return_value = [Mock(keypoints=Mock(data=data))]
+        frame = np.zeros((400, 400, 3), dtype=np.uint8)
+        with patch.object(detector, '_ensure_pose_model', return_value=model):
+            self.assertIsNotNone(detector.pose_torso_box(frame))
+            self.assertIsNone(detector.pose_torso_box(frame, require_full_torso=True))
+            points[0, 11] = [100, 240, .9]
+            points[0, 12] = [200, 240, .9]
+            self.assertIsNotNone(detector.pose_torso_box(frame, require_full_torso=True))
+            data.cpu.return_value.numpy.return_value = np.concatenate([points, points])
+            self.assertIsNone(detector.pose_torso_box(frame, require_full_torso=True))

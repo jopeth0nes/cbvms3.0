@@ -38,6 +38,16 @@ class ServiceTests(unittest.TestCase):
 
     def run_evaluation(self,**kwargs):
         baseline,candidate=self.fx._predictors()
+        def warmable(predictor):
+            calls = 0
+            first = None
+            def predict(image):
+                nonlocal calls, first
+                calls += 1
+                if calls == 1: first = predictor(image)
+                return first if calls <= 3 else predictor(image)
+            return predict
+        baseline, candidate = warmable(baseline), warmable(candidate)
         with patch.object(self.registry,'current',return_value=self.base), \
              patch('core.uniform_models_service.candidate_descriptor',return_value=self.candidate), \
              patch('core.uniform_models_service.DeploymentPredictor',return_value=baseline), \
@@ -53,6 +63,11 @@ class ServiceTests(unittest.TestCase):
         report=self.service.report(self.run_evaluation(progress=progress))
         self.assertEqual(report['report']['status'],'completed')
         self.assertEqual(len(checks),3)
+        timing = report['report']['paired_latency']
+        self.assertTrue(timing['same_hardware'])
+        self.assertEqual(timing['baseline']['samples'], 3)
+        self.assertGreater(timing['candidate']['p95_ms'], 0)
+        self.assertFalse(report['report']['automatic_acceptance']['accepted'])
         self.assertEqual(report['report']['candidate']['policy_version'],json_hash(policy_rule(.8)))
         self.assertFalse((self.registry.root/'active.json').exists())
         slot=_TrainingLock(self.service.candidates_root);self.assertTrue(slot.acquire());slot.release()
@@ -153,3 +168,41 @@ class RuntimeTests(unittest.TestCase):
 
 
 if __name__=='__main__':unittest.main()
+
+
+class AutomaticAcceptanceTests(unittest.TestCase):
+    def report(self):
+        from core.uniform_acceptance import CLASSES
+        rows = []
+        for category in CLASSES:
+            for i in range(12):
+                policy = 'violation' if category == 'other_clothing' else 'compliant'
+                output = {'label': category, 'policy_label': policy}
+                rows.append({'category':category, 'capture_group':f'{category}-{i % 3}',
+                             'assessability':'assessable','policy_label':policy,
+                             'baseline':dict(output),'candidate':dict(output)})
+        return {'status':'completed','independent':True,'synthetic':False,'predictions':rows,
+                'baseline':{'labels':list(CLASSES)}, 'paired_latency':{'same_hardware':True,'backend':'cpu',
+                    'baseline':{'mean_ms':10.,'p95_ms':12.},'candidate':{'mean_ms':10.,'p95_ms':12.}}}
+
+    def test_comparable_accuracy_latency_and_independence_are_required(self):
+        import copy
+        from core.uniform_acceptance import assess
+        report = self.report()
+        self.assertTrue(assess(report)['accepted'])
+        slow = copy.deepcopy(report); slow['paired_latency']['candidate']['p95_ms'] = 14
+        self.assertFalse(assess(slow)['accepted'])
+        worse = copy.deepcopy(report); worse['predictions'][0]['candidate']['label'] = 'other_clothing'
+        self.assertIn('classification accuracy regresses against active baseline', assess(worse)['reasons'])
+        sparse = copy.deepcopy(report); sparse['predictions'] = sparse['predictions'][:6]
+        self.assertFalse(assess(sparse)['accepted'])
+        report['synthetic'] = True
+        self.assertFalse(assess(report)['accepted'])
+
+    def test_unverified_or_nonfinite_latency_cannot_pass(self):
+        from core.uniform_acceptance import assess
+        report = self.report()
+        report['paired_latency']['candidate']['mean_ms'] = float('nan')
+        self.assertFalse(assess(report)['accepted'])
+        report = self.report(); report['paired_latency']['same_hardware'] = False
+        self.assertFalse(assess(report)['accepted'])

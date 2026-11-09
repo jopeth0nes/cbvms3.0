@@ -64,7 +64,7 @@ def is_eligible_visible_annotation(record: dict) -> bool:
         return False
     if not _annotation_matches(record, annotation):
         return False
-    if record.get("status") != "approved" or record.get("category") not in {
+    if record.get("status") == "excluded" or record.get("category") not in {
         "campus_uniform", "organizational_shirt", "other_clothing",
     }:
         return False

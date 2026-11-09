@@ -1,4 +1,4 @@
-"""Isolated, review-first uniform image catalog for Stage 1 data preparation.
+"""Isolated uniform image catalog with automatic dataset processing.
 
 This module never writes to the active trainer, production database, or model
 artifacts. Originals are content-addressed and retained byte-for-byte.
@@ -158,7 +158,8 @@ def _blur_flag(data: bytes) -> list[str]:
 class UniformDataset:
     """JSON catalog backed by immutable originals beneath ``root``."""
 
-    def __init__(self, root: str | Path | None = None):
+    def __init__(self, root: str | Path | None = None, *, auto_process: bool = True):
+        self.auto_process = auto_process
         self.root = Path(root) if root is not None else Path(__file__).resolve().parents[1] / "data" / "uniform_stage1"
         self.root.mkdir(parents=True, exist_ok=True)
         self.images_dir = self.root / "originals"
@@ -231,12 +232,16 @@ class UniformDataset:
                             or len(source_categories) > 1 or len(source_legacy_labels) > 1))
                 if conflict:
                     record["flags"] = sorted(set(record.get("flags", [])) | {"label_conflict"})
-                    record["status"] = "pending_review"
+                    if record.get("status") != "excluded":
+                        record["status"] = "pending_review"
+                    record.update(processing_state="quarantined", training_eligible=False,
+                                  eligibility_reasons=["label_conflict"])
                 if legacy_label is not None and not same_source:
                     source["legacy_label"] = legacy_label
                 record["capture_groups"] = sorted({s["capture_group"] for s in record["sources"] if s.get("capture_group")})
                 record["has_unknown_provenance"] = any(not s.get("capture_group") for s in record["sources"])
                 self._save(catalog)
+                self.schedule_processing()
                 return record["image_id"]
             rel = f"originals/{digest}{ext}"
             dest = self.root / rel
@@ -258,6 +263,7 @@ class UniformDataset:
                 "format": fmt, "width": width, "height": height, "exif_orientation": orientation,
                 "preprocess_version": PREPROCESS_VERSION, "crop_source": None, "imported_at": _now(),
                 "sources": [source], "category": category, "status": "pending_review",
+                "processing_state": "queued", "training_eligible": False, "eligibility_reasons": ["awaiting_processing"],
                 "crop": None, "logo_visibility": "unknown", "logo_box": None,
                 "flags": _blur_flag(data) + ["provenance_association_uncertain"], "notes": "",
                 "capture_group": group, "provenance_group": group or "unknown-provenance",
@@ -267,7 +273,18 @@ class UniformDataset:
             records.append(record)
             self._refresh_duplicates(records, record)
             self._save(catalog)
+        self.schedule_processing()
         return digest
+
+    def schedule_processing(self):
+        if self.auto_process:
+            from core.uniform_processing import schedule
+            return schedule(self)
+        return None
+
+    def process_pending(self, **kwargs):
+        from core.uniform_processing import migrate
+        return migrate(self, **kwargs)
 
     @staticmethod
     def _refresh_duplicates(records: list[dict], new_record: dict) -> None:
@@ -462,63 +479,19 @@ class UniformDataset:
                                           for r in records) for key in CATEGORIES}
         near_pairs = {(min(r["image_id"], other), max(r["image_id"], other)) for r in records for other in r.get("duplicate_of", [])}
         exact = sum(max(0, len(r.get("sources", [])) - 1) for r in records)
-        # Conservative connected components over exact identity, near matches, and capture groups.
-        parent = {r["image_id"]: r["image_id"] for r in records}
-        def find(x):
-            while parent[x] != x:
-                parent[x] = parent[parent[x]]
-                x = parent[x]
-            return x
-        def union(a, b):
-            if a in parent and b in parent:
-                parent[find(a)] = find(b)
-        group_first = {}
-        for r in records:
-            source_groups = {s.get("capture_group") for s in r.get("sources", [])}
-            source_groups.discard(None)
-            source_groups.update(r.get("capture_groups", []))
-            if r.get("has_unknown_provenance", not source_groups):
-                source_groups.add("unknown-provenance")
-            for g in source_groups:
-                if g in group_first:
-                    union(r["image_id"], group_first[g])
-                else:
-                    group_first[g] = r["image_id"]
-            for other in r.get("duplicate_of", []):
-                union(r["image_id"], other)
-        groups: dict[str, list[str]] = {}
-        for iid in parent:
-            groups.setdefault(find(iid), []).append(iid)
+        # Reproducible group-aware splits are frozen by CandidateService.
         proposed = None
-        approved_ids = {r["image_id"] for r in records if r.get("status") == "approved"}
-        approved_groups = []
-        group_provenance_complete = True
-        for ids in groups.values():
-            approved_members = sorted(approved_ids.intersection(ids))
-            if not approved_members:
-                continue
-            approved_groups.append(approved_members)
-            if any(r["image_id"] in ids and (r.get("has_unknown_provenance", False) or not r.get("capture_groups"))
-                   for r in records):
-                group_provenance_complete = False
-        if len(approved_groups) >= 3 and group_provenance_complete:
-            ordered = sorted(approved_groups, key=lambda ids: ids[0])
-            proposed = {"train": [], "validation": [], "evaluation": [], "grouping": ordered}
-            for i, group in enumerate(ordered):
-                proposed[("train", "validation", "evaluation")[i % 3]].extend(group)
         from core.uniform_candidate import is_training_eligible
         eligible_rows = [r for r in records if is_training_eligible(r)]
+        from core.uniform_processing import STATES, duplicate_groups
+        duplicate_components = duplicate_groups(records)
+        processing_counts = {state: sum(r.get("category") in GARMENT_CATEGORIES and r.get("processing_state", "queued") == state for r in records)
+                             for state in STATES}
         eligibility_reasons = []
-        if not any(r.get("status") == "approved" for r in records):
-            eligibility_reasons.append("No records have explicit approval.")
-        if any(r.get("status") == "approved" and not is_training_eligible(r) for r in records):
-            eligibility_reasons.append("Approved records with missing crops, blocking flags, duplicate links, or reference artwork are excluded.")
-        if any(r.get("status") == "approved" and r.get("category") == "unassigned" for r in records):
-            eligibility_reasons.append("Unassigned records are excluded.")
-        if any(r.get("status") == "pending_review" for r in records):
-            eligibility_reasons.append("Pending-review records are excluded from experimental eligibility.")
+        if any(r.get("category") == "unassigned" for r in records):
+            eligibility_reasons.append("Unassigned legacy records require an established garment category.")
         if any(r.get("status") == "excluded" for r in records):
-            eligibility_reasons.append("Excluded records are not eligible for experimental training.")
+            eligibility_reasons.append("Intentionally excluded records remain outside training.")
         eligible_counts = {c: sum(r['category'] == c for r in eligible_rows)
                            for c in CATEGORIES if c != 'unassigned'}
         missing_categories = [CATEGORIES[c] for c, count in eligible_counts.items() if count < 10]
@@ -527,13 +500,16 @@ class UniformDataset:
         eligibility_reasons.append('Category coverage is a minimum experimental input check, not evidence of accuracy.')
         experimental_training_eligible = not missing_categories
         if not experimental_training_eligible and not eligibility_reasons:
-            eligibility_reasons.append("No approved, assigned, unambiguous records are available.")
+            eligibility_reasons.append("No processed, assigned, unambiguous records are available.")
         result = {
             "schema_version": 1, "preprocess_version": PREPROCESS_VERSION, "categories": dict(CATEGORIES),
             "records": records,
             "counts": {"total": len(records), "by_category": by_category, "by_status": by_status,
                        "approved_by_category": approved_by_category, "eligible_by_category": eligible_counts,
                        "exact_duplicate_occurrences": exact, "near_duplicate_pairs": len(near_pairs),
+                       "processing": processing_counts,
+                       "successfully_processed": processing_counts["training_ready"] + processing_counts["quarantined"],
+                       "near_duplicate_groups": sum(len(rows) > 1 for rows in duplicate_components.values()),
                        "unknown_provenance": sum(r.get("has_unknown_provenance", not r.get("capture_group")) for r in records)},
             "experimental_training_eligible": experimental_training_eligible,
             "readiness": {"review_complete": bool(records) and all(r.get("status") != "pending_review" for r in records),
@@ -700,12 +676,16 @@ class UniformDataset:
                 record["logo_annotation"] = annotation
                 history_entry["logo_annotation"] = copy.deepcopy(annotation)
             record["review_history"].append(history_entry)
+            record.update(processing_state="queued", training_eligible=False, eligibility_reasons=["correction_awaiting_processing"])
             self._save(catalog)
-            return dict(record)
+            result = dict(record)
+        self.schedule_processing()
+        return result
 
     def image(self, image_id: str, crop: bool = False) -> Image.Image:
-        snap = self.snapshot()
-        record = next((r for r in snap["records"] if r["image_id"] == image_id), None)
+        with self._locked():
+            catalog = self._load()
+            record = next((r for r in catalog["records"] if r["image_id"] == image_id), None)
         if record is None:
             raise KeyError(image_id)
         path = self.root / record["original_path"]
@@ -720,8 +700,9 @@ class UniformDataset:
 
     def logo_image(self, image_id: str) -> Image.Image:
         """Return the native-resolution printed-logo crop for a current review."""
-        snap = self.snapshot()
-        record = next((r for r in snap["records"] if r["image_id"] == image_id), None)
+        with self._locked():
+            catalog = self._load()
+            record = next((r for r in catalog["records"] if r["image_id"] == image_id), None)
         if record is None:
             raise KeyError(image_id)
         annotation = record.get("logo_annotation") or {}
@@ -769,6 +750,10 @@ class UniformDataset:
                 proposal["reason"] = reason
                 raise ValueError(reason)
             proposal["person_count"] = len(persons)
+            if len(persons) != 1:
+                proposal["association_uncertain"] = True
+                proposal["reason"] = "Multiple people: correct subject cannot be established automatically."
+                raise ValueError(proposal["reason"])
             box = detector.pose_torso_box(bgr, persons[0]) if detector.use_pose else None
             if box is None:
                 # Only local detector geometry; no guessed or generated detection.

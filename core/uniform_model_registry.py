@@ -113,7 +113,8 @@ def candidate_descriptor(path):
             'training_hashes':[e['original_sha256'] for e in manifest['entries']],
             'training_groups':sorted({g for e in manifest['entries'] for g in e['group_ids']}),
             'training_dhashes':[], 'synthetic':bool(config.get('synthetic_smoke')),
-            'mapping_version':config['mapping_version'],'limitations':manifest['limitations']}
+            'mapping_version':config['mapping_version'],'limitations':manifest['limitations'],
+            'training_pipeline_version':config.get('training_pipeline_version')}
 
 
 class CandidatePredictor:
@@ -399,6 +400,11 @@ class UniformModelRegistry:
             raise ValueError('Policy changed after evaluation; it must be fixed before final testing')
         if not review.get('criteria','').strip() or not review.get('rationale','').strip() or review.get('accepted') is not True:
             raise ValueError('Explicit acceptance criteria and a written review are required')
+        if candidate.get('training_pipeline_version') == 'uniform-auto-training-v1':
+            from core.uniform_acceptance import assess
+            acceptance = assess(report)
+            if not acceptance['accepted']:
+                raise ValueError('Automatic candidate promotion blocked: ' + '; '.join(acceptance['reasons']))
         metrics = report.get('per_model',{}).get('candidate',{}).get('classification',{}).get('per_class',{})
         if any(metrics.get(label,{}).get('support',0)<=0 for label in CLASSES):
             raise ValueError('Independent evaluation is missing a garment category')
@@ -447,7 +453,10 @@ class UniformModelRegistry:
 
 class DeploymentPredictor:
     """One immutable deployment's classification and policy prediction."""
-    def __init__(self,info):
+    def __init__(self,info, *, backend=None):
+        if backend not in (None, "cpu"):
+            raise ValueError("Evaluation baseline supports CPU or existing live default")
+        self.backend = backend
         self.info,self.rule = info,info['policy']
         self.path = Path(info['path'])
         self.candidate = CandidatePredictor(self.path,self.rule) if info['kind']=='candidate' else None
@@ -471,7 +480,8 @@ class DeploymentPredictor:
         if self.candidate: return self.candidate.probabilities(bgr)
         from core.trainer import _letterbox
         with self.lock:
-            result = self.model.predict(_letterbox(bgr,224),verbose=False)[0]
+            result = self.model.predict(_letterbox(bgr,224),verbose=False,
+                                        **({"device": self.backend} if self.backend else {}))[0]
             return dict(zip((result.names[i] for i in range(len(result.names))),result.probs.data.tolist()))
 
     def __call__(self,bgr):

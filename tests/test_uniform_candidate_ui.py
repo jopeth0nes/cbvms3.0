@@ -52,7 +52,7 @@ class CandidateUITests(unittest.TestCase):
         self.view.ack.select()
         self.view._buttons()
 
-    def test_missing_approvals_block_and_show_counts(self):
+    def test_missing_training_ready_examples_block_and_show_counts(self):
         self.assertIn('Pending: 963', self.view.coverage.cget('text'))
         self.assertIn('Training blocked', self.view.readiness.cget('text'))
         self.view.ack.select()
@@ -71,7 +71,7 @@ class CandidateUITests(unittest.TestCase):
         self.view.ack.select()
         self.view.start()
         self.wait()
-        self.service.start.assert_called_once_with(dict(epochs=5,batch=4,threads=2,min_per_class=10,synthetic_smoke=False))
+        self.service.start.assert_called_once_with(dict(epochs=5,batch=4,threads=2,min_per_class=10,synthetic_smoke=False,allow_accelerator=False))
         self.assertNotIn(main, threads)
 
     def test_other_training_blocks_start_and_resume(self):

@@ -71,7 +71,7 @@ class UniformModelsWindow(ctk.CTkToplevel):
             'Training and evaluation cannot run together. Closing this window requests evaluation cancellation.\n'
             'Activation requires a current superadmin session, an independent real-data report covering every garment category, '
             'explicit policy labels for compliant and violation examples, and a written acceptance review. '
-            'No accuracy threshold is supplied by the application.'),anchor='w',justify='left',wraplength=900,text_color=COLOR_TEXT_MUTED)
+            'Automatic-training candidates require accuracy ≥80%, macro F1 ≥75%, recall ≥70% per class, no regression against baseline, and mean/P95 latency within 10%. Independent test coverage requires 10 examples and 3 groups per class.'),anchor='w',justify='left',wraplength=900,text_color=COLOR_TEXT_MUTED)
         self.note.pack(fill='x',padx=14,pady=8)
         self.candidates = self._picker(body,'Candidate version',self.selection_changed)
         self.candidate_details = ctk.CTkLabel(body,text='No candidate selected.',anchor='w',justify='left',wraplength=900)
@@ -141,7 +141,9 @@ class UniformModelsWindow(ctk.CTkToplevel):
         try: valid_threshold = .5<=float(self.threshold.get())<=1
         except ValueError: valid_threshold=False
         evaluate = authorized and ready_candidate and self._set() and valid_threshold and self.ack.get() and not self.training_busy()
-        activate = (authorized and ready_candidate and not candidate.get('synthetic') and report.get('status')=='completed'
+        automatic_ok = (not candidate or candidate.get('training_pipeline_version') != 'uniform-auto-training-v1'
+                        or report.get('automatic_acceptance', {}).get('accepted') is True)
+        activate = (authorized and automatic_ok and ready_candidate and not candidate.get('synthetic') and report.get('status')=='completed'
             and report.get('independent') and not report.get('synthetic') and self.accepted.get()
             and self.criteria.get().strip() and self.rationale.get().strip() and valid_threshold
             and candidate.get('id')==report.get('candidate',{}).get('id')
@@ -245,7 +247,20 @@ class UniformModelsWindow(ctk.CTkToplevel):
         if report_id=='None available':return
         self.accepted.deselect()
         def loaded(value):
-            self.loaded_report=value;self._text(format_report(value['report']));self._buttons()
+            self.loaded_report = value
+            report = value['report']
+            detail = format_report(report)
+            if report.get('paired_latency'):
+                latency = report['paired_latency']
+                detail += '\nPaired CPU latency (ms):\n'
+                for model in ('baseline', 'candidate'):
+                    result = latency[model]
+                    detail += f"{model}: mean {result['mean_ms']:.2f}, P50 {result['p50_ms']:.2f}, P95 {result['p95_ms']:.2f}\n"
+            if report.get('automatic_acceptance'):
+                acceptance = report['automatic_acceptance']
+                detail += '\nAutomatic acceptance: ' + ('passed' if acceptance['accepted'] else '; '.join(acceptance['reasons']))
+            self._text(detail)
+            self._buttons()
         self._run(lambda:self.service.report(report_id),loaded)
 
     def activate(self):

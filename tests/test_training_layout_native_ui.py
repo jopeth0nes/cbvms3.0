@@ -21,7 +21,7 @@ class TrainingLayoutTests(unittest.TestCase):
         gc.collect()
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
-            dataset = UniformDataset(root/'catalog')
+            dataset = UniformDataset(root/'catalog', auto_process=False)
             # A full gallery page gives the real scroll container overflow.
             for index in range(12):
                 path = root/f'fixture-{index}.png'
@@ -70,7 +70,7 @@ class TrainingLayoutTests(unittest.TestCase):
                         for child in w.winfo_children():
                             yield child
                             yield from descendants(child)
-                    required={'Upload Photos','Import Folder','Import ZIP','Capture from Camera','Approve All Pending Photos'}
+                    required={'Upload Photos','Import Folder','Import ZIP','Capture from Camera','Train Model with Training-Ready Photos'}
                     visible={w.cget('text'):w for w in descendants(view)
                              if isinstance(w,ctk.CTkButton) and w.winfo_ismapped()}
                     self.assertTrue(required <= visible.keys())

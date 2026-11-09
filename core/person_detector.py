@@ -341,7 +341,8 @@ class PersonDetector:
     # ------------------------------------------------------------------
 
     @locked_model
-    def pose_torso_box(self, frame_bgr: np.ndarray, region: list[int] | None = None) -> list[int] | None:
+    def pose_torso_box(self, frame_bgr: np.ndarray, region: list[int] | None = None,
+                       *, require_full_torso: bool = False) -> list[int] | None:
         """Tight torso/shirt box [x1,y1,x2,y2] in FRAME coords from shoulder+hip keypoints.
 
         `region` (a person box) restricts pose to that person — used live; pass None to run on
@@ -373,6 +374,8 @@ class PersonDetector:
         if kpts is None or kpts.data is None or len(kpts.data) == 0:
             return None
         data = kpts.data.cpu().numpy()  # (n_persons, 17, 3): x, y, conf
+        if require_full_torso and len(data) != 1:
+            return None  # Offline ingestion must not guess which pose belongs to the garment.
 
         # Pick the person with the strongest shoulder+hip keypoints.
         best, best_score = None, -1.0
@@ -396,6 +399,8 @@ class PersonDetector:
             xs += [float(lh[0]), float(rh[0])]
             bottom = max(float(lh[1]), float(rh[1]))
         else:
+            if require_full_torso:
+                return None
             bottom = top + 1.5 * shoulder_w  # hips out of frame (seated) → estimate torso height
         x1, x2 = min(xs), max(xs)
 
