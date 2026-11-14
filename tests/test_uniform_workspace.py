@@ -51,7 +51,8 @@ class UniformWorkspaceTests(unittest.TestCase):
     def wait(self, task=None):
         task = task or self.view.task
         end = time.monotonic()+8
-        while task.busy and time.monotonic()<end:
+        while (task.busy or (task is self.view.task and
+                (self.view.import_progress.active or self.view.import_progress._poll_id is not None))) and time.monotonic()<end:
             self.pump()
         self.assertFalse(task.busy)
         self.pump()
@@ -85,10 +86,10 @@ class UniformWorkspaceTests(unittest.TestCase):
         self.wait(window.task)
         self.assertEqual(window.title(), 'Train Model with Training-Ready Photos')
         coverage = window.coverage.cget('text')
-        self.assertIn('Campus Uniform: 0 training-ready • 0 eligible/included', coverage)
-        self.assertIn('Organizational Shirt: 0 training-ready • 0 eligible/included', coverage)
-        self.assertIn('Wrong Uniform: 0 training-ready • 0 eligible/included', coverage)
-        self.assertIn('Wrong Uniform has 0 training-ready examples; requires 10.', window.readiness.cget('text'))
+        self.assertIn('Campus Uniform: 0 training-ready • 0 eligible unique photos/included', coverage)
+        self.assertIn('Organizational Shirt: 0 training-ready • 0 eligible unique photos/included', coverage)
+        self.assertIn('Wrong Uniform: 0 training-ready • 0 eligible unique photos/included', coverage)
+        self.assertIn('Wrong Uniform has 0 eligible unique photos; requires 5.', window.readiness.cget('text'))
         self.assertEqual(window.start_button.cget('state'), 'disabled')
         self.assertTrue(window.start_button.winfo_ismapped())
         self.assertEqual(list((Path(self.tmp.name)/'candidates').glob('*/candidate.pt')), [])
@@ -179,18 +180,19 @@ class UniformWorkspaceTests(unittest.TestCase):
         status = self.view.status.cget('text')
         self.assertIn('file count limit (2 files', status)
         self.assertIn('Imported: 2', status)
-        self.assertIn('skipped as duplicates: 0', status)
+        self.assertIn('duplicate occurrences: 0', status)
         self.assertIn('left unprocessed: 1', status)
         self.assertIn('2 unique images', self.view.views['other_clothing'][1].cget('text'))
 
     def test_import_and_decode_stay_off_tk_thread(self):
         main_thread = threading.get_ident()
         calls = []
-        original = self.dataset.import_paths
+        from core.uniform_duplicates import ImportPlan
+        original = ImportPlan.import_paths
         def work(*a, **k):
             calls.append(threading.get_ident())
             return original(*a, **k)
-        with patch.object(self.dataset, 'import_paths', side_effect=work), patch('ui.uniform_workspace.filedialog.askopenfilenames', return_value=(str(self.source),)):
+        with patch.object(ImportPlan, 'import_paths', work), patch('ui.uniform_workspace.filedialog.askopenfilenames', return_value=(str(self.source),)):
             self.view.upload('other_clothing')
             self.wait()
         self.assertTrue(calls)

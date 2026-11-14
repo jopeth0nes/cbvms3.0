@@ -13,11 +13,15 @@ class BackgroundTask:
         self.owner = owner
         self.busy = False
         self.generation = 0
+        self._poll_id = None
         owner.bind('<Destroy>', self._destroy, add='+')
 
     def _destroy(self, event):
         if event.widget is self.owner:
             self.generation += 1
+            if self._poll_id is not None:
+                self.owner.after_cancel(self._poll_id)
+                self._poll_id = None
 
     def run(self, operation, done, error):
         if self.busy:
@@ -35,6 +39,7 @@ class BackgroundTask:
                 result.put((None, str(exc)))
         def poll():
             nonlocal warned
+            self._poll_id = None
             if generation != self.generation or not self.owner.winfo_exists():
                 return
             try:
@@ -43,7 +48,7 @@ class BackgroundTask:
                 if not warned and time.monotonic() - started > 10:
                     warned = True
                     error('Still working. Please wait; retry is available when this operation finishes.')
-                self.owner.after(40, poll)
+                self._poll_id = self.owner.after(40, poll)
                 return
             self.busy = False
             if failure:
@@ -56,5 +61,5 @@ class BackgroundTask:
             self.busy = False
             error(str(exc))
             return False
-        self.owner.after(40, poll)
+        self._poll_id = self.owner.after(40, poll)
         return True

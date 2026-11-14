@@ -22,6 +22,7 @@ from typing import Iterable
 import cv2
 import numpy as np
 import copy
+import os
 from PIL import Image, UnidentifiedImageError
 
 from core.trainer import TRAIN_DIR
@@ -48,6 +49,16 @@ MAX_COMPRESSION_RATIO = 200
 ALLOWED_FORMATS = {"JPEG", "PNG", "WEBP", "BMP", "TIFF"}
 _PROCESS_LOCKS: dict[str, threading.RLock] = {}
 _LOCKS_GUARD = threading.Lock()
+
+
+def visually_similar(a, b):
+    """Shared perceptual estimate; explicit inspection corrections take precedence."""
+    if b.get('image_id') in a.get('unrelated_image_ids', []) or a.get('image_id') in b.get('unrelated_image_ids', []):
+        return False
+    try:
+        return (int(a['dhash'], 16) ^ int(b['dhash'], 16)).bit_count() <= 4
+    except (KeyError, TypeError, ValueError):
+        return False
 
 
 class ImportLimitError(ValueError):
@@ -89,6 +100,38 @@ class ImportSummary(list):
     def message(self):
         return (f"Imported: {self.imported}; skipped as duplicates: {self.duplicates}; "
                 f"left unprocessed: {self.unprocessed}.")
+
+
+class _ImportProgress:
+    """One latest state, with bounded callback frequency and forced phase/final updates."""
+    def __init__(self, callback, cancel):
+        self.callback, self.cancel = callback, cancel
+        self.state = dict(phase="discovery", discovered=0, total=None, processed=0,
+                          imported=0, duplicates=0, skipped=0, failed=0,
+                          current=None, image_ids=[], cancelled=False)
+        self._last_emit = 0.0
+        self._emit(force=True)
+
+    def _emit(self, force=False):
+        self.state["cancelled"] = bool(self.cancel and self.cancel.is_set())
+        now = time.monotonic()
+        if self.callback and (force or now - self._last_emit >= .1):
+            self.callback(copy.deepcopy(self.state))
+            self._last_emit = now
+
+    def update(self, **values):
+        force = (any(key in values and values[key] != self.state[key] for key in ("phase", "total"))
+                 or self.state["discovered"] == 0 and values.get("discovered", 0) > 0
+                 or self.state["phase"] == "importing" and "current" in values and values["current"] != self.state["current"])
+        self.state.update(values)
+        self._emit(force=force)
+
+    def check(self):
+        if self.cancel and self.cancel.is_set():
+            self._emit(force=True)
+            return True
+        return False
+
 
 
 def _is_supported_zip_image(info) -> bool:
@@ -207,7 +250,7 @@ class UniformDataset:
 
     def _import_bytes(self, data: bytes, source_path: str, kind: str, category: str,
                       capture_group: str | None, legacy_label: str | None = None,
-                      archive_sha256: str | None = None) -> str:
+                      archive_sha256: str | None = None, *, resolution: dict | None = None) -> str:
         _validate_category(category)
         fmt, width, height, dhash, orientation = _image_info(data)
         digest = hashlib.sha256(data).hexdigest()
@@ -222,6 +265,45 @@ class UniformDataset:
             catalog = self._load()
             records = catalog["records"]
             record = next((r for r in records if r["sha256"] == digest), None)
+            if resolution is not None:
+                expected = resolution.get("exact_category")
+                if (record is None) != (expected is None) or (record is not None and record.get("category") != expected):
+                    raise ValueError("Dataset changed since duplicate review; retry to review the current matches.")
+                if record is None:
+                    near = {r['image_id'] for r in records if visually_similar(r, {'image_id': digest, 'dhash': dhash})}
+                    if near - set(resolution.get('near_ids', [])):
+                        raise ValueError("New similar photos appeared since review; retry the import.")
+                else:
+                    action = resolution['action']
+                    if action not in {'add_source', 'use_existing', 'change_category'}:
+                        raise ValueError("Invalid exact duplicate decision")
+                    old_category = record['category']
+                    effective = category if action == 'change_category' else old_category
+                    source['category'] = effective
+                    if effective != category:
+                        source['requested_category'] = category
+                    identity = lambda item: tuple(item.get(k) for k in ('path', 'kind', 'capture_group', 'archive_sha256'))
+                    added = not any(identity(item) == identity(source) for item in record['sources'])
+                    if added:
+                        record['sources'].append(source)
+                    if action == 'change_category':
+                        record['category'] = category
+                        record['flags'] = [f for f in record.get('flags', []) if f not in {'label_conflict', 'category_conflict'}]
+                        record.update(processing_state='queued', training_eligible=False,
+                                      eligibility_reasons=['correction_awaiting_processing'])
+                        record.setdefault('review_history', []).append(dict(at=_now(), action='import_category_change',
+                            prior_category=old_category, category=category, source=source_path))
+                        if record.get('logo_annotation'):
+                            record['logo_annotation']['reviewed'] = False
+                    record['capture_groups'] = sorted({s['capture_group'] for s in record['sources'] if s.get('capture_group')})
+                    record['has_unknown_provenance'] = any(not s.get('capture_group') for s in record['sources'])
+                    self._save(catalog)
+                    result = dict(image_id=digest, imported=False, source_added=added)
+                    try:
+                        self.schedule_processing()
+                    except Exception as exc:
+                        result['processing_error'] = str(exc)
+                    return result
             if record is not None:
                 same_source = source in record["sources"]
                 if not same_source:
@@ -273,6 +355,13 @@ class UniformDataset:
             records.append(record)
             self._refresh_duplicates(records, record)
             self._save(catalog)
+        if resolution is not None:
+            result = dict(image_id=digest, imported=True, source_added=True)
+            try:
+                self.schedule_processing()
+            except Exception as exc:
+                result['processing_error'] = str(exc)
+            return result
         self.schedule_processing()
         return digest
 
@@ -297,7 +386,7 @@ class UniformDataset:
             if other is new_record:
                 continue
             try:
-                if (a ^ int(other["dhash"], 16)).bit_count() <= 4:
+                if visually_similar(new_record, other):
                     near.append(other)
             except (TypeError, ValueError):
                 continue
@@ -309,133 +398,229 @@ class UniformDataset:
             other["flags"] = sorted(set(other.get("flags", [])) | {"near_duplicate_review"})
 
     def import_paths(self, paths: Iterable[str | Path], category: str, *, capture_group: str | None = None,
-                     legacy_label: str | None = None) -> list[str]:
+                     legacy_label: str | None = None, progress=None, cancel: threading.Event | None = None) -> list[str]:
         _validate_category(category)
-        paths = list(paths)
-        ids = []
-        total = 0
-        duplicates = 0
-        existing_ids = {r.get("image_id") for r in self.snapshot()["records"]}
-        for index, path in enumerate(paths):
-            p = Path(path)
-            if p.is_symlink() or not p.is_file():
-                raise ValueError(f"Not a regular image file: {p}")
-            size = p.stat().st_size
-            if size > MAX_FILE_BYTES:
-                raise ImportLimitError("per-file size", MAX_FILE_BYTES, imported=len(ids)-duplicates,
-                                       duplicates=duplicates, unprocessed=len(paths)-index,
-                                       measured_value=size, unit="bytes")
-            if index >= MAX_ZIP_FILES:
-                raise ImportLimitError("file count", MAX_ZIP_FILES, imported=len(ids)-duplicates,
-                                       duplicates=duplicates, unprocessed=len(paths)-index,
-                                       measured_value=index + 1)
-            if total + size > MAX_ZIP_EXPANDED:
-                raise ImportLimitError("total expanded size", MAX_ZIP_EXPANDED, imported=len(ids)-duplicates,
-                                       duplicates=duplicates, unprocessed=len(paths)-index,
-                                       measured_value=total + size, unit="bytes")
-            total += size
-            with p.open("rb") as f:
-                data = f.read(MAX_FILE_BYTES + 1)
-            if len(data) != size or len(data) > MAX_FILE_BYTES:
-                raise ValueError("Image changed while being read or exceeds the file size limit")
-            digest = hashlib.sha256(data).hexdigest()
-            if digest in existing_ids:
-                duplicates += 1
-            else:
-                existing_ids.add(digest)
-            ids.append(self._import_bytes(data, str(p), "file", category, capture_group, legacy_label))
-        return ImportSummary(ids, imported=len(ids)-duplicates, duplicates=duplicates)
-
-    def import_zip(self, path: str | Path, category: str, *, capture_group: str | None = None) -> list[str]:
-        _validate_category(category)
-        p = Path(path)
-        if p.is_symlink() or not p.is_file():
-            raise ValueError("ZIP must be a regular file")
-        if p.stat().st_size > MAX_ZIP_ARCHIVE_BYTES:
-            raise ImportLimitError("compressed archive size", MAX_ZIP_ARCHIVE_BYTES, imported=0,
-                                   duplicates=0, unprocessed=None,
-                                   measured_value=p.stat().st_size, unit="bytes")
-        archive_hash = hashlib.sha256()
-        compressed_read = 0
-        with p.open("rb") as archive_file:
-            while chunk := archive_file.read(1024 * 1024):
-                compressed_read += len(chunk)
-                if compressed_read > MAX_ZIP_ARCHIVE_BYTES:
-                    raise ImportLimitError("compressed archive size", MAX_ZIP_ARCHIVE_BYTES, imported=0,
-                                           duplicates=0, unprocessed=None,
-                                           measured_value=compressed_read, unit="bytes")
-                archive_hash.update(chunk)
-        archive_digest = archive_hash.hexdigest()
-        ids = []
-        duplicates = 0
-        existing_ids = {r.get("image_id") for r in self.snapshot()["records"]}
-        with zipfile.ZipFile(p) as archive:
-            infos = archive.infolist()
-            files = [i for i in infos if not i.is_dir()]
-            if len(infos) > MAX_ZIP_FILES:
-                file_infos = [i for i in infos if not i.is_dir() and "__MACOSX" not in PurePosixPath(i.filename).parts
-                              and Path(i.filename).suffix.lower() in {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}]
-                raise ImportLimitError("archive entry count", MAX_ZIP_FILES, imported=0, duplicates=0,
-                                       unprocessed=len(file_infos), measured_value=len(infos), unit="entries")
-            expanded = sum(i.file_size for i in infos)
-            if expanded > MAX_ZIP_EXPANDED:
-                file_infos = [i for i in infos if not i.is_dir() and "__MACOSX" not in PurePosixPath(i.filename).parts
-                              and Path(i.filename).suffix.lower() in {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}]
-                raise ImportLimitError("archive expanded size", MAX_ZIP_EXPANDED, imported=0, duplicates=0,
-                                       unprocessed=len(file_infos), measured_value=expanded, unit="bytes")
-            for info in infos:
-                name = PurePosixPath(info.filename)
-                mode = (info.external_attr >> 16) & 0xFFFF
-                if (name.is_absolute() or ".." in name.parts or "\\" in info.filename
-                        or re.match(r"^[a-zA-Z]:", info.filename)):
-                    raise ValueError("ZIP contains an unsafe path")
-                if stat.S_ISLNK(mode):
-                    raise ValueError("ZIP contains a symlink")
-                if info.flag_bits & 1:
-                    raise ValueError("Encrypted ZIP entries are not supported")
-                if info.file_size > MAX_FILE_BYTES:
-                    raise ImportLimitError("per-file size", MAX_FILE_BYTES, imported=0, duplicates=0,
-                                           unprocessed=sum(_is_supported_zip_image(row) for row in files),
-                                           measured_value=info.file_size, unit="bytes")
-                if info.file_size and (info.compress_size == 0 or info.file_size / info.compress_size > MAX_COMPRESSION_RATIO):
-                    raise ImportLimitError("compression ratio", MAX_COMPRESSION_RATIO, imported=0, duplicates=0,
-                                           unprocessed=sum(_is_supported_zip_image(row) for row in files),
-                                           measured_value=(info.file_size // max(info.compress_size, 1)),
-                                           unit="ratio")
-                if info.is_dir():
-                    continue
-            for info in files:
-                if not _is_supported_zip_image(info):
-                    continue
-                with archive.open(info) as member:
-                    data = member.read(MAX_FILE_BYTES + 1)
-                if len(data) > MAX_FILE_BYTES or len(data) != info.file_size:
-                    raise ValueError("ZIP image exceeds bounds or has inconsistent size")
-                digest = hashlib.sha256(data).hexdigest()
-                if digest in existing_ids:
-                    duplicates += 1
-                else:
-                    existing_ids.add(digest)
-                ids.append(self._import_bytes(data, f"{p}!/{info.filename}", "zip", category, capture_group,
-                                              archive_sha256=archive_digest))
-        return ImportSummary(ids, imported=len(ids)-duplicates, duplicates=duplicates)
-
-    def import_folder(self, path: str | Path, category: str, *, capture_group: str | None = None) -> list[str]:
-        p = Path(path)
-        if p.is_symlink() or not p.is_dir():
-            raise ValueError("Folder must be a regular directory")
-        paths = []
-        for candidate in sorted(p.rglob("*")):
-            if candidate.is_symlink():
-                continue
+        state = _ImportProgress(progress, cancel) if progress or cancel is not None else None
+        ids, expanded, duplicates, processed, imported = [], 0, 0, 0, 0
+        known_total = None
+        found = 0
+        # Spool discovery rather than retaining an arbitrarily large directory tree.
+        # Both discovery and reading run in the caller's background import worker.
+        with tempfile.SpooledTemporaryFile(mode="w+t", max_size=1024 * 1024, encoding="utf-8") as discovered:
             try:
-                if "__MACOSX" in candidate.relative_to(p).parts:
-                    continue
-            except ValueError:
-                continue
-            if candidate.is_file() and candidate.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}:
-                paths.append(candidate)
-        return self.import_paths(paths, category, capture_group=capture_group)
+                for path in paths:
+                    if state and state.check():
+                        return ImportSummary(unprocessed=None)
+                    discovered.write(json.dumps(str(path)) + "\n")
+                    found += 1
+                    if state:
+                        state.update(discovered=state.state["discovered"] + 1, current=Path(path).name)
+                if state and state.check():
+                    return ImportSummary(unprocessed=None)
+                known_total = found
+                discovered.seek(0)
+                if state:
+                    state.update(phase="importing", total=known_total, current=None)
+                existing_ids = {r.get("image_id") for r in self.snapshot()["records"]}
+                for index, line in enumerate(discovered):
+                    if state and state.check(): break
+                    path = Path(json.loads(line))
+                    if state: state.update(current=path.name)
+                    try:
+                        if state and (path.suffix.lower() not in {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}
+                                      or path.is_symlink()):
+                            state.state["skipped"] += 1
+                            processed += 1
+                            state.update(processed=processed)
+                            continue
+                        if path.is_symlink() or not path.is_file():
+                            raise ValueError(f"Not a regular image file: {path}")
+                        size = path.stat().st_size
+                        if size > MAX_FILE_BYTES:
+                            raise ImportLimitError("per-file size", MAX_FILE_BYTES, imported=imported,
+                                                   duplicates=duplicates, unprocessed=known_total-index,
+                                                   measured_value=size, unit="bytes")
+                        if index >= MAX_ZIP_FILES:
+                            raise ImportLimitError("file count", MAX_ZIP_FILES, imported=imported,
+                                                   duplicates=duplicates, unprocessed=known_total-index,
+                                                   measured_value=index + 1)
+                        if expanded + size > MAX_ZIP_EXPANDED:
+                            raise ImportLimitError("total expanded size", MAX_ZIP_EXPANDED, imported=imported,
+                                                   duplicates=duplicates, unprocessed=known_total-index,
+                                                   measured_value=expanded + size, unit="bytes")
+                        expanded += size
+                        chunks, hasher = [], hashlib.sha256()
+                        with path.open("rb") as stream:
+                            remaining = MAX_FILE_BYTES + 1
+                            while remaining:
+                                if state and state.check(): break
+                                block = stream.read(min(256 * 1024, remaining))
+                                if not block: break
+                                chunks.append(block)
+                                hasher.update(block)
+                                remaining -= len(block)
+                                if state: state._emit()
+                        if state and state.check(): break
+                        data = b"".join(chunks)
+                        if len(data) != size or len(data) > MAX_FILE_BYTES:
+                            raise ValueError("Image changed while being read or exceeds the file size limit")
+                        digest = hasher.hexdigest()
+                        iid = self._import_bytes(data, str(path), "file", category, capture_group, legacy_label)
+                    except ImportLimitError:
+                        raise
+                    except (ValueError, OSError):
+                        if not state: raise
+                        processed += 1
+                        state.update(failed=state.state["failed"] + 1, processed=processed)
+                        continue
+                    ids.append(iid)
+                    if digest in existing_ids: duplicates += 1
+                    else: imported += 1
+                    existing_ids.add(digest)
+                    processed += 1
+                    if state:
+                        state.update(processed=processed, imported=imported, duplicates=duplicates,
+                                     image_ids=list(dict.fromkeys(ids)))
+                return ImportSummary(ids, imported=imported, duplicates=duplicates,
+                                     unprocessed=max(0, known_total - processed))
+            finally:
+                if state:
+                    state.update(processed=processed, imported=imported, duplicates=duplicates,
+                                 image_ids=list(dict.fromkeys(ids)))
+                    state._emit(force=True)
+
+    def import_zip(self, path: str | Path, category: str, *, capture_group: str | None = None,
+                   progress=None, cancel: threading.Event | None = None) -> list[str]:
+        _validate_category(category)
+        state = _ImportProgress(progress, cancel) if progress or cancel is not None else None
+        ids, duplicates, imported, processed = [], 0, 0, 0
+        known_total = None
+        try:
+            path = Path(path)
+            if path.is_symlink() or not path.is_file():
+                raise ValueError("ZIP must be a regular file")
+            if state: state.update(current=path.name)
+            size = path.stat().st_size
+            if size > MAX_ZIP_ARCHIVE_BYTES:
+                raise ImportLimitError("compressed archive size", MAX_ZIP_ARCHIVE_BYTES, imported=0,
+                                       duplicates=0, unprocessed=None, measured_value=size, unit="bytes")
+            archive_hash, compressed_read = hashlib.sha256(), 0
+            with path.open("rb") as source:
+                while True:
+                    if state and state.check(): return ImportSummary(unprocessed=None)
+                    chunk = source.read(256 * 1024)
+                    if not chunk: break
+                    compressed_read += len(chunk)
+                    if compressed_read > MAX_ZIP_ARCHIVE_BYTES:
+                        raise ImportLimitError("compressed archive size", MAX_ZIP_ARCHIVE_BYTES, imported=0,
+                                               duplicates=0, unprocessed=None,
+                                               measured_value=compressed_read, unit="bytes")
+                    archive_hash.update(chunk)
+                    if state: state._emit()
+            archive_digest = archive_hash.hexdigest()
+            with zipfile.ZipFile(path) as archive:
+                infos = archive.infolist()
+                files = []
+                for info in infos:
+                    if state and state.check(): return ImportSummary(unprocessed=None)
+                    if not info.is_dir():
+                        files.append(info)
+                        if state: state.update(discovered=len(files), current=info.filename)
+                known_total = len(files)
+                if state: state.update(total=known_total)
+                # Keep the existing complete-archive safety preflight before any writes.
+                supported_count = sum(_is_supported_zip_image(row) for row in files)
+                if len(infos) > MAX_ZIP_FILES:
+                    raise ImportLimitError("archive entry count", MAX_ZIP_FILES, imported=0, duplicates=0,
+                                           unprocessed=supported_count, measured_value=len(infos), unit="entries")
+                expanded = sum(info.file_size for info in infos)
+                if expanded > MAX_ZIP_EXPANDED:
+                    raise ImportLimitError("archive expanded size", MAX_ZIP_EXPANDED, imported=0, duplicates=0,
+                                           unprocessed=supported_count, measured_value=expanded, unit="bytes")
+                for info in infos:
+                    if state and state.check(): return ImportSummary(unprocessed=known_total)
+                    name = PurePosixPath(info.filename)
+                    mode = (info.external_attr >> 16) & 0xFFFF
+                    if (name.is_absolute() or ".." in name.parts or "\\" in info.filename
+                            or re.match(r"^[a-zA-Z]:", info.filename)):
+                        raise ValueError("ZIP contains an unsafe path")
+                    if stat.S_ISLNK(mode): raise ValueError("ZIP contains a symlink")
+                    if info.flag_bits & 1: raise ValueError("Encrypted ZIP entries are not supported")
+                    if info.file_size > MAX_FILE_BYTES:
+                        raise ImportLimitError("per-file size", MAX_FILE_BYTES, imported=0, duplicates=0,
+                                               unprocessed=supported_count, measured_value=info.file_size, unit="bytes")
+                    if info.file_size and (info.compress_size == 0 or info.file_size / info.compress_size > MAX_COMPRESSION_RATIO):
+                        raise ImportLimitError("compression ratio", MAX_COMPRESSION_RATIO, imported=0, duplicates=0,
+                                               unprocessed=supported_count,
+                                               measured_value=info.file_size // max(info.compress_size, 1), unit="ratio")
+                if state: state.update(phase="importing", current=None)
+                existing_ids = {r.get("image_id") for r in self.snapshot()["records"]}
+                for info in files:
+                    if state and state.check(): break
+                    if state: state.update(current=info.filename)
+                    if not _is_supported_zip_image(info):
+                        processed += 1
+                        if state: state.update(skipped=state.state["skipped"] + 1, processed=processed)
+                        continue
+                    try:
+                        chunks, hasher, read = [], hashlib.sha256(), 0
+                        with archive.open(info) as member:
+                            while read <= MAX_FILE_BYTES:
+                                if state and state.check(): break
+                                block = member.read(min(256 * 1024, MAX_FILE_BYTES + 1 - read))
+                                if not block: break
+                                chunks.append(block)
+                                hasher.update(block)
+                                read += len(block)
+                                if state: state._emit()
+                        if state and state.check(): break
+                        data = b"".join(chunks)
+                        if len(data) > MAX_FILE_BYTES or len(data) != info.file_size:
+                            raise ValueError("ZIP image exceeds bounds or has inconsistent size")
+                        digest = hasher.hexdigest()
+                        iid = self._import_bytes(data, f"{path}!/{info.filename}", "zip", category, capture_group,
+                                                 archive_sha256=archive_digest)
+                    except (ValueError, OSError, zipfile.BadZipFile):
+                        if not state: raise
+                        processed += 1
+                        state.update(failed=state.state["failed"] + 1, processed=processed)
+                        continue
+                    ids.append(iid)
+                    if digest in existing_ids: duplicates += 1
+                    else: imported += 1
+                    existing_ids.add(digest)
+                    processed += 1
+                    if state:
+                        state.update(processed=processed, imported=imported, duplicates=duplicates,
+                                     image_ids=list(dict.fromkeys(ids)))
+            return ImportSummary(ids, imported=imported, duplicates=duplicates,
+                                 unprocessed=max(0, known_total - processed))
+        finally:
+            if state:
+                state.update(processed=processed, imported=imported, duplicates=duplicates,
+                             image_ids=list(dict.fromkeys(ids)))
+                state._emit(force=True)
+
+    def import_folder(self, path: str | Path, category: str, *, capture_group: str | None = None,
+                      progress=None, cancel: threading.Event | None = None) -> list[str]:
+        folder = Path(path)
+        if folder.is_symlink() or not folder.is_dir():
+            raise ValueError("Folder must be a regular directory")
+        def walk(directory):
+            # Streaming traversal; no rglob/sort of the complete tree on the Tk thread.
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    if cancel and cancel.is_set(): return
+                    child = Path(entry.path)
+                    if entry.is_symlink():
+                        if progress: yield child  # Count the skipped occurrence, never follow it.
+                    elif entry.is_dir(follow_symlinks=False):
+                        if entry.name != "__MACOSX": yield from walk(child)
+                    elif entry.is_file(follow_symlinks=False):
+                        if progress or child.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}:
+                            yield child
+        return self.import_paths(walk(folder), category, capture_group=capture_group,
+                                 progress=progress, cancel=cancel)
 
     def import_capture(self, frame_bgr: np.ndarray, category: str, capture_group: str) -> str:
         _validate_category(category)
@@ -481,8 +666,8 @@ class UniformDataset:
         exact = sum(max(0, len(r.get("sources", [])) - 1) for r in records)
         # Reproducible group-aware splits are frozen by CandidateService.
         proposed = None
-        from core.uniform_candidate import is_training_eligible
-        eligible_rows = [r for r in records if is_training_eligible(r)]
+        from core.uniform_candidate import NORMAL_TRAINING_MIN_PER_CLASS, eligible_training_records
+        eligible_rows = eligible_training_records(records)
         from core.uniform_processing import STATES, duplicate_groups
         duplicate_components = duplicate_groups(records)
         processing_counts = {state: sum(r.get("category") in GARMENT_CATEGORIES and r.get("processing_state", "queued") == state for r in records)
@@ -494,9 +679,11 @@ class UniformDataset:
             eligibility_reasons.append("Intentionally excluded records remain outside training.")
         eligible_counts = {c: sum(r['category'] == c for r in eligible_rows)
                            for c in CATEGORIES if c != 'unassigned'}
-        missing_categories = [CATEGORIES[c] for c, count in eligible_counts.items() if count < 10]
+        missing_categories = [CATEGORIES[c] for c, count in eligible_counts.items()
+                              if count < NORMAL_TRAINING_MIN_PER_CLASS]
         if missing_categories:
-            eligibility_reasons.append('Fewer than 10 training-eligible examples for: ' + ', '.join(missing_categories) + '.')
+            eligibility_reasons.append(f'Fewer than {NORMAL_TRAINING_MIN_PER_CLASS} eligible unique photos for: '
+                                       + ', '.join(missing_categories) + '.')
         eligibility_reasons.append('Category coverage is a minimum experimental input check, not evidence of accuracy.')
         experimental_training_eligible = not missing_categories
         if not experimental_training_eligible and not eligibility_reasons:
@@ -572,7 +759,7 @@ class UniformDataset:
                flags: list[str] | None = None, notes: str = "",
                crop_source: str = "manual", logo_reviewed: bool = False,
                logo_source_kind: str = "uncertain",
-               logo_association_confirmed: bool = False) -> dict:
+               logo_association_confirmed: bool = False, unrelated_image_ids: list[str] | None = None) -> dict:
         _validate_category(category)
         if status not in {"pending_review", "approved", "excluded"}:
             raise ValueError("Invalid review status")
@@ -676,6 +863,18 @@ class UniformDataset:
                 record["logo_annotation"] = annotation
                 history_entry["logo_annotation"] = copy.deepcopy(annotation)
             record["review_history"].append(history_entry)
+            for other_id in unrelated_image_ids or []:
+                other = next((r for r in catalog['records'] if r['image_id'] == other_id), None)
+                if other is None or other_id == image_id:
+                    raise ValueError('Invalid related photo correction')
+                for row, target in ((record, other_id), (other, image_id)):
+                    row['unrelated_image_ids'] = sorted(set(row.get('unrelated_image_ids', [])) | {target})
+                    row['duplicate_of'] = [i for i in row.get('duplicate_of', []) if i != target]
+                    if not row['duplicate_of']:
+                        row['flags'] = [f for f in row.get('flags', []) if f != 'near_duplicate_review']
+            if unrelated_image_ids:
+                from core.uniform_processing import duplicate_groups
+                duplicate_groups(catalog['records'])
             record.update(processing_state="queued", training_eligible=False, eligibility_reasons=["correction_awaiting_processing"])
             self._save(catalog)
             result = dict(record)
@@ -804,11 +1003,8 @@ class _CatalogLock:
         self.thread_lock.acquire()
         try:
             self.file = self.path.open("a+")
-            try:
-                import fcntl
-                fcntl.flock(self.file.fileno(), fcntl.LOCK_EX)
-            except ImportError:
-                pass
+            from core.file_lock import lock_exclusive
+            lock_exclusive(self.file)
         except Exception:
             if self.file:
                 self.file.close()
@@ -820,10 +1016,8 @@ class _CatalogLock:
         try:
             if self.file:
                 try:
-                    import fcntl
-                    fcntl.flock(self.file.fileno(), fcntl.LOCK_UN)
-                except ImportError:
-                    pass
+                    from core.file_lock import unlock
+                    unlock(self.file)
                 finally:
                     self.file.close()
         finally:

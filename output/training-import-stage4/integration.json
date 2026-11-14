@@ -1,0 +1,304 @@
+{
+  "stages": [
+    {
+      "stage": "four_each",
+      "summary": {
+        "mapping_version": "uniform-garments-v1",
+        "training_ready_by_category": {
+          "campus_uniform": 4,
+          "organizational_shirt": 4,
+          "other_clothing": 4
+        },
+        "approved_by_category": {
+          "campus_uniform": 4,
+          "organizational_shirt": 4,
+          "other_clothing": 4
+        },
+        "included_by_category": {
+          "campus_uniform": 4,
+          "organizational_shirt": 4,
+          "other_clothing": 4
+        },
+        "groups_by_category": {
+          "campus_uniform": {
+            "known": 0,
+            "unknown": 1
+          },
+          "organizational_shirt": {
+            "known": 0,
+            "unknown": 1
+          },
+          "other_clothing": {
+            "known": 0,
+            "unknown": 1
+          }
+        },
+        "pending": 0,
+        "excluded": 0,
+        "quality_blocked": 0,
+        "eligible": false,
+        "experimental_training_eligible": false,
+        "reasons": [
+          "Campus Uniform has 4 eligible unique photos; requires 5.",
+          "Organizational Shirt has 4 eligible unique photos; requires 5.",
+          "Wrong Uniform has 4 eligible unique photos; requires 5."
+        ],
+        "readiness_reasons": [
+          "Campus Uniform has 4 eligible unique photos; requires 5.",
+          "Organizational Shirt has 4 eligible unique photos; requires 5.",
+          "Wrong Uniform has 4 eligible unique photos; requires 5."
+        ],
+        "evaluation_ready": false,
+        "activation_allowed": false
+      }
+    },
+    {
+      "stage": "paths",
+      "state": {
+        "job_id": "0dd91081382a488bbbbe3d994a6d5286",
+        "category": "campus_uniform",
+        "phase": "done",
+        "active": false,
+        "discovered": 5,
+        "total": 5,
+        "processed": 5,
+        "imported": 1,
+        "duplicates": 3,
+        "skipped": 2,
+        "failed": 1,
+        "current": null,
+        "cancelled": false,
+        "error": null,
+        "awaiting": 0,
+        "training_ready": 3,
+        "quarantined": 0,
+        "processing_failed": 0,
+        "processing_excluded": 0,
+        "processing_total": 3,
+        "processing_done": 3,
+        "unprocessed": 0,
+        "checked": 5,
+        "source_added": 1
+      }
+    },
+    {
+      "stage": "folder",
+      "state": {
+        "job_id": "b8467062e0e6468da52e90caeab34948",
+        "category": "organizational_shirt",
+        "phase": "done",
+        "active": false,
+        "discovered": 4,
+        "total": 4,
+        "processed": 4,
+        "imported": 1,
+        "duplicates": 3,
+        "skipped": 2,
+        "failed": 0,
+        "current": null,
+        "cancelled": false,
+        "error": null,
+        "awaiting": 0,
+        "training_ready": 3,
+        "quarantined": 0,
+        "processing_failed": 0,
+        "processing_excluded": 0,
+        "processing_total": 3,
+        "processing_done": 3,
+        "unprocessed": 0,
+        "checked": 4,
+        "source_added": 1
+      }
+    },
+    {
+      "stage": "zip",
+      "state": {
+        "job_id": "7801d30d643c4913a36b817618944c56",
+        "category": "other_clothing",
+        "phase": "done",
+        "active": false,
+        "discovered": 4,
+        "total": 4,
+        "processed": 4,
+        "imported": 1,
+        "duplicates": 3,
+        "skipped": 2,
+        "failed": 0,
+        "current": null,
+        "cancelled": false,
+        "error": null,
+        "awaiting": 0,
+        "training_ready": 3,
+        "quarantined": 0,
+        "processing_failed": 0,
+        "processing_excluded": 0,
+        "processing_total": 3,
+        "processing_done": 3,
+        "unprocessed": 0,
+        "checked": 4,
+        "source_added": 1
+      }
+    },
+    {
+      "stage": "cancel",
+      "state": {
+        "job_id": "08e4e27b2dc54b8488512b20b822cf8a",
+        "category": "campus_uniform",
+        "phase": "done",
+        "active": false,
+        "discovered": 2,
+        "total": 2,
+        "processed": 1,
+        "imported": 0,
+        "duplicates": 1,
+        "skipped": 0,
+        "failed": 0,
+        "current": null,
+        "cancelled": true,
+        "error": null,
+        "awaiting": 0,
+        "training_ready": 1,
+        "quarantined": 0,
+        "processing_failed": 0,
+        "processing_excluded": 0,
+        "processing_total": 1,
+        "processing_done": 1,
+        "unprocessed": 1,
+        "checked": 2,
+        "source_added": 1
+      }
+    },
+    {
+      "stage": "failure",
+      "state": {
+        "job_id": "20342eed423b41f0b234cae7d73441bb",
+        "category": "campus_uniform",
+        "phase": "done",
+        "active": false,
+        "discovered": 2,
+        "total": 2,
+        "processed": 2,
+        "imported": 0,
+        "duplicates": 2,
+        "skipped": 0,
+        "failed": 1,
+        "current": null,
+        "cancelled": false,
+        "error": "OSError: injected disposable source failure",
+        "awaiting": 0,
+        "training_ready": 1,
+        "quarantined": 0,
+        "processing_failed": 0,
+        "processing_excluded": 0,
+        "processing_total": 1,
+        "processing_done": 1,
+        "unprocessed": 0,
+        "checked": 2,
+        "source_added": 0
+      }
+    },
+    {
+      "stage": "retry",
+      "state": {
+        "job_id": "9add1e02e8624050a7b51549cab07150",
+        "category": "campus_uniform",
+        "phase": "done",
+        "active": false,
+        "discovered": 2,
+        "total": 2,
+        "processed": 2,
+        "imported": 0,
+        "duplicates": 2,
+        "skipped": 0,
+        "failed": 0,
+        "current": null,
+        "cancelled": false,
+        "error": null,
+        "awaiting": 0,
+        "training_ready": 2,
+        "quarantined": 0,
+        "processing_failed": 0,
+        "processing_excluded": 0,
+        "processing_total": 2,
+        "processing_done": 2,
+        "unprocessed": 0,
+        "checked": 2,
+        "source_added": 1
+      }
+    }
+  ],
+  "initial_job": {
+    "run_id": "5d427072416d4e2cbbda541510f72c80",
+    "status": "running",
+    "epoch": 0,
+    "epochs": 1,
+    "message": "Candidate worker starting.",
+    "resumable": true,
+    "started_at": "2026-11-14T17:10:47.631907Z",
+    "process_id": 1308,
+    "run_uuid": "5d427072416d4e2cbbda541510f72c80",
+    "manifest_sha256": "51004d77398a5d8e8311d0f5614e2fbb0d21996c50bd5745f8234dd53b4e532a"
+  },
+  "final_job": {
+    "run_id": "5d427072416d4e2cbbda541510f72c80",
+    "status": "completed",
+    "epoch": 1,
+    "epochs": 1,
+    "message": "Candidate training completed; group-aware metrics recorded; promotion remains disabled.",
+    "resumable": false,
+    "train_loss": 1.198321270942688,
+    "started_at": "2026-11-14T17:10:47.631907Z",
+    "worker_started_at": "2026-11-14T17:10:48.221818Z",
+    "process_id": 1327,
+    "run_uuid": "5d427072416d4e2cbbda541510f72c80",
+    "manifest_sha256": "51004d77398a5d8e8311d0f5614e2fbb0d21996c50bd5745f8234dd53b4e532a",
+    "nondeployable": true
+  },
+  "counts": {
+    "total": 15,
+    "by_category": {
+      "campus_uniform": 5,
+      "organizational_shirt": 5,
+      "other_clothing": 5,
+      "unassigned": 0
+    },
+    "by_status": {
+      "pending_review": 15,
+      "approved": 0,
+      "excluded": 0
+    },
+    "approved_by_category": {
+      "campus_uniform": 0,
+      "organizational_shirt": 0,
+      "other_clothing": 0,
+      "unassigned": 0
+    },
+    "eligible_by_category": {
+      "campus_uniform": 5,
+      "organizational_shirt": 5,
+      "other_clothing": 5
+    },
+    "exact_duplicate_occurrences": 5,
+    "near_duplicate_pairs": 1,
+    "processing": {
+      "queued": 0,
+      "processing": 0,
+      "training_ready": 15,
+      "quarantined": 0,
+      "failed": 0
+    },
+    "successfully_processed": 15,
+    "near_duplicate_groups": 1,
+    "unknown_provenance": 15
+  },
+  "protected_before": {
+    "yolov8n-cls.pt": "11fa19f2aea79bc960d680a13f82f22105982b325eb9e17a4a5e1a9f8245980a",
+    "models/uniform_cls.pt": "8fba6e1da0c11c97873b16049b940ce21d5699838cc2040f069d5d5249a15680",
+    "data/uniform_models/active.json": null
+  },
+  "protected_after": {
+    "yolov8n-cls.pt": "11fa19f2aea79bc960d680a13f82f22105982b325eb9e17a4a5e1a9f8245980a",
+    "models/uniform_cls.pt": "8fba6e1da0c11c97873b16049b940ce21d5699838cc2040f069d5d5249a15680",
+    "data/uniform_models/active.json": null
+  }
+}

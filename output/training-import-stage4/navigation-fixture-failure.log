@@ -1,0 +1,20 @@
+test_import_to_candidate (tests.test_training_import_integrated_ui.IntegratedImportUITests.test_import_to_candidate) ... ERROR
+
+======================================================================
+ERROR: test_import_to_candidate (tests.test_training_import_integrated_ui.IntegratedImportUITests.test_import_to_candidate)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/jopethones/Documents/GitHub/cbvms3.0/tests/test_training_import_integrated_ui.py", line 150, in test_import_to_candidate
+    self.choose_review(lambda r: 'keep_both' if r['match_type']=='similar' else
+  File "/Users/jopethones/Documents/GitHub/cbvms3.0/tests/test_training_import_integrated_ui.py", line 41, in choose_review
+    self.view.show_category('unassigned')
+  File "/Users/jopethones/Documents/GitHub/cbvms3.0/ui/uniform_workspace.py", line 168, in show_category
+    self.tabs.set(CATEGORIES[category])
+  File "/Users/jopethones/Documents/GitHub/cbvms3.0/.venv/lib/python3.12/site-packages/customtkinter/windows/widgets/ctk_tabview.py", line 429, in set
+    raise ValueError(f"CTkTabview has no tab named '{name}'")
+ValueError: CTkTabview has no tab named 'Unassigned (Legacy Review)'
+
+----------------------------------------------------------------------
+Ran 1 test in 3.163s
+
+FAILED (errors=1)

@@ -1,0 +1,23 @@
+{
+  "best_epoch": null,
+  "evaluation": null,
+  "evaluation_available": false,
+  "evaluation_distribution": {
+    "0": 0,
+    "1": 0,
+    "2": 0
+  },
+  "evaluation_loss": null,
+  "training_distribution": {
+    "0": 5,
+    "1": 5,
+    "2": 5
+  },
+  "validation": null,
+  "validation_distribution": {
+    "0": 0,
+    "1": 0,
+    "2": 0
+  },
+  "validation_loss": null
+}

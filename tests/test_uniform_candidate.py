@@ -63,6 +63,29 @@ class CandidateSummaryTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             CandidateService.validate_config({"publish": True})
 
+    def test_normal_minimum_is_five_and_explicit_minimums_are_preserved(self):
+        self.assertEqual(CandidateService.validate_config()["min_per_class"], 5)
+        self.assertEqual(CandidateService.validate_config({"min_per_class": 10})["min_per_class"], 10)
+        with self.assertRaises(ValueError):
+            CandidateService.validate_config({"min_per_class": 4})
+
+    def test_unique_eligible_counts_agree_at_five_photo_boundary(self):
+        categories = ("campus_uniform", "organizational_shirt", "other_clothing")
+        for counts in ((4, 5, 5), (5, 4, 5), (5, 5, 4), (5, 5, 5), (6, 38, 7)):
+            with self.subTest(counts=counts):
+                rows = [{**self.record(category), "image_id": f"{category}-{i}"}
+                        for category, count in zip(categories, counts) for i in range(count)]
+                # Source occurrences and repeated catalog rows must not inflate any eligible count.
+                rows[0]["sources"] = [{"path": f"copy-{i}"} for i in range(10)]
+                rows.extend([dict(rows[0]), dict(rows[0])])
+                for state in ("queued", "processing", "failed", "quarantined"):
+                    rows.append({**self.record(categories[0]), "image_id": state, "processing_state": state})
+                result = candidate_summary({"records": rows})
+                expected = dict(zip(categories, counts))
+                self.assertEqual(result["included_by_category"], expected)
+                self.assertEqual(result["training_ready_by_category"], expected)
+                self.assertEqual(result["eligible"], min(counts) >= 5)
+
     def test_missing_approved_categories_are_not_eligible(self):
         summary = candidate_summary({"records": [self.record("campus_uniform") for _ in range(10)]})
         self.assertFalse(summary["eligible"])

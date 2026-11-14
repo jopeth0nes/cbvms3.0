@@ -323,8 +323,8 @@ class UniformDatasetTests(unittest.TestCase):
             other = self.ds.import_paths([path], category)[0]
             self.ds.review(other, category=category, crop=[0, 0, 100, 80], status='approved', flags=[])
         ready = self.ds.snapshot()['readiness']
-        self.assertFalse(ready['experimental_training_eligible'])  # The existing 10-example minimum still applies.
-        self.assertTrue(any('Fewer than 10' in reason for reason in ready['experimental_training_reasons']))
+        self.assertFalse(ready['experimental_training_eligible'])  # The five-photo minimum still applies.
+        self.assertTrue(any('Fewer than 5' in reason for reason in ready['experimental_training_reasons']))
         self.assertFalse(ready['independent_evaluation_ready'])
         self.assertFalse(ready['model_activation_allowed'])
 
@@ -539,7 +539,7 @@ class AutomaticProcessingTests(unittest.TestCase):
             self.assertTrue((self.ds.root / row['crop_path']).is_file())
             self.assertEqual(row['sha256'], before[iid]['sha256'])
         self.detector.pose_torso_box.assert_called_with(unittest.mock.ANY, [0, 0, 200, 200], require_full_torso=True)
-        self.assertFalse(self.ds.snapshot()['experimental_training_eligible'])  # Still requires ten/class.
+        self.assertFalse(self.ds.snapshot()['experimental_training_eligible'])  # Still requires five/class.
 
     def test_ambiguous_missing_or_invalid_pose_is_quarantined(self):
         iid = self.add()

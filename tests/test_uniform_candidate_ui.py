@@ -46,7 +46,7 @@ class CandidateUITests(unittest.TestCase):
 
     def eligible(self):
         self.service.summary.return_value.update(eligible=True, reasons=[],
-            included_by_category={c:10 for c in ('campus_uniform','organizational_shirt','other_clothing')})
+            included_by_category={c:5 for c in ('campus_uniform','organizational_shirt','other_clothing')})
         self.view.refresh()
         self.wait()
         self.view.ack.select()
@@ -71,7 +71,7 @@ class CandidateUITests(unittest.TestCase):
         self.view.ack.select()
         self.view.start()
         self.wait()
-        self.service.start.assert_called_once_with(dict(epochs=5,batch=4,threads=2,min_per_class=10,synthetic_smoke=False,allow_accelerator=False))
+        self.service.start.assert_called_once_with(dict(epochs=5,batch=4,threads=2,min_per_class=5,synthetic_smoke=False,allow_accelerator=False))
         self.assertNotIn(main, threads)
 
     def test_other_training_blocks_start_and_resume(self):

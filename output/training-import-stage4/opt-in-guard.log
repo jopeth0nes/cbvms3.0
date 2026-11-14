@@ -1,0 +1,6 @@
+test_import_to_candidate (tests.test_training_import_integrated_ui.IntegratedImportUITests.test_import_to_candidate) ... skipped 'explicit real-training smoke opt-in'
+
+----------------------------------------------------------------------
+Ran 1 test in 0.000s
+
+OK (skipped=1)

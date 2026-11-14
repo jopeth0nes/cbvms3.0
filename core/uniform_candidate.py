@@ -6,7 +6,6 @@ publishes weights into ``models/``.
 """
 from __future__ import annotations
 
-import fcntl
 import hashlib
 import io
 import json
@@ -22,11 +21,13 @@ from pathlib import Path
 from typing import Any
 
 from core.uniform_dataset import CATEGORIES, PREPROCESS_VERSION as DATASET_PREPROCESS_VERSION
+from core.file_lock import lock_exclusive
 
 MAPPING_VERSION = "uniform-garments-v1"
 CLASS_MAP = {0: "campus_uniform", 1: "organizational_shirt", 2: "other_clothing"}
 CATEGORY_TO_INDEX = {value: key for key, value in CLASS_MAP.items()}
-DEFAULT_CONFIG = {"epochs": 5, "batch": 4, "threads": 2, "min_per_class": 10,
+NORMAL_TRAINING_MIN_PER_CLASS = 5
+DEFAULT_CONFIG = {"epochs": 5, "batch": 4, "threads": 2, "min_per_class": NORMAL_TRAINING_MIN_PER_CLASS,
                   "synthetic_smoke": False, "allow_accelerator": False}
 BLOCKING_FLAGS = {
     "obstruction", "obstructed", "low_resolution", "possible_blur", "image_quality_check_failed",
@@ -159,7 +160,8 @@ def _related_group_roots(records: list[dict], *, near_duplicates_only: bool = Fa
     return result
 
 
-def assign_group_splits(entries: list[dict], *, seed: int) -> tuple[dict[str, str], bool, str]:
+def assign_group_splits(entries: list[dict], *, seed: int,
+                        min_per_class: int = NORMAL_TRAINING_MIN_PER_CLASS) -> tuple[dict[str, str], bool, str]:
     """Assign connected capture/provenance/duplicate components atomically."""
     parent: dict[str, str] = {}
     def find(value):
@@ -219,9 +221,9 @@ def assign_group_splits(entries: list[dict], *, seed: int) -> tuple[dict[str, st
         for row in components[key]: counts["train"][row["category"]] += 1
     result = {row["image_id"]: assigned[find((row.get("group_ids") or [f"unlinked:{row['image_id']}"])[0])] for row in entries}
     complete = all(counts[s][c] > 0 for s in splits for c in classes)
-    if not complete or any(counts["train"][c] < 10 for c in classes):
+    if not complete or any(counts["train"][c] < min_per_class for c in classes):
         result = {row["image_id"]: "train" for row in entries}
-        return result, False, "Independent evaluation unavailable: holdout groups would leave fewer than ten training examples per class or cannot populate each class without leakage."
+        return result, False, f"Independent evaluation unavailable: holdout groups would leave fewer than {min_per_class} training examples per class or cannot populate each class without leakage."
     return result, can_eval, "" if can_eval else "Independent evaluation unavailable: fewer than three independent groups per class."
 
 
@@ -257,11 +259,26 @@ def is_training_eligible(record: dict) -> bool:
     return training_eligibility_reason(record) is None
 
 
-def candidate_summary(dataset: Any, *, min_per_class: int = 10) -> dict:
+def eligible_training_records(records: list[dict]) -> list[dict]:
+    """Select each eligible source image once for counts and dataset freezing.
+
+    Catalog image IDs are source SHA256 hashes; repeated imports add provenance
+    to that record. Near duplicates remain separate images with shared groups.
+    Anonymous snapshot rows retain their individual identity for callers without
+    a catalog; freezing still requires and verifies content-addressed image IDs.
+    """
+    unique = {}
+    for index, record in enumerate(records):
+        if is_training_eligible(record):
+            key = str(record.get("image_id") or f"snapshot-row-{index}")
+            unique.setdefault(key, record)
+    return list(unique.values())
+
+
+def candidate_summary(dataset: Any, *, min_per_class: int = NORMAL_TRAINING_MIN_PER_CLASS) -> dict:
     """Summarize records usable for experiments, without changing the catalog."""
     snap = _snapshot(dataset)
     included = {category: 0 for category in CATEGORY_TO_INDEX}
-    ready = {category: 0 for category in CATEGORY_TO_INDEX}
     groups = {category: {"known": 0, "unknown": 0} for category in CATEGORY_TO_INDEX}
     known_sets = {category: set() for category in CATEGORY_TO_INDEX}
     unknown_seen = {category: False for category in CATEGORY_TO_INDEX}
@@ -269,24 +286,12 @@ def candidate_summary(dataset: Any, *, min_per_class: int = 10) -> dict:
     pending = sum(r.get("status") != "excluded" and r.get("processing_state") in {"queued", "processing"}
                   for r in snap["records"])
     excluded = sum(r.get("status") == "excluded" for r in snap["records"])
-    quality_blocked = 0
+    quality_blocked = sum(r.get("status") != "excluded" and r.get("processing_state") == "training_ready"
+                          and r.get("category") in CATEGORY_TO_INDEX and not is_training_eligible(r)
+                          for r in snap["records"])
     reasons = []
-    seen_images: set[str] = set()
-    for index, record in enumerate(snap["records"]):
-        category = record.get("category")
-        if (record.get("status") != "excluded" and record.get("processing_state") == "training_ready"
-                and record.get("category") in CATEGORY_TO_INDEX and not is_training_eligible(record)):
-            quality_blocked += 1
-        if category not in CATEGORY_TO_INDEX:
-            continue
-        if is_training_eligible(record):
-            ready[category] += 1
-        if not is_training_eligible(record):
-            continue
-        image_key = str(record.get("image_id") or f"snapshot-row-{index}")
-        if image_key in seen_images:
-            continue
-        seen_images.add(image_key)
+    for record in eligible_training_records(snap["records"]):
+        category = record["category"]
         included[category] += 1
         known, unknown = _record_groups(record)
         if not unknown:
@@ -300,7 +305,7 @@ def candidate_summary(dataset: Any, *, min_per_class: int = 10) -> dict:
     missing = {category: count for category, count in included.items() if count < min_per_class}
     eligible = not missing
     if missing:
-        reasons.extend(f"{CATEGORIES[category]} has {count} training-ready examples; requires {min_per_class}."
+        reasons.extend(f"{CATEGORIES[category]} has {count} eligible unique photos; requires {min_per_class}."
                        for category, count in missing.items())
     if quality_blocked:
         reasons.append(f"{quality_blocked} training-ready record(s) have unresolved blocking issues, invalid crops, or reference-artwork provenance and are excluded.")
@@ -308,8 +313,8 @@ def candidate_summary(dataset: Any, *, min_per_class: int = 10) -> dict:
         reasons.append(f"{pending} queued or processing record(s) are not yet eligible.")
     if excluded:
         reasons.append(f"{excluded} excluded record(s) are not used.")
-    return {"mapping_version": MAPPING_VERSION, "training_ready_by_category": ready,
-            "approved_by_category": ready,
+    return {"mapping_version": MAPPING_VERSION, "training_ready_by_category": dict(included),
+            "approved_by_category": dict(included),
             "included_by_category": included,
             "groups_by_category": groups, "pending": pending, "excluded": excluded,
             "quality_blocked": quality_blocked, "eligible": eligible,
@@ -333,9 +338,8 @@ class _TrainingLock:
         try:
             self.root.mkdir(parents=True, exist_ok=True)
             self.file = self.path.open("a+")
-            flags = fcntl.LOCK_EX | (0 if self.blocking else fcntl.LOCK_NB)
             try:
-                fcntl.flock(self.file.fileno(), flags)
+                lock_exclusive(self.file, blocking=self.blocking)
             except BlockingIOError:
                 self.file.close()
                 self.file = None
@@ -397,7 +401,7 @@ class CandidateService:
                 raise ValueError(f"{key} must be an integer from {low} to {high}")
         if type(value["synthetic_smoke"]) is not bool or type(value["allow_accelerator"]) is not bool:
             raise ValueError("synthetic_smoke and allow_accelerator must be boolean")
-        min_value = 2 if value["synthetic_smoke"] else 10
+        min_value = 2 if value["synthetic_smoke"] else NORMAL_TRAINING_MIN_PER_CLASS
         if type(value["min_per_class"]) is not int or value["min_per_class"] < min_value or value["min_per_class"] > 5000:
             raise ValueError(f"min_per_class must be from {min_value} to 5000")
         return value
@@ -408,7 +412,7 @@ class CandidateService:
             self.dataset = UniformDataset(self.dataset_root)
         return self.dataset
 
-    def summary(self, min_per_class: int = 10) -> dict:
+    def summary(self, min_per_class: int = NORMAL_TRAINING_MIN_PER_CLASS) -> dict:
         summary = candidate_summary(self._dataset_obj(), min_per_class=min_per_class)
         reason = None
         if not self.base_weights.is_file() or self.base_weights.is_symlink():
@@ -510,11 +514,7 @@ class CandidateService:
         root = dataset.root.resolve()
         related_roots = _related_group_roots(snap["records"])
         near_duplicate_roots = _related_group_roots(snap["records"], near_duplicates_only=True)
-        eligible_by_image: dict[str, dict] = {}
-        for record in snap["records"]:
-            if is_training_eligible(record):
-                eligible_by_image.setdefault(str(record.get("image_id")), record)
-        eligible = list(eligible_by_image.values())
+        eligible = eligible_training_records(snap["records"])
         entries = []
         from PIL import Image
         import cv2
@@ -571,7 +571,8 @@ class CandidateService:
                             "sampling_group_id": near_duplicate_roots.get(record["image_id"], record["image_id"]),
                             "unknown_provenance": unknown,
                             "near_duplicate_ids": sorted(record.get("duplicate_of", [])), "split": "train"})
-        split_map, evaluation_available, split_note = assign_group_splits(entries, seed=int(run_dir.name[:8], 16))
+        split_map, evaluation_available, split_note = assign_group_splits(
+            entries, seed=int(run_dir.name[:8], 16), min_per_class=config["min_per_class"])
         for entry in entries:
             entry["split"] = split_map[entry["image_id"]]
         split_distribution = {split: {category: sum(e["split"] == split and e["category"] == category for e in entries)

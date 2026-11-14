@@ -1,0 +1,19 @@
+test_close_reopen_preserves_job_choices_and_never_cancels (tests.test_uniform_duplicate_ui.UniformDuplicateReviewUITests.test_close_reopen_preserves_job_choices_and_never_cancels) ... ok
+test_defaults_choices_apply_type_and_occurrence_weighted_summary (tests.test_uniform_duplicate_ui.UniformDuplicateReviewUITests.test_defaults_choices_apply_type_and_occurrence_weighted_summary) ... ERROR
+test_pagination_and_match_source_selector_preserve_every_match (tests.test_uniform_duplicate_ui.UniformDuplicateReviewUITests.test_pagination_and_match_source_selector_preserve_every_match) ... ok
+test_submit_and_cancel_are_gated_by_job_id_and_waiting_phase (tests.test_uniform_duplicate_ui.UniformDuplicateReviewUITests.test_submit_and_cancel_are_gated_by_job_id_and_waiting_phase) ... ok
+test_thumbnails_are_loaded_off_tk_and_attached_on_ui_thread (tests.test_uniform_duplicate_ui.UniformDuplicateReviewUITests.test_thumbnails_are_loaded_off_tk_and_attached_on_ui_thread) ... ok
+
+======================================================================
+ERROR: test_defaults_choices_apply_type_and_occurrence_weighted_summary (tests.test_uniform_duplicate_ui.UniformDuplicateReviewUITests.test_defaults_choices_apply_type_and_occurrence_weighted_summary)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/jopethones/Documents/GitHub/cbvms3.0/tests/test_uniform_duplicate_ui.py", line 123, in test_defaults_choices_apply_type_and_occurrence_weighted_summary
+    checkbox.invoke()
+    ^^^^^^^^^^^^^^^
+AttributeError: 'CTkCheckBox' object has no attribute 'invoke'
+
+----------------------------------------------------------------------
+Ran 5 tests in 13.287s
+
+FAILED (errors=1)

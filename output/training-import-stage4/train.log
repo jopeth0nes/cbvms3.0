@@ -1,0 +1,7 @@
+[2026-11-14T17:10:48.161538Z] command=['/Users/jopethones/Documents/GitHub/cbvms3.0/.venv/bin/python', '-m', 'core.uniform_candidate_worker', '/private/var/folders/q9/8tgzldpx1dl7qg075j18g03w0000gn/T/tmp91wklgmq/candidates/5d427072416d4e2cbbda541510f72c80', '5', 'start'] pid_pending run_uuid=5d427072416d4e2cbbda541510f72c80
+[2026-11-14T17:10:48.178671Z] pid=1327 started_at=2026-11-14T17:10:48.178723Z run_uuid=5d427072416d4e2cbbda541510f72c80
+Matplotlib is building the font cache; this may take a moment.
+Creating new Ultralytics Settings v0.0.6 file ✅ 
+View Ultralytics Settings with 'yolo settings' or at '/private/var/folders/q9/8tgzldpx1dl7qg075j18g03w0000gn/T/tmp91wklgmq/candidates/.ultralytics/settings.json'
+Update Settings with 'yolo settings key=value', i.e. 'yolo settings runs_dir=path/to/dir'. For help see https://docs.ultralytics.com/quickstart/#ultralytics-settings.
+[2026-11-14T17:10:58.674822Z] run_uuid=5d427072416d4e2cbbda541510f72c80 epoch=1 train_loss=1.19832127 validation_loss=None

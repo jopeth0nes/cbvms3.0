@@ -3,6 +3,7 @@ from pathlib import Path
 import customtkinter as ctk
 
 from core.uniform_dataset import CATEGORIES
+from core.uniform_candidate import NORMAL_TRAINING_MIN_PER_CLASS
 from ui.background_task import BackgroundTask
 from ui.scrolling import ScrollableFrame
 from ui.components import COLOR_BG, COLOR_ACCENT, COLOR_TEXT_MUTED, heading_font
@@ -43,7 +44,8 @@ class CandidateTrainingWindow(ctk.CTkToplevel):
         ctk.CTkLabel(body, text=(
             'Only training-ready crops in the three garment categories are included. Unresolved quality or association failures are excluded. '
             'Unable to assess is an uncertainty outcome, not a clothing class.\n'
-            'Ten eligible examples per class is a software minimum for an experiment, not evidence of accuracy. '
+            f'At least {NORMAL_TRAINING_MIN_PER_CLASS} eligible unique photos in EACH category (Campus Uniform, Organizational Shirt, Wrong Uniform) '
+            'are required for an experiment; this minimum is not evidence of accuracy. Exact copies count once. '
             'Unknown provenance stays together. Insufficient independent groups prevent independent evaluation.\n'
             'Candidates use the local YOLOv8n classifier with a versioned three-class head and live-compatible 224 px letterboxing. '
             'No automatic mirroring, architecture downloads, or active-model replacement.'),
@@ -146,7 +148,7 @@ class CandidateTrainingWindow(ctk.CTkToplevel):
         for category in ('campus_uniform', 'organizational_shirt', 'other_clothing'):
             groups = self.summary.get('groups_by_category', {}).get(category, {})
             lines.append(f"{CATEGORIES[category]}: {self.summary.get('training_ready_by_category', self.summary.get('approved_by_category', {})).get(category, 0)} training-ready • "
-                         f"{self.summary.get('included_by_category', {}).get(category, 0)} eligible/included • "
+                         f"{self.summary.get('included_by_category', {}).get(category, 0)} eligible unique photos/included • "
                          f"{groups.get('known', 0)} known related groups • {groups.get('unknown', 0)} unknown-provenance group(s)")
         lines.append(f"Pending: {self.summary.get('pending', 0)} • Excluded: {self.summary.get('excluded', 0)} • "
                      f"Quality/association blocked: {self.summary.get('quality_blocked', 0)}")
@@ -181,7 +183,7 @@ class CandidateTrainingWindow(ctk.CTkToplevel):
         if self.task.busy or self.training_busy() or not self.summary.get('eligible') or not self.ack.get():
             return
         config = {name: int(menu.get()) for name, menu in self.options.items()}
-        config.update(min_per_class=10, synthetic_smoke=False, allow_accelerator=bool(self.accelerator.get()))
+        config.update(min_per_class=NORMAL_TRAINING_MIN_PER_CLASS, synthetic_smoke=False, allow_accelerator=bool(self.accelerator.get()))
         service = self.service
         self.selected_run_id = None
         self.run_picker.set('Latest candidate')

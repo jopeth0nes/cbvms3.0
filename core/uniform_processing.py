@@ -183,11 +183,11 @@ def migrate(dataset, *, detector=None, retry=False, stop=None, limit=None):
     not repeated unless retry=True. Excluded rows never become eligible.
     """
     from core.uniform_dataset import _now
-    import fcntl
+    from core.file_lock import lock_exclusive
     report = {'pipeline_version': PIPELINE_VERSION, 'processed': 0, 'training_ready': 0,
               'quarantined': 0, 'failed': 0, 'skipped': 0, 'interrupted': False}
     with (dataset.root / '.processing.lock').open('a+') as lock:
-        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        lock_exclusive(lock)
         with dataset._locked():
             catalog = dataset._load()
             backup = dataset.root / f'catalog-before-{PIPELINE_VERSION}.json'

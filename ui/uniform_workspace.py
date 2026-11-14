@@ -11,6 +11,8 @@ from PIL import Image, ImageTk
 from core.uniform_dataset import UniformDataset, CATEGORIES
 from core.uniform_logo_annotations import LOGO_VISIBILITIES, normalize_visibility
 from core.uniform_candidate import CandidateService
+from core.uniform_import import get_import_job, start_import
+from ui.uniform_import_progress import ImportProgressPanel
 from ui.uniform_candidate_panel import CandidateTrainingWindow, TRAIN_ACTION
 from core.trainer import ROOT, TRAIN_DIR
 from ui.background_task import BackgroundTask
@@ -43,14 +45,17 @@ class UniformWorkspace(ctk.CTkFrame):
         self._refresh_again = False
         self._status_override = None
         self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(2, weight=1)
+        self.grid_rowconfigure(3, weight=1)
         self.status = ctk.CTkLabel(self, text='Loading dataset processing status…', anchor='w', wraplength=950)
         self.status.grid(row=0, column=0, sticky='ew', padx=12, pady=6)
         header_actions = ctk.CTkFrame(self, fg_color='transparent')
         header_actions.grid(row=1, column=0, sticky='w', padx=8, pady=4)
         ctk.CTkButton(header_actions, text=TRAIN_ACTION, command=self.open_candidates).pack(side='left', padx=4)
+        self.import_progress = ImportProgressPanel(self, completed=self._import_finished)
+        self.import_progress.grid(row=2, column=0, sticky='ew', padx=10, pady=4)
+        self.import_progress.grid_remove()
         self.tabs = ctk.CTkTabview(self, command=self._tab_changed)
-        self.tabs.grid(row=2, column=0, sticky='nsew')
+        self.tabs.grid(row=3, column=0, sticky='nsew')
         self.views = {}
         for category in (*GARMENTS, 'unassigned'):
             title = CATEGORIES[category] if category in GARMENTS else 'Evaluation & Models'
@@ -94,6 +99,27 @@ class UniformWorkspace(ctk.CTkFrame):
         self.dataset.schedule_processing()
         self._processing_poll = self.after(1500, self._poll_processing)
         self.refresh()
+        existing_job = get_import_job(self.dataset)
+        if existing_job is not None:
+            self.import_progress.attach(existing_job)
+
+    def _begin_import(self, kind, source, category):
+        if not self.winfo_exists():
+            return
+        try:
+            job = start_import(self.dataset, kind, source, category)
+        except Exception as exc:
+            self._error(str(exc))
+            return
+        self._status_override = None
+        self.status.configure(text='Importing into ' + CATEGORIES[category] + ' • completed saves are retained on cancellation')
+        self.import_progress.attach(job)
+
+    def _import_finished(self, state, summary):
+        self._status_override = summary
+        self.status.configure(text=summary)
+        self.refresh()
+        self._refresh_candidate_counts()
 
     def _poll_processing(self):
         self._processing_poll = None
@@ -305,7 +331,7 @@ class UniformWorkspace(ctk.CTkFrame):
         self.refresh()
 
     def _bulk_is_busy(self):
-        return self.task.busy or self._review_write_pending.is_set()
+        return self.task.busy or self._review_write_pending.is_set() or self.import_progress.active
 
     def start_capture(self, category):
         if self._bulk_is_busy():
@@ -317,28 +343,25 @@ class UniformWorkspace(ctk.CTkFrame):
         if self._bulk_is_busy():
             self.status.configure(text='Wait for the current operation to finish before importing photos.')
             return
-        dataset = self.dataset
         paths = filedialog.askopenfilenames(parent=self, title=f'Upload {CATEGORIES[category]} photos', filetypes=[('Images', '*.jpg *.jpeg *.png *.bmp *.webp *.tif *.tiff')])
         if paths:
-            self.run(lambda: dataset.import_paths(paths, category), 'Validating and importing photos…')
+            self._begin_import('paths', paths, category)
 
     def import_folder(self, category):
         if self._bulk_is_busy():
             self.status.configure(text='Wait for the current operation to finish before importing photos.')
             return
-        dataset = self.dataset
         path = filedialog.askdirectory(parent=self, title='Import image folder')
         if path:
-            self.run(lambda: dataset.import_folder(path, category), 'Validating folder and preserving originals…')
+            self._begin_import('folder', path, category)
 
     def import_zip(self, category):
         if self._bulk_is_busy():
             self.status.configure(text='Wait for the current operation to finish before importing photos.')
             return
-        dataset = self.dataset
         path = filedialog.askopenfilename(parent=self, title='Import image ZIP', filetypes=[('ZIP archive', '*.zip')])
         if path:
-            self.run(lambda: dataset.import_zip(path, category), 'Validating ZIP and deduplicating images…')
+            self._begin_import('zip', path, category)
 
     def audit_legacy(self):
         dataset = self.dataset
@@ -445,6 +468,11 @@ class ReviewWindow(ctk.CTkToplevel):
             if flag in record.get('flags', []):
                 check.select()
             self.flags[flag] = check
+        self.unrelated = {}
+        for other_id in record.get('duplicate_of', []):
+            check = ctk.CTkCheckBox(body, text=f'Not visually related to photo {other_id[:12]} (correct similarity estimate)')
+            check.pack(anchor='w', padx=10, pady=3)
+            self.unrelated[other_id] = check
         ctk.CTkLabel(body, text='Review notes / capture provenance (unknown stays grouped)').pack(anchor='w', padx=10)
         self.notes = ctk.CTkEntry(body)
         self.notes.insert(0, record.get('notes', ''))
@@ -595,7 +623,8 @@ class ReviewWindow(ctk.CTkToplevel):
             args = dict(category=category, crop=box, crop_source='manual', status=status,
                 logo_visibility=self.visibility.get(), logo_box=logo, logo_reviewed=bool(self.logo_confirm.get()),
                 logo_source_kind=self.logo_source.get(), logo_association_confirmed=bool(self.logo_association.get()),
-                flags=flags, notes=self.notes.get())
+                flags=flags, notes=self.notes.get(),
+                unrelated_image_ids=[iid for iid, check in self.unrelated.items() if check.get()])
         except (ValueError, StopIteration) as exc:
             self.message.configure(text=str(exc)); return
         dataset, image_id = self.dataset, self.record['image_id']

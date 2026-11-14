@@ -1,0 +1,147 @@
+{
+  "base_weights_sha256": "11fa19f2aea79bc960d680a13f82f22105982b325eb9e17a4a5e1a9f8245980a",
+  "best_epoch": null,
+  "bundle_checksums_sha256": "442b21b46208e2dcf5a88bbb17d7db841657aa3e8700f65ab34b4b2ec3868d5d",
+  "candidate_file": "candidate.pt",
+  "config": {
+    "allow_accelerator": false,
+    "architecture": "yolov8n-cls",
+    "augmentation": {
+      "brightness": 0.08,
+      "contrast": 0.08,
+      "horizontal_flip": false,
+      "scale": 0.0,
+      "validation_test": "none"
+    },
+    "base_weights_file": "base_weights.pt",
+    "base_weights_sha256": "11fa19f2aea79bc960d680a13f82f22105982b325eb9e17a4a5e1a9f8245980a",
+    "batch": 2,
+    "class_balancing": "near_duplicate_group_weighted_sampling_plus_inverse_sqrt_frequency_loss",
+    "dataset_manifest_sha256": "51004d77398a5d8e8311d0f5614e2fbb0d21996c50bd5745f8234dd53b4e532a",
+    "early_stopping_patience": 5,
+    "eligibility_snapshot": {
+      "approved_by_category": {
+        "campus_uniform": 5,
+        "organizational_shirt": 5,
+        "other_clothing": 5
+      },
+      "excluded": 0,
+      "groups_by_category": {
+        "campus_uniform": {
+          "known": 0,
+          "unknown": 1
+        },
+        "organizational_shirt": {
+          "known": 0,
+          "unknown": 1
+        },
+        "other_clothing": {
+          "known": 0,
+          "unknown": 1
+        }
+      },
+      "included_by_category": {
+        "campus_uniform": 5,
+        "organizational_shirt": 5,
+        "other_clothing": 5
+      },
+      "pending": 0,
+      "quality_blocked": 0,
+      "readiness_reasons": []
+    },
+    "epochs": 1,
+    "learning_rates": {
+      "backbone": 3e-05,
+      "head": 0.0003
+    },
+    "limitations": [
+      "Insufficient independent groups for validation; independent evaluation is unavailable.",
+      "Training loss is not an accuracy measure.",
+      "Candidate is nondeployable and is never activated by this service."
+    ],
+    "mapping_version": "uniform-garments-v1",
+    "min_per_class": 5,
+    "minimum_improvement": 0.001,
+    "model_preprocess": {
+      "augmentation": "none",
+      "color": "RGB",
+      "range": [
+        0.0,
+        1.0
+      ],
+      "size": 224,
+      "version": "trainer-letterbox-rgb-0-1-v1"
+    },
+    "nondeployable": true,
+    "optimizer": "AdamW",
+    "seed": 1564635250,
+    "synthetic_smoke": false,
+    "threads": 1,
+    "torch_version": "2.2.2",
+    "training_pipeline_version": "uniform-auto-training-v1",
+    "ultralytics_version": "8.3.27",
+    "weight_decay": 0.01
+  },
+  "dataset_snapshot_sha256": "d8e8c39b9988b1663bc7294872cf9a02453cf09f2faddcd9f09aba26ce70b084",
+  "early_stopping_wait": 0,
+  "epoch": 1,
+  "epochs": 1,
+  "evaluation_available": false,
+  "evaluation_metrics": null,
+  "included": 15,
+  "manifest_sha256": "51004d77398a5d8e8311d0f5614e2fbb0d21996c50bd5745f8234dd53b4e532a",
+  "message": "Candidate training completed; group-aware metrics recorded; promotion remains disabled.",
+  "metrics_file": "metrics.json",
+  "nondeployable": true,
+  "process_id": 1327,
+  "resumable": false,
+  "run_id": "5d427072416d4e2cbbda541510f72c80",
+  "run_uuid": "5d427072416d4e2cbbda541510f72c80",
+  "runtime_resources": {
+    "accelerator_opt_in": false,
+    "actual_batch": 2,
+    "actual_threads": 1,
+    "cpu_count": 10,
+    "device": "cpu",
+    "requested_batch": 2,
+    "requested_threads": 1
+  },
+  "started_at": "2026-11-14T17:10:47.631907Z",
+  "status": "completed",
+  "train_loss": 1.198321270942688,
+  "updated_at": "2026-11-14T17:10:58.699596Z",
+  "validation_loss": null,
+  "validation_metrics": {
+    "accuracy": null,
+    "confusion_matrix": [
+      [
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0
+      ]
+    ],
+    "examples": 0,
+    "macro_f1": 0.0,
+    "per_class_precision": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "per_class_recall": [
+      0.0,
+      0.0,
+      0.0
+    ]
+  },
+  "worker_started_at": "2026-11-14T17:10:48.221818Z"
+}

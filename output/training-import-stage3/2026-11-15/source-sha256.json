@@ -1,0 +1,18 @@
+{
+  "core/uniform_duplicates.py": "451c31cbf844da06ddc3dbaf869150ccf8731562aebe875dc8d0b3edddb1d246",
+  "core/uniform_import.py": "6c60f922896f1e3ef8092d2c07424cda6648aec5bdd252212fc69875188c5907",
+  "core/uniform_dataset.py": "fdad176ac218bff918f99986e1ce6dc4e83b055f455159cf1ff35f9986b8ff34",
+  "core/uniform_processing.py": "d14e08d7addc58713e9b377c349652268c01afb22de80690ca09db2ccf24064d",
+  "core/uniform_candidate.py": "2db58a9fb78d716e8a46877f04f38680e97c5896a214f58da441747ad797b7ec",
+  "ui/uniform_duplicate_review.py": "1841c9f79ec91e39937a91a77e20e40975aae88a9252e7dda4e20563fa7d823d",
+  "ui/uniform_import_progress.py": "13d7c3c0c7dc319a9ee0c13df98cd6405a519377dc2c5a30d88f63935c71a3c5",
+  "ui/uniform_workspace.py": "62bb169f015c16c3a8e1660e70c1950656ed5593ff548f69d1284fe3b2559877",
+  "ui/background_task.py": "a548103d8857185aa9fb82ee0c0932a701cf3a2ef4a01264ec3c8fad0d6f5242",
+  "tests/test_uniform_duplicates.py": "c2954b40857beb808ab0f5aa8c442bbbbe5c27512a8e8e70ba62f626f52b411c",
+  "tests/test_uniform_duplicate_ui.py": "7ab84c85aa15fe3220df371feb12927acc0eee53fc4a1d291f59ec981d5ba6bd",
+  "tests/test_uniform_import.py": "f12aa41fb506ff575e2ed6354e6d993b44f24dff6d1745db073c748116669569",
+  "tests/test_uniform_import_ui.py": "ff6325ace07a84c8cce6cf326094dd18789f57ca55e697ac163523eca6c7c7bf",
+  "tests/test_uniform_workspace.py": "819ad128048e0028e8b0dcb832c60a5b85b0aa854d488a8a4dc813f959421bbe",
+  "tests/test_uniform_dataset.py": "afb7fd3b81cf484431f5c0225e9d81f38b49031966ec4bb4b866fe826233c4d0",
+  "tests/test_training_import_minimum.py": "9c4159befc46f85932307a5b6dfcb708cb55675e6547858d9010878b3169abbc"
+}
